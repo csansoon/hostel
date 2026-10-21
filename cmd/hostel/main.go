@@ -61,19 +61,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
-			if c.run == nil {
-				return notImplemented(c.name, stderr)
-			}
 			return c.run(args[1:], stdout, stderr)
 		}
 	}
 	fmt.Fprintf(stderr, "hostel: unknown command %q; run \"hostel help\" for the list of commands\n", args[0])
 	return 2
-}
-
-func notImplemented(name string, stderr io.Writer) int {
-	fmt.Fprintf(stderr, "hostel: %s: not implemented yet\n", name)
-	return 1
 }
 
 func printHelp(w io.Writer) {

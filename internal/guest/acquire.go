@@ -239,7 +239,9 @@ func isFinal(state string) bool {
 func describe(l protocol.Lease) string {
 	s := fmt.Sprintf("lease %s %s", l.ID, l.State)
 	if l.State == protocol.LeaseQueued {
-		s += fmt.Sprintf(", position %d", l.Position)
+		if l.Position > 0 {
+			s += fmt.Sprintf(", position %d", l.Position)
+		}
 		if l.Reason != "" {
 			s += " (" + l.Reason + ")"
 		}

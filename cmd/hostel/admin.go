@@ -33,6 +33,8 @@ func adminCmd(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "pubkey":
 			return adminPubkey(args[1:], stdout, stderr)
+		case "room":
+			return adminRoom(args[1:], stdout, stderr)
 		case "lease":
 			if len(args) == 3 && args[1] == "release" {
 				return adminLeaseRelease(args[2], stdout, stderr)
@@ -50,7 +52,39 @@ func adminCmd(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	return notImplemented("admin "+strings.Join(args, " "), stderr)
+	fmt.Fprintf(stderr, "hostel: unknown admin command %q; commands: config, token, pubkey, lease release, room\n", strings.Join(args, " "))
+	return 2
+}
+
+func adminRoom(args []string, stdout, stderr io.Writer) int {
+	fs := cli.NewFlagSet("hostel admin room", stderr)
+	accept := fs.Bool("accept-host-key", false, "repair: accept a changed room host key")
+	pos, err := cli.Parse(fs, args)
+	if err != nil || len(pos) != 2 {
+		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room-id> [--accept-host-key]")
+		return 2
+	}
+	switch pos[0] {
+	case "drain", "undrain", "repair", "destroy":
+	default:
+		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room-id> [--accept-host-key]")
+		return 2
+	}
+	c, err := apiClient()
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	var body any
+	if pos[0] == "repair" {
+		body = map[string]bool{"accept_host_key": *accept}
+	}
+	if err := c.Do(context.Background(), "POST", "/v1/rooms/"+url.PathEscape(pos[1])+"/"+pos[0], body, nil); err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "room %s: %s requested\n", pos[1], pos[0])
+	return 0
 }
 
 func adminPubkey(args []string, stdout, stderr io.Writer) int {
