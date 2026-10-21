@@ -59,6 +59,8 @@ the commit that implements it.
    behavior.
 7. **Server key table.** Add `port_process_offline` (default `10m`) to the
    server keys table in section 9 (it is used in section 14 but not listed).
+   Done in phase 1, with: `rooms.home`, `leases.tunnels`, duration and path rules,
+   script file names, and the repository platform `requires`.
 8. **SQLite.** WAL mode, `busy_timeout = 5000`, `foreign_keys = on`, one open
    connection (`SetMaxOpenConns(1)`). All writes are short compare-and-set
    statements, so one connection is enough and there is no `SQLITE_BUSY`.
@@ -190,7 +192,7 @@ the hidden `job supervise`. Details:
 
 | Phase | Content | E2E scenarios (`plan.md`, M1) |
 |---|---|---|
-| 1 | `internal/protocol`, `internal/config` (server, platform, repository, guest; defaults; strict decoding; key paths in errors; JSON Schema), `admin config check|schema`, `internal/store` with migrations, `internal/scheduler` with unit tests | — |
+| 1 | `internal/protocol` (states and priorities; API and helper types come with their first use), `internal/config` (server, platform, repository, guest; defaults; strict decoding; key paths in errors; JSON Schema), `admin config check|schema`, `internal/store` with migrations, `internal/scheduler` with unit tests | — |
 | 2 | Test infrastructure (section 7). `hostel server init` and `server run` with configuration check only | 24 |
 | 3 | `roomops`, `static` provider, helper `info`, `install`, `begin`, `run-script`, `cleanup`; server workers for static rooms; HTTP API; tokens; events; `hostel status` | — (room readiness is checked inside scenario 1) |
 | 4 | Gateway (`cmd` only); helper `exec`, `shell`, `set-env`, `sync-plan`, `sync-apply`, `diff`, `tar-in`, `tar-out`, jobs; guest `acquire`, `sync`, `run`, `attach`, `jobs`, `stop`, `cp`, `diff`, `ssh`, `ssh-config`, `release`; mise setup job | 1, 11, 12, 13, 16 |

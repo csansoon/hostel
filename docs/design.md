@@ -129,13 +129,17 @@ database stores runtime state.
 
 | Table | Main columns |
 |---|---|
-| `rooms` | id, name, provider, machine, provider_ref, state, os, arch, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
+| `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
 | `room_platforms` | room_id, platform, scripts_sha256, provisioned_at |
 | `slots` | room_id, name, state, lease_id, cleanup_data |
-| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnel_names, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_reason |
+| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_reason |
 | `lease_tunnels` | lease_id, name, room_port |
 | `tokens` | id, name, role, machine (for `room` tokens), sha256, created_at, revoked_at |
 | `events` | id, time, lease_id, room_id, kind, message |
+
+`rooms.home` is the room user's home directory from the probe. `leases.tunnels`
+holds the requested tunnels (`[{"name", "room_port"}]`) until the server assigns
+the room ports in `lease_tunnels`. Times are Unix milliseconds.
 
 `room_platforms` records which platforms a room is ready for, and with which
 version of the platform scripts. Jobs are not in the database. They exist only on
@@ -601,7 +605,10 @@ Each room has a `room_platforms` row for its OS platform too (with no scripts, t
 row has an empty hash).
 
 **Script files.** `<step>.<os>.sh` for `macos` and `linux`, `<step>.<os>.ps1` for
-`windows`. The room's OS selects the file. Steps:
+`windows`. The room's OS selects the file. A `.sh` or `.ps1` file with another
+name is a configuration error (it catches typing errors such as `prepar.linux.sh`).
+Other files in the directory are ignored and not uploaded. An OS platform directory
+can only have scripts for its own OS. Steps:
 
 | Step | When | Example for `ios` on macOS |
 |---|---|---|
@@ -643,6 +650,9 @@ or if an OS platform directory declares devices.
 
 All configuration uses TOML: the same format as `mise.toml`. The server decodes
 strictly: an unknown key or a wrong type is an error with the file name and line.
+Durations are strings with a unit (`"10m"`); a number is a type error. In
+`server.toml`, a path that starts with `~/` is relative to the home directory, and
+another relative path is relative to the directory of `server.toml`.
 
 ### Server (`server.toml`)
 
@@ -695,6 +705,7 @@ Server-level keys and defaults:
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
 | `platforms_dir` | `~/.config/hostel/platforms` |
 | `idle_timeout`, `aging`, `poll_timeout`, `limit_retry` | `10m`, `10m`, `5m`, `2m` |
+| `port_process_offline` | `10m` (section 14) |
 | `intervals` | `{ scheduler = "10s", reconcile = "5m", tunnel_check = "30s" }` (short values in tests) |
 | `[mise]` | `idiomatic_tools = ["node", "python"]`; `github_token` unset |
 
@@ -754,6 +765,7 @@ local_port_env = "PORT"
 
 [platforms.ios]
 devices = ["iphone-17-pro"]         # default devices for this repository
+# requires = ["xcode-26.5"]         # labels that this repository needs on this platform
 setup = ["cd apps/ios && tuist install && tuist generate --no-open"]
 env = { EXAMPLEAPP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
@@ -762,7 +774,8 @@ env = { EXAMPLEAPP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
 
 ```
 
-- `requires` and `--require` are merged. `--device` replaces `devices`.
+- The platform's `requires`, the repository platform `requires`, and `--require`
+  are merged. `--device` replaces `devices`.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
   Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows).
   The first failure stops the job.
