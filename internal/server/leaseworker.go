@@ -58,6 +58,14 @@ func (s *Server) runLease(ctx context.Context, id string) {
 func (s *Server) leaseStepFailed(ctx context.Context, l store.Lease, stepErr error) {
 	now := time.Now()
 	from := []string{l.State}
+	// Read the lease again: the step can have set began_at. A release or an
+	// expiry during the step changed the state: the cleaning step owns the
+	// lease now, so this step does not break the room or clean up.
+	cur, err := s.store.Lease(ctx, l.ID)
+	if err != nil || cur.State != l.State {
+		return
+	}
+	l = cur
 	r, err := s.store.Room(ctx, l.RoomID)
 	if err != nil {
 		s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, protocol.SlotFree, "", now)

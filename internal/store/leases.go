@@ -300,8 +300,8 @@ func (s *Store) FinishCleaning(ctx context.Context, id, slotState, cleanupData s
 		if slotState != protocol.SlotFree {
 			leaseIDCol = "lease_id"
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE lease_id = ?`,
-			slotState, cleanupData, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE `+leaseSlots,
+			slotState, cleanupData, id, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
@@ -318,9 +318,13 @@ func (s *Store) FinishCleaning(ctx context.Context, id, slotState, cleanupData s
 	return ok, nil
 }
 
+// leaseSlots selects the slots of a lease in its current room (two arguments:
+// the lease ID twice). A slot of an earlier room never matches.
+const leaseSlots = `lease_id = ? AND room_id = (SELECT room_id FROM leases WHERE id = ?)`
+
 // SetSlots sets the state of the lease's slots.
 func (s *Store) SetSlots(ctx context.Context, leaseID, state string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE slots SET state = ? WHERE lease_id = ?`, state, leaseID)
+	_, err := s.db.ExecContext(ctx, `UPDATE slots SET state = ? WHERE `+leaseSlots, state, leaseID, leaseID)
 	return err
 }
 
@@ -438,7 +442,7 @@ func (s *Store) RoomTunnelPorts(ctx context.Context, roomID int64, exceptLease s
 func (s *Store) SetTunnels(ctx context.Context, id string, req []protocol.TunnelRequest, ports map[string]int, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE leases SET tunnels = ? WHERE id = ? AND state = 'ready'`, jsonText(req), id)
+		res, err := tx.ExecContext(ctx, `UPDATE leases SET tunnels = ?, revision = revision + 1 WHERE id = ? AND state = 'ready'`, jsonText(req), id)
 		if err != nil {
 			return err
 		}
@@ -458,6 +462,10 @@ func (s *Store) SetTunnels(ctx context.Context, id string, req []protocol.Tunnel
 	})
 	if err != nil {
 		return false, fmt.Errorf("set tunnels of lease %s: %w", id, err)
+	}
+	if ok {
+		// The lease response has the tunnel ports, so long polls wake.
+		s.leaseChanged(id)
 	}
 	return ok, nil
 }
@@ -481,12 +489,10 @@ func (s *Store) Requeue(ctx context.Context, id string, from []string, reason st
 		if attempt {
 			attempts++
 		}
-		leaseIDCol := "''"
-		if slotState != protocol.SlotFree {
-			leaseIDCol = "lease_id"
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE lease_id = ?`,
-			slotState, cleanupData, id); err != nil {
+		// The lease can get another slot, so the old slot keeps no lease_id;
+		// its cleanup_data has the lease data for the cleanup.
+		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = '', cleanup_data = ? WHERE `+leaseSlots,
+			slotState, cleanupData, id, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
@@ -534,8 +540,8 @@ func (s *Store) FailLease(ctx context.Context, id string, from []string, reason,
 		if slotState != protocol.SlotFree {
 			leaseIDCol = "lease_id"
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE lease_id = ?`,
-			slotState, cleanupData, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE `+leaseSlots,
+			slotState, cleanupData, id, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {

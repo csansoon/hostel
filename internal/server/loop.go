@@ -195,9 +195,12 @@ func (s *Server) warm(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A room is busy while a slot has an active lease. A broken slot keeps the
+	// ID of its ended lease, so lease_id alone does not count.
 	busy := map[int64]bool{}
 	for _, sl := range slots {
-		if sl.LeaseID != "" {
+		switch sl.State {
+		case protocol.SlotAssigned, protocol.SlotPreparing, protocol.SlotLeased, protocol.SlotCleaning:
 			busy[sl.RoomID] = true
 		}
 	}
