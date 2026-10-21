@@ -71,8 +71,10 @@ func TestFailures(t *testing.T) {
 	f.marker("fail-reset", false)
 	f.admin("admin", "room", "repair", f.roomID())
 	f.e.mustHostel("acquire", "fakedevice", "--task", "next")
-	if got := f.c.sh("grep -c '^reset linux' " + cacheDir + "/fakedevice.log"); got != "1" {
-		t.Fatalf("successful resets: %s, want 1 (the repair)", got)
+	// Two successful resets: the cleanup after the failed prepare, and the
+	// repair after the failed reset (a failing reset writes no log line).
+	if got := f.c.sh("grep -c '^reset linux' " + cacheDir + "/fakedevice.log"); got != "2" {
+		t.Fatalf("successful resets: %s, want 2", got)
 	}
 }
 
