@@ -37,8 +37,10 @@ func TestIdleExpiry(t *testing.T) {
 func TestMaxLease(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, &fixtureOpts{machineKeys: "max_lease = \"10s\"\n"})
-	f.acquire()
+	// The lease is ready before acquire returns (acquire then syncs and runs
+	// the setup job), so the time before acquire is a safe lower bound.
 	start := time.Now()
+	f.acquire()
 	var last result
 	f.e.waitFor("lease ended by max_lease", time.Minute, func() bool {
 		last = f.e.hostel("run", "--", "true")
