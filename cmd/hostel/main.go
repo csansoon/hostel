@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/csansoon/hostel/internal/room"
 	"github.com/csansoon/hostel/internal/version"
 )
 
@@ -31,13 +32,13 @@ var commands = []command{
 	{name: "ssh-config", summary: "Write an ssh_config file for the lease"},
 	{name: "tunnel", summary: "List or change tunnels from the room to this machine"},
 	{name: "forward", summary: "Forward a local port to a port on the room"},
-	{name: "status", summary: "Show all leases, rooms, and the queue"},
+	{name: "status", summary: "Show all leases, rooms, and the queue", run: statusCmd},
 	{name: "release", summary: "End the lease"},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents"},
 	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
 	{name: "ports", hidden: true},
-	{name: "room", hidden: true},
+	{name: "room", hidden: true, run: roomCmd},
 }
 
 func main() {
@@ -87,4 +88,8 @@ func printHelp(w io.Writer) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Run \"hostel --version\" to print the version.")
+}
+
+func roomCmd(args []string, stdout, stderr io.Writer) int {
+	return room.Main(args, os.Stdin, stdout, stderr)
 }
