@@ -43,6 +43,7 @@ func Release(args []string, stdout, stderr io.Writer) int {
 	if err := api.Do(context.Background(), "POST", "/v1/leases/"+st.LeaseID+"/release", nil, &l); err != nil {
 		return fail(stderr, err)
 	}
+	stopPorts(st)
 	st.Final = true
 	if err := st.Save(); err != nil {
 		return fail(stderr, err)

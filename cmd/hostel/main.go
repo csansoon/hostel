@@ -31,14 +31,14 @@ var commands = []command{
 	{name: "diff", summary: "Show changes on the room since the last sync", run: guest.Diff},
 	{name: "ssh", summary: "Open an interactive shell in the lease", run: guest.SSH},
 	{name: "ssh-config", summary: "Write an ssh_config file for the lease", run: guest.SSHConfig},
-	{name: "tunnel", summary: "List or change tunnels from the room to this machine"},
-	{name: "forward", summary: "Forward a local port to a port on the room"},
+	{name: "tunnel", summary: "List or change tunnels from the room to this machine", run: guest.Tunnel},
+	{name: "forward", summary: "Forward a local port to a port on the room", run: guest.Forward},
 	{name: "status", summary: "Show all leases, rooms, and the queue", run: statusCmd},
 	{name: "release", summary: "End the lease", run: guest.Release},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents", run: guest.AgentGuide},
 	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
-	{name: "ports", hidden: true},
+	{name: "ports", hidden: true, run: guest.Ports},
 	{name: "room", hidden: true, run: roomCmd},
 }
 

@@ -90,12 +90,13 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		run  func() (int, error)
 	}{
 		{StepEnv, func() (int, error) { return 0, setLeaseEnv(ctx, st, rc) }},
+		{StepPorts, func() (int, error) { return 0, startTunnels(st, rc, deadline) }},
 		{StepSynced, func() (int, error) { _, err := syncFiles(ctx, st, repo, rc, stderr); return 0, err }},
 		{StepSetup, func() (int, error) {
 			return runSetup(ctx, l, setupCommand(rc, platform, true), deadline, stderr)
 		}},
 	}
-	order := []string{StepCreated, StepEnv, StepSynced, StepSetup, StepDone}
+	order := []string{StepCreated, StepEnv, StepPorts, StepSynced, StepSetup, StepDone}
 	for _, step := range steps {
 		if slices.Index(order, st.Step) >= slices.Index(order, step.name) {
 			continue
@@ -179,8 +180,8 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 		}
 		return ExitError, err
 	}
-	*st = State{Dir: st.Dir, LeaseID: l.ID, Platform: platform, Task: task, Priority: priority, Devices: devices,
-		Require: require, Fresh: fresh, Step: StepCreated}
+	*st = State{Dir: st.Dir, LeaseID: l.ID, Platform: platform, Root: repo.Root, Task: task, Priority: priority,
+		Devices: devices, Require: require, Fresh: fresh, Step: StepCreated}
 	return 0, st.Save()
 }
 
@@ -254,10 +255,9 @@ func describe(l protocol.Lease) string {
 
 // leaseEnv computes lease.env: the repository platform env with the tunnel
 // ports, and HOSTEL_TUNNEL_<NAME>_PORT for each tunnel.
-func leaseEnv(st *State, rc *config.Repo) map[string]string {
-	ports := st.Access.TunnelPorts
+func leaseEnv(platform string, rc *config.Repo, ports map[string]int) map[string]string {
 	env := map[string]string{}
-	if rp := rc.Platforms[st.Platform]; rp != nil {
+	if rp := rc.Platforms[platform]; rp != nil {
 		env = config.ExpandEnv(rp.Env, ports)
 	}
 	for name, port := range ports {
@@ -272,7 +272,7 @@ func setLeaseEnv(ctx context.Context, st *State, rc *config.Repo) error {
 		return err
 	}
 	defer conn.Close()
-	return conn.Helper(ctx, []string{"set-env"}, map[string]any{"env": leaseEnv(st, rc)}, nil)
+	return conn.Helper(ctx, []string{"set-env"}, map[string]any{"env": leaseEnv(st.Platform, rc, st.Access.TunnelPorts)}, nil)
 }
 
 // miseFiles are the files that make the setup job run "mise install" again.
@@ -354,7 +354,8 @@ func printSummary(st *State, rc *config.Repo, w io.Writer) {
 	fmt.Fprintf(w, "  work dir:   %s\n", a.WorkDir)
 	fmt.Fprintf(w, "  expires:    %s at the latest; without activity at %s (each hostel command extends it)\n",
 		a.ExpiresAt.Local().Format(time.DateTime), a.IdleExpiresAt.Local().Format(time.DateTime))
-	env := leaseEnv(st, rc)
+	tunnels, _ := loadTunnels(st)
+	env := leaseEnv(st.Platform, rc, tunnelPorts(tunnels))
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
 		for k := range env {

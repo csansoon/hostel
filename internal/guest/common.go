@@ -61,6 +61,12 @@ func openLease(platform string, stderr io.Writer) (*lease, int) {
 	if st.Access == nil {
 		return nil, fail(stderr, fmt.Errorf("the %s lease is not ready yet; run \"hostel acquire %s --task ...\" again", st.Platform, st.Platform))
 	}
+	// Every lease command starts the port process again if it stopped.
+	if tunnels, err := loadTunnels(st); err == nil && len(tunnels) > 0 {
+		if err := ensurePorts(st); err != nil {
+			fmt.Fprintln(stderr, "hostel: warning:", err)
+		}
+	}
 	return l, 0
 }
 

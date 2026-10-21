@@ -74,8 +74,10 @@ func (r *Repo) stateRoot() string { return filepath.Join(r.GitDir, "hostel") }
 type State struct {
 	Dir string `json:"-"`
 
-	LeaseID  string   `json:"lease_id"`
-	Platform string   `json:"platform"`
+	LeaseID  string `json:"lease_id"`
+	Platform string `json:"platform"`
+	// Root is the repository root; the port process reads .env there.
+	Root     string   `json:"root"`
 	Task     string   `json:"task"`
 	Priority string   `json:"priority"`
 	Devices  []string `json:"devices"`
@@ -97,6 +99,7 @@ type State struct {
 const (
 	StepCreated = "created"
 	StepEnv     = "env"
+	StepPorts   = "ports"
 	StepSynced  = "synced"
 	StepSetup   = "setup"
 	StepDone    = "done"
