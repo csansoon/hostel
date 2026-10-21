@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -21,7 +22,18 @@ func NewStatic(cfg *config.Provider, serverKey ssh.Signer) *Static {
 	return &Static{cfg: cfg, serverKey: serverKey}
 }
 
-func (s *Static) Kind() string { return config.ProviderStatic }
+func (s *Static) Kind() string                          { return config.ProviderStatic }
+func (s *Static) Capabilities(string) Capabilities      { return Capabilities{} }
+func (s *Static) Resume(context.Context, RoomRef) error { return errStatic }
+func (s *Static) Stop(context.Context, RoomRef) error   { return errStatic }
+func (s *Static) Destroy(context.Context, RoomRef) error {
+	return errStatic
+}
+func (s *Static) Extend(context.Context, RoomRef, time.Time) error { return errStatic }
+func (s *Static) List(context.Context, string) ([]RoomRef, error)  { return nil, errStatic }
+func (s *Static) Provision(context.Context, ProvisionRequest) (RoomRef, error) {
+	return RoomRef{}, errStatic
+}
 
 func (s *Static) Access(ctx context.Context, room RoomRef) (RoomAccess, error) {
 	m := s.cfg.Machines[room.Machine]

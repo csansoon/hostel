@@ -56,7 +56,10 @@ func Connect(ctx context.Context, access provider.RoomAccess, pinned string) (*C
 		},
 		Timeout: handshakeTimeout,
 	}
+	// A proxy connection has no deadlines, so a timer bounds the handshake.
+	timer := time.AfterFunc(handshakeTimeout, func() { netConn.Close() })
 	c, chans, reqs, err := ssh.NewClientConn(netConn, "room", cfg)
+	timer.Stop()
 	if err != nil {
 		netConn.Close()
 		if errors.Is(err, ErrHostKeyChanged) {
