@@ -57,3 +57,17 @@ func (b gwBackend) Activity(leaseID string) {
 		b.s.log.Error("record activity", "lease_id", leaseID, "err", err)
 	}
 }
+
+// AllowForward reports whether the lease registered the room port as a tunnel.
+func (b gwBackend) AllowForward(ctx context.Context, leaseID string, port int) bool {
+	ports, err := b.s.store.LeaseTunnels(ctx, leaseID)
+	if err != nil {
+		return false
+	}
+	for _, p := range ports {
+		if p == port {
+			return true
+		}
+	}
+	return false
+}

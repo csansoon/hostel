@@ -411,3 +411,51 @@ func (s *Store) RecentDurations(ctx context.Context, platform string, n int) ([]
 	}
 	return out, rows.Err()
 }
+
+// RoomTunnelPorts returns the room ports of the tunnels of other active
+// leases on a room.
+func (s *Store) RoomTunnelPorts(ctx context.Context, roomID int64, exceptLease string) (map[int]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT t.room_port FROM lease_tunnels t JOIN leases l ON l.id = t.lease_id
+		WHERE l.room_id = ? AND l.id != ? AND l.state NOT IN ('released', 'expired', 'cancelled', 'failed')`, roomID, exceptLease)
+	if err != nil {
+		return nil, fmt.Errorf("read room tunnels: %w", err)
+	}
+	defer rows.Close()
+	out := map[int]bool{}
+	for rows.Next() {
+		var p int
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out[p] = true
+	}
+	return out, rows.Err()
+}
+
+// SetTunnels replaces the tunnels of a ready lease.
+func (s *Store) SetTunnels(ctx context.Context, id string, req []protocol.TunnelRequest, ports map[string]int, now time.Time) (bool, error) {
+	ok := false
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE leases SET tunnels = ? WHERE id = ? AND state = 'ready'`, jsonText(req), id)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
+			return err
+		}
+		for name, port := range ports {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, room_port) VALUES (?, ?, ?)`, id, name, port); err != nil {
+				return err
+			}
+		}
+		ok = true
+		return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s tunnels: %v", id, ports))
+	})
+	if err != nil {
+		return false, fmt.Errorf("set tunnels of lease %s: %w", id, err)
+	}
+	return ok, nil
+}

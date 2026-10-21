@@ -40,6 +40,8 @@ type Backend interface {
 	Ready(ctx context.Context, leaseID string) bool
 	// Activity records guest activity (a cmd connection opened or closed).
 	Activity(leaseID string)
+	// AllowForward reports whether the lease registered a room port as a tunnel.
+	AllowForward(ctx context.Context, leaseID string, port int) bool
 }
 
 type Gateway struct {
@@ -175,11 +177,13 @@ func (g *Gateway) handle(nc net.Conn) {
 		conn.Close()
 	}()
 
-	go ssh.DiscardRequests(reqs)
+	go g.globalRequests(conn, reqs, upstream, leaseID, purpose)
 	for nch := range chans {
 		switch nch.ChannelType() {
 		case "session":
 			go g.session(nch, upstream, target)
+		case "direct-tcpip":
+			go g.directTCPIP(nch, upstream)
 		default:
 			nch.Reject(ssh.UnknownChannelType, "channel type "+nch.ChannelType()+" is not allowed")
 		}

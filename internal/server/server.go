@@ -154,6 +154,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/leases/{id}", s.auth(s.handleGetLease))
 	mux.HandleFunc("POST /v1/leases/{id}/touch", s.auth(s.handleTouch))
 	mux.HandleFunc("POST /v1/leases/{id}/release", s.auth(s.handleRelease))
+	mux.HandleFunc("PUT /v1/leases/{id}/tunnels", s.auth(s.handleSetTunnels))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	return mux
