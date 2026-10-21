@@ -155,7 +155,7 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	maps.Copy(env, roomEnv.Slots[slot])
 	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
 	// 3. mise env in work/: tool paths and the repository's mise [env].
-	maps.Copy(env, h.miseEnv(slot, env, warn))
+	maps.Copy(env, h.miseEnv(h.workDir(slot), env, warn))
 	// 4. device.env from prepare. 5. lease.env from the guest.
 	for _, f := range []string{"device.env", "lease.env"} {
 		m, err := readEnvFile(filepath.Join(h.slotDir(slot), f))
@@ -176,14 +176,16 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	return envList(env), nil
 }
 
-func (h *helper) miseEnv(slot string, env map[string]string, warn io.Writer) map[string]string {
+// miseEnv returns the output of "mise env --json" in dir: the tool paths and
+// the [env] of the mise configuration files that apply there.
+func (h *helper) miseEnv(dir string, env map[string]string, warn io.Writer) map[string]string {
 	if _, err := os.Stat(h.misePath()); err != nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), miseEnvTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, h.misePath(), "env", "--json")
-	cmd.Dir = h.workDir(slot)
+	cmd.Dir = dir
 	cmd.Env = envList(env)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

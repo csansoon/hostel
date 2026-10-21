@@ -20,6 +20,9 @@ import (
 // probeTimeout bounds the probe and the upload of one room.
 const probeTimeout = 10 * time.Minute
 
+// miseInstallTimeout bounds the install of the machine-level tools.
+const miseInstallTimeout = 20 * time.Minute
+
 func slotNames(m *config.Machine) []string {
 	names := make([]string, len(m.Slots))
 	for i, sl := range m.Slots {
@@ -146,6 +149,18 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	}
 	if err := s.cleanDirtySlots(ctx, room, r.ID); err != nil {
 		return err
+	}
+	// Machine-level tools, before the platform scripts, so the scripts can use
+	// them. A failure is a room provisioning failure.
+	if len(m.Tools) > 0 {
+		var resp protocol.RunScriptResponse
+		if err := room.Helper(ctx, []string{"mise-install"}, protocol.RunScriptRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds())}, &resp); err != nil {
+			return err
+		}
+		if resp.TimedOut || resp.ExitCode != 0 {
+			s.store.AddEvent(ctx, time.Now(), "", r.ID, "mise", fmt.Sprintf("mise install exited with code %d\n%s", resp.ExitCode, resp.OutputTail))
+			return fmt.Errorf("machine-level tools: mise install failed (exit code %d); see the events", resp.ExitCode)
+		}
 	}
 	ready, err := s.readyPlatforms(ctx, r.ID)
 	if err != nil {

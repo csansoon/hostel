@@ -127,6 +127,9 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 		}
 	}
 	maps.Copy(env, reqEnv)
+	// The machine-level mise tools are on the PATH of scripts.
+	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
+	maps.Copy(env, h.miseEnv(h.root, env, io.Discard))
 	cache := filepath.Join(h.root, "cache")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return nil, err
@@ -218,3 +221,39 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (t *tailBuffer) String() string { return string(t.b) }
+
+// miseInstall installs the machine-level tools of hostel/mise/config.toml
+// (server only): mise-install, with {"timeout_seconds"} on stdin.
+func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error) {
+	var resp protocol.RunScriptResponse
+	var req protocol.RunScriptRequest
+	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
+		return resp, fmt.Errorf("read the request: %w", err)
+	}
+	env, err := h.scriptEnv("", config.StepProvision, nil)
+	if err != nil {
+		return resp, err
+	}
+	timeout := time.Duration(req.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 20 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.misePath(), "install")
+	cmd.Dir, cmd.Env = h.root, env
+	var out tailBuffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err = cmd.Run()
+	resp.OutputTail = out.String()
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		resp.TimedOut, resp.ExitCode = true, -1
+	case errors.As(err, &exitErr):
+		resp.ExitCode = exitErr.ExitCode()
+	case err != nil:
+		return resp, fmt.Errorf("run mise install: %w", err)
+	}
+	return resp, nil
+}

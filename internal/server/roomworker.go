@@ -245,7 +245,7 @@ func (s *Server) idleRooms(ctx context.Context, rooms []store.Room) (map[int64]b
 // script of each platform; on-demand rooms do that when a lease first uses a
 // platform.
 func (s *Server) stepRoomProvisioning(ctx context.Context, r store.Room, m *config.Machine) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout+s.maxProvisionTimeout()+s.healthTimeout())
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout+miseInstallTimeout+s.maxProvisionTimeout()+s.healthTimeout())
 	defer cancel()
 	err := s.doProvision(ctx, r, m)
 	if ctx.Err() != nil {

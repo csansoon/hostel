@@ -34,6 +34,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		out, err = h.install(args[1:], stdin)
 	case "run-script":
 		out, err = h.runScript(args[1:], stdin)
+	case "mise-install":
+		out, err = h.miseInstall(stdin)
 	case "begin":
 		out, err = h.begin(args[1:], stdin)
 	case "cleanup":
