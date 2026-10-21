@@ -57,6 +57,8 @@ func setupDocker(binDir string) error {
 		return fmt.Errorf("unsupported Docker architecture %q", arch)
 	}
 	removeStale()
+	// Port processes of earlier runs whose test binary is gone.
+	exec.Command("pkill", "-f", "hostel-e2e-bin-[^ ]*/hostel ports --dir ").Run()
 	if _, err := docker("build", "-q", "-t", roomImage, "--label", dockerLabel+"-image=room", "../roomimage"); err != nil {
 		return err
 	}

@@ -103,6 +103,17 @@ func newEnv(t *testing.T) *env {
 	e := &env{t: t, home: t.TempDir(), runID: fmt.Sprintf("%x", b), vars: map[string]string{}}
 	e.cwd = e.home
 	t.Cleanup(e.removeContainers)
+	t.Cleanup(e.stopPortProcesses)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		logs, _ := filepath.Glob(filepath.Join(e.home, "*", ".git", "hostel", "*", "ports.log"))
+		for _, l := range logs {
+			data, _ := os.ReadFile(l)
+			t.Logf("%s:\n%s", l, data)
+		}
+	})
 	return e
 }
 
@@ -407,4 +418,10 @@ func (e *env) useGuestToken() string {
 	r := e.mustHostel("admin", "token", "create", "--name", "guest")
 	e.vars["HOSTEL_TOKEN"] = strings.TrimSpace(r.stdout)
 	return e.vars["HOSTEL_TOKEN"]
+}
+
+// stopPortProcesses stops the "hostel ports" processes of this test: their
+// arguments contain the test's home directory.
+func (e *env) stopPortProcesses() {
+	exec.Command("pkill", "-f", "hostel ports --dir "+e.home+"/").Run()
 }

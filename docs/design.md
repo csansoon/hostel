@@ -1234,12 +1234,21 @@ handles all tunnels and forwards of the lease.
   `direct-tcpip`. `ports` connections do not count as guest activity (section 16):
   a forgotten forward does not keep a lease alive.
 - **Room listeners.** The gateway asks the room's SSH server to listen on
-  `localhost:<room port>`, which covers `127.0.0.1` and `::1`.
+  `127.0.0.1:<room port>` (this must succeed) and on `[::1]:<room port>` (best
+  effort; the room can have no IPv6 loopback). It does not ask for `localhost`:
+  OpenSSH accepts `localhost` when only one of the two addresses is free, and a
+  room service on `127.0.0.1` would then get the tunnel's connections.
 - **Control.** The process listens on a local control socket. Unix socket paths
   are limited to 104 bytes on macOS, so the socket is
   `/tmp/hostel-<uid>/<first 16 hex digits of sha256(local state directory)>.sock`
-  (directory mode 0700; not `$TMPDIR`, which is long on macOS). On Windows it is the
-  named pipe `\\.\pipe\hostel-<same hash>`. The local state records the path. `hostel tunnel add|set|remove`
+  (not `$TMPDIR`, which is long on macOS). The directory must belong to the user
+  and have mode 0700, because `/tmp` is shared. On Windows the socket is a Unix
+  socket in `%LOCALAPPDATA%\hostel\` (Go supports Unix sockets on Windows 10 and
+  later), so no named pipe is necessary.
+- **Files.** The tunnels of a lease (local port source, requested and given room
+  port) are in `tunnels.json` in the local state directory; only `acquire` (before
+  the process starts) and the process write it. The process writes its log to
+  `ports.log` there (events only, no data). `hostel tunnel add|set|remove`
   and `hostel forward ...` send their request there. The process applies it and
   replies with the result. If the room's SSH server refuses a remote forward (for
   example a room service already uses a fixed port), the command fails with that
