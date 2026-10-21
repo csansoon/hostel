@@ -133,7 +133,12 @@ func newHelper() (*helper, error) {
 	if filepath.Base(bin) != "bin" {
 		return nil, fmt.Errorf("the helper must be at hostel/bin/, not %s", exe)
 	}
-	return &helper{root: filepath.Dir(bin), exe: exe, os: OSName()}, nil
+	h := &helper{root: filepath.Dir(bin), exe: exe, os: OSName()}
+	// The machine's configured OS selects the platform scripts.
+	if re, err := h.readRoomEnv(); err == nil && re.OS != "" {
+		h.os = re.OS
+	}
+	return h, nil
 }
 
 // OSName returns the Hostel OS name of this machine.

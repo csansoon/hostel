@@ -37,6 +37,7 @@ type Server struct {
 	kick       chan struct{}
 	workers    workers
 	notify     notifier
+	full       fullFlags
 	gateway    *gateway.Gateway
 	// gatewayAddr is the gateway address for guests.
 	gatewayAddr string
@@ -46,7 +47,7 @@ type Server struct {
 	lastReconcile time.Time
 }
 
-func newProviders(cfg *config.Server, serverKey ssh.Signer) (map[string]provider.Provider, error) {
+func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, log *slog.Logger) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for _, name := range cfg.ProviderOrder {
 		p := cfg.Providers[name]
@@ -58,6 +59,12 @@ func newProviders(cfg *config.Server, serverKey ssh.Signer) (map[string]provider
 				}
 			}
 			out[name] = provider.NewStatic(p, serverKey)
+		case config.ProviderExternal:
+			ext := provider.NewExternal(p, serverKey, log)
+			if err := ext.LoadCapabilities(ctx); err != nil {
+				return nil, fmt.Errorf("providers.%s: %w", name, err)
+			}
+			out[name] = ext
 		default:
 			return nil, fmt.Errorf("providers.%s: kind %q is not supported yet", name, p.Kind)
 		}
@@ -75,7 +82,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	providers, err := newProviders(cfg, serverKey)
+	providers, err := newProviders(ctx, cfg, serverKey, log)
 	if err != nil {
 		return err
 	}
@@ -155,6 +162,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/leases/{id}/touch", s.auth(s.handleTouch))
 	mux.HandleFunc("POST /v1/leases/{id}/release", s.auth(s.handleRelease))
 	mux.HandleFunc("PUT /v1/leases/{id}/tunnels", s.auth(s.handleSetTunnels))
+	mux.HandleFunc("POST /v1/rooms/{id}/drain", s.auth(s.admin(s.handleRoomDrain(true))))
+	mux.HandleFunc("POST /v1/rooms/{id}/undrain", s.auth(s.admin(s.handleRoomDrain(false))))
+	mux.HandleFunc("POST /v1/rooms/{id}/repair", s.auth(s.admin(s.handleRoomRepair)))
+	mux.HandleFunc("POST /v1/rooms/{id}/destroy", s.auth(s.admin(s.handleRoomDestroy)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	return mux

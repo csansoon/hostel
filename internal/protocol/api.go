@@ -83,6 +83,8 @@ type RoomStatus struct {
 	Slots    []SlotStatus `json:"slots"`
 	// Platforms are the platforms that the room is ready for.
 	Platforms []string `json:"platforms"`
+	// Deadline is the provider-side deadline of an on-demand room.
+	Deadline time.Time `json:"deadline,omitzero"`
 }
 
 type SlotStatus struct {

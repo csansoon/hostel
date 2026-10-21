@@ -249,3 +249,50 @@ func fromMS(v sql.NullInt64) time.Time {
 	}
 	return time.UnixMilli(v.Int64)
 }
+
+// SetProviderRef records the provider's ID of a room and its provider deadline.
+func (s *Store) SetProviderRef(ctx context.Context, id int64, ref string, deadline time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET provider_ref = ?, provider_deadline = ? WHERE id = ?`, ref, ms(deadline), id)
+	return err
+}
+
+// SetProviderDeadline records an extended provider deadline.
+func (s *Store) SetProviderDeadline(ctx context.Context, id int64, deadline time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET provider_deadline = ? WHERE id = ?`, ms(deadline), id)
+	return err
+}
+
+// SetWarmUntil records when an idle room stops or is destroyed (zero: not idle).
+func (s *Store) SetWarmUntil(ctx context.Context, id int64, t time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET warm_until = ? WHERE id = ?`, ms(t), id)
+	return err
+}
+
+func (s *Store) SetDrained(ctx context.Context, id int64, drained bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET drained = ? WHERE id = ?`, drained, id)
+	return err
+}
+
+// ClearHostKey removes the pinned host key (admin room repair --accept-host-key).
+func (s *Store) ClearHostKey(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET ssh_host_key = '' WHERE id = ?`, id)
+	return err
+}
+
+// SetSlot changes one slot.
+func (s *Store) SetSlot(ctx context.Context, roomID int64, name, state, leaseID, cleanupData string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = ?, cleanup_data = ? WHERE room_id = ? AND name = ?`,
+		state, leaseID, cleanupData, roomID, name)
+	return err
+}
+
+// BreakSlots marks the broken slots of a room dirty, so the next probe runs
+// their cleanup again (admin room repair).
+func (s *Store) BreakSlots(ctx context.Context, roomID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE slots SET state = 'dirty' WHERE room_id = ? AND state = 'broken' AND cleanup_data != ''`, roomID)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE slots SET state = 'free', lease_id = '' WHERE room_id = ? AND state = 'broken'`, roomID)
+	return err
+}

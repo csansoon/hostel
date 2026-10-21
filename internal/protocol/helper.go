@@ -26,6 +26,9 @@ type HelperHashes struct {
 type RoomEnv struct {
 	Env   map[string]string            `json:"env"`
 	Slots map[string]map[string]string `json:"slots"`
+	// OS is the machine's configured OS. It selects the platform scripts; it
+	// can differ from the probed OS (external machines).
+	OS string `json:"os"`
 }
 
 // RunScriptRequest is the input of "hostel room run-script".

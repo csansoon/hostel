@@ -60,7 +60,8 @@ func (s *Server) schedMachines() []scheduler.Machine {
 		}
 		out = append(out, scheduler.Machine{
 			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), OS: m.OS, Platforms: m.Platforms,
-			Labels: m.Labels, PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
+			CanResume: s.providers[m.Provider].Capabilities(m.Name).CanStop,
+			Labels:    m.Labels, PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
 			MaxLease: m.MaxLease.D(), MaxLifetime: m.MaxLifetime.D(),
 		})
 	}
@@ -143,33 +144,62 @@ func (s *Server) schedule(ctx context.Context) error {
 	}
 	now := time.Now()
 	out := scheduler.Schedule(scheduler.Input{Now: now, Aging: s.cfg.Aging.D(), Machines: s.schedMachines(),
-		Providers: s.schedProviders(), Rooms: srooms, Leases: queued})
+		Providers: s.schedProviders(), Rooms: srooms, Leases: queued, Full: s.full.current(s.cfg.LimitRetry.D())})
+	for _, id := range out.Evict {
+		s.log.Info("evict an idle room to make space", "room_id", id)
+		if _, err := s.store.SetRoomState(ctx, id, []string{protocol.RoomRunning, protocol.RoomStopped}, protocol.RoomDestroying,
+			"evicted to make space for a new room", now); err != nil {
+			return err
+		}
+	}
 	for _, a := range out.Assignments {
 		l := byID[a.LeaseID]
+		m := s.cfg.Machine(a.Machine)
+		var room store.Room
 		switch a.Action {
 		case scheduler.UseRoom, scheduler.ProvisionRoom:
-			room := roomByID[a.RoomID]
-			m := s.cfg.Machine(a.Machine)
-			ports, err := tunnelPorts(l.Tunnels, slotConfig(m, a.Slots[0]).Ports)
-			if err != nil {
-				if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeaseQueued}, protocol.LeaseFailed, err.Error(), now); err != nil {
-					return err
-				}
-				continue
-			}
-			ok, err := s.store.Assign(ctx, l.ID, room, a.Slots, ports, now)
+			room = roomByID[a.RoomID]
+		case scheduler.ResumeRoom:
+			room = roomByID[a.RoomID]
+			ok, err := s.store.SetRoomState(ctx, room.ID, []string{protocol.RoomStopped}, protocol.RoomResuming, "", now)
 			if err != nil {
 				return err
 			}
-			if ok {
-				s.kickScheduler()
+			if !ok {
+				continue
 			}
-		default:
-			s.log.Error("scheduler action is not supported", "action", a.Action, "lease_id", l.ID)
+			s.store.SetWarmUntil(ctx, room.ID, time.Time{})
+		case scheduler.CreateRoom:
+			// The room row exists before the provider call, with the name that
+			// the provider gets (design, section 7, ownership).
+			var err error
+			room, err = s.store.InsertRoom(ctx, store.Room{Provider: m.Provider, Machine: m.Name, State: protocol.RoomCreating, OS: m.OS},
+				s.cfg.ServerID, slotNames(m), now)
+			if err != nil {
+				return err
+			}
+		}
+		ports, err := tunnelPorts(l.Tunnels, slotConfig(m, a.Slots[0]).Ports)
+		if err != nil {
+			if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeaseQueued}, protocol.LeaseFailed, err.Error(), now); err != nil {
+				return err
+			}
+			continue
+		}
+		ok, err := s.store.Assign(ctx, l.ID, room, a.Slots, ports, now)
+		if err != nil {
+			return err
+		}
+		if ok {
+			s.kickScheduler()
 		}
 	}
 	for _, w := range out.Waiting {
-		if err := s.store.SetQueue(ctx, w.LeaseID, w.Position, w.Reason); err != nil {
+		reason := w.Reason
+		if reason == scheduler.ReasonNoSlot {
+			reason = s.brokenReason(byID[w.LeaseID], rooms, reason)
+		}
+		if err := s.store.SetQueue(ctx, w.LeaseID, w.Position, reason); err != nil {
 			return err
 		}
 	}
@@ -219,4 +249,28 @@ func tunnelPorts(tunnels []protocol.TunnelRequest, pool []int) (map[string]int, 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// brokenReason tells a waiting guest why: if every room of its candidate
+// machines is broken, the reason names the room's broken reason (R7).
+func (s *Server) brokenReason(l store.Lease, rooms []store.Room, fallback string) string {
+	p := s.cfg.Platforms[l.Platform]
+	cands := scheduler.Candidates(s.schedMachines(), scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS,
+		Labels: l.RequiredLabels, PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh})
+	reason := ""
+	for _, r := range rooms {
+		if !slices.Contains(cands, r.Provider+"/"+r.Machine) {
+			continue
+		}
+		if r.State != protocol.RoomBroken {
+			return fallback
+		}
+		if reason == "" {
+			reason = "room broken: " + r.BrokenReason
+		}
+	}
+	if reason == "" {
+		return fallback
+	}
+	return reason
 }

@@ -282,8 +282,9 @@ func (s *Store) EndLease(ctx context.Context, id string, from []string, endState
 }
 
 // FinishCleaning moves a cleaning lease to its final state and sets its slots
-// to slotState (free, or broken after a failed cleanup).
-func (s *Store) FinishCleaning(ctx context.Context, id, slotState string, now time.Time) (bool, error) {
+// to slotState (free, or broken after a failed cleanup; a broken slot keeps
+// cleanupData for the repair).
+func (s *Store) FinishCleaning(ctx context.Context, id, slotState, cleanupData string, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = end_state, ended_at = ?, revision = revision + 1
@@ -299,7 +300,8 @@ func (s *Store) FinishCleaning(ctx context.Context, id, slotState string, now ti
 		if slotState != protocol.SlotFree {
 			leaseIDCol = "lease_id"
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+` WHERE lease_id = ?`, slotState, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE lease_id = ?`,
+			slotState, cleanupData, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
@@ -456,6 +458,101 @@ func (s *Store) SetTunnels(ctx context.Context, id string, req []protocol.Tunnel
 	})
 	if err != nil {
 		return false, fmt.Errorf("set tunnels of lease %s: %w", id, err)
+	}
+	return ok, nil
+}
+
+// Requeue returns a lease that was not ready to the queue (design, section 6).
+// Its slots get slotState (free, broken, or dirty with cleanupData). With
+// attempt, the lease's attempts increase; at maxAttempts it fails instead.
+// It reports the new state, or "" if the lease was not in one of from.
+func (s *Store) Requeue(ctx context.Context, id string, from []string, reason string, attempt bool, maxAttempts int,
+	slotState, cleanupData string, now time.Time) (string, error) {
+	newState := ""
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var state string
+		var attempts int
+		if err := tx.QueryRowContext(ctx, `SELECT state, attempts FROM leases WHERE id = ?`, id).Scan(&state, &attempts); err != nil {
+			return err
+		}
+		if !contains(from, state) {
+			return nil
+		}
+		if attempt {
+			attempts++
+		}
+		leaseIDCol := "''"
+		if slotState != protocol.SlotFree {
+			leaseIDCol = "lease_id"
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE lease_id = ?`,
+			slotState, cleanupData, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
+			return err
+		}
+		if attempts >= maxAttempts {
+			newState = protocol.LeaseFailed
+			_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'failed', end_state = 'failed', end_reason = ?, ended_at = ?,
+				attempts = ?, revision = revision + 1 WHERE id = ?`, reason, now.UnixMilli(), attempts, id)
+			if err != nil {
+				return err
+			}
+			return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s %s → failed after %d attempts: %s", id, state, attempts, reason))
+		}
+		newState = protocol.LeaseQueued
+		_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'queued', room_id = NULL, slot_name = '', provider = '', machine = '',
+			began_at = NULL, attempts = ?, reason = ?, revision = revision + 1 WHERE id = ?`, attempts, reason, id)
+		if err != nil {
+			return err
+		}
+		return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s %s → queued (attempt %d): %s", id, state, attempts, reason))
+	})
+	if err != nil {
+		return "", fmt.Errorf("requeue lease %s: %w", id, err)
+	}
+	if newState != "" {
+		s.leaseChanged(id)
+	}
+	return newState, nil
+}
+
+// FailLease ends a lease at once, without cleanup (the room is lost or
+// unreachable). Its slots get slotState.
+func (s *Store) FailLease(ctx context.Context, id string, from []string, reason, slotState, cleanupData string, now time.Time) (bool, error) {
+	ok := false
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM leases WHERE id = ?`, id).Scan(&state); err != nil {
+			return err
+		}
+		if !contains(from, state) {
+			return nil
+		}
+		leaseIDCol := "''"
+		if slotState != protocol.SlotFree {
+			leaseIDCol = "lease_id"
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE lease_id = ?`,
+			slotState, cleanupData, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'failed', end_state = 'failed', end_reason = ?, ended_at = ?,
+			revision = revision + 1 WHERE id = ?`, reason, now.UnixMilli(), id); err != nil {
+			return err
+		}
+		ok = true
+		return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s %s → failed: %s", id, state, reason))
+	})
+	if err != nil {
+		return false, fmt.Errorf("fail lease %s: %w", id, err)
+	}
+	if ok {
+		s.leaseChanged(id)
 	}
 	return ok, nil
 }

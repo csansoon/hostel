@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -104,38 +103,6 @@ func (s *Server) connect(ctx context.Context, r store.Room) (*roomops.Conn, erro
 	return conn, nil
 }
 
-// provisionRoom probes a room, uploads the helper, mise, and the platform
-// scripts, runs the provision script of each platform that is not up to date,
-// and sets the room to running. Each step is safe to repeat.
-func (s *Server) provisionRoom(ctx context.Context, id int64) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout+s.maxProvisionTimeout())
-	defer cancel()
-	r, err := s.store.Room(ctx, id)
-	if err != nil || r.State != protocol.RoomProvisioning {
-		return
-	}
-	m := s.cfg.Machine(r.Provider + "/" + r.Machine)
-	if m == nil {
-		return
-	}
-	if err := s.doProvision(ctx, r, m); err != nil {
-		reason := err.Error()
-		switch {
-		case errors.Is(err, roomops.ErrUnreachable):
-			reason = reasonUnreachable
-		case errors.Is(err, roomops.ErrHostKeyChanged):
-			reason = "host key changed"
-		}
-		s.log.Warn("room provisioning failed", "room_id", id, "err", err)
-		s.store.SetRoomState(ctx, id, []string{protocol.RoomProvisioning}, protocol.RoomBroken, reason, time.Now())
-		return
-	}
-	if _, err := s.store.SetRoomState(ctx, id, []string{protocol.RoomProvisioning}, protocol.RoomRunning, "", time.Now()); err != nil {
-		s.log.Error("set room running", "room_id", id, "err", err)
-	}
-	s.kickScheduler()
-}
-
 func (s *Server) maxProvisionTimeout() time.Duration {
 	var d time.Duration
 	for _, p := range s.cfg.Platforms {
@@ -144,6 +111,9 @@ func (s *Server) maxProvisionTimeout() time.Duration {
 	return d
 }
 
+// doProvision probes a room and uploads what it needs; then it cleans dirty
+// slots, runs the provision scripts that are not up to date (static rooms
+// only), and the health scripts.
 func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machine) error {
 	conn, err := s.connect(ctx, r)
 	if err != nil {
@@ -154,7 +124,10 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if err != nil {
 		return err
 	}
-	if room.OS != m.OS {
+	// The helper and mise follow the probe. Platform scripts follow the
+	// machine's os: an external machine can declare another OS (the E2E tests
+	// run .macos.sh scripts in Linux containers this way).
+	if m.Kind == config.ProviderStatic && room.OS != m.OS {
 		return fmt.Errorf("the room runs %s, but the configuration says os = %q", room.OS, m.OS)
 	}
 	if err := s.store.SetRoomProbe(ctx, r.ID, room.OS, room.Arch, room.Home); err != nil {
@@ -171,6 +144,9 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if err := s.store.SetHelperSHA256(ctx, r.ID, helperSum); err != nil {
 		return err
 	}
+	if err := s.cleanDirtySlots(ctx, room, r.ID); err != nil {
+		return err
+	}
 	ready, err := s.readyPlatforms(ctx, r.ID)
 	if err != nil {
 		return err
@@ -180,18 +156,45 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		if have, ok := ready[name]; ok && have == p.Hash {
 			continue
 		}
-		if err := s.runProvision(ctx, room, r.ID, s.cfg.Platforms[name], p); err != nil {
+		// On-demand rooms run a platform provision script when a lease for the
+		// platform first uses the room (design, section 7).
+		if m.OnDemand() && s.cfg.Platforms[name].Kind == config.KindDevice {
+			continue
+		}
+		if err := s.runProvision(ctx, room, r.ID, m.OS, s.cfg.Platforms[name], p); err != nil {
 			return err
 		}
 		if err := s.store.SetRoomPlatform(ctx, r.ID, name, p.Hash, time.Now()); err != nil {
 			return err
 		}
 	}
+	return s.runHealth(ctx, room, r.ID, m)
+}
+
+// runHealth runs the health script of each platform of the room.
+func (s *Server) runHealth(ctx context.Context, room *roomops.Room, roomID int64, m *config.Machine) error {
+	for _, name := range s.roomPlatformNames(m) {
+		p := s.cfg.Platforms[name]
+		if s.uploads[name][m.OS].Hash == "" || p.Script(m.OS, config.StepHealth) == "" {
+			continue
+		}
+		timeout := p.ScriptTimeout(config.StepHealth)
+		resp, err := room.RunScript(ctx, name, config.StepHealth, "", protocol.RunScriptRequest{
+			Env: platformEnv(p), TimeoutSeconds: int(timeout / time.Second)})
+		if err != nil {
+			return err
+		}
+		if resp.TimedOut || resp.ExitCode != 0 {
+			s.store.AddEvent(ctx, time.Now(), "", roomID, "script",
+				fmt.Sprintf("%s health exited with code %d\n%s", name, resp.ExitCode, resp.OutputTail))
+			return fmt.Errorf("platform %s: health script failed (exit code %d)", name, resp.ExitCode)
+		}
+	}
 	return nil
 }
 
-func (s *Server) runProvision(ctx context.Context, room *roomops.Room, roomID int64, p *config.Platform, up roomops.Platform) error {
-	if up.Hash == "" || p.Script(room.OS, config.StepProvision) == "" {
+func (s *Server) runProvision(ctx context.Context, room *roomops.Room, roomID int64, osName string, p *config.Platform, up roomops.Platform) error {
+	if up.Hash == "" || p.Script(osName, config.StepProvision) == "" {
 		return nil
 	}
 	timeout := p.ScriptTimeout(config.StepProvision)
@@ -262,7 +265,7 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 	for k, v := range s.miseEnv(room.Home) {
 		env[k] = v
 	}
-	re := protocol.RoomEnv{Env: env, Slots: map[string]map[string]string{}}
+	re := protocol.RoomEnv{Env: env, Slots: map[string]map[string]string{}, OS: m.OS}
 	for _, sl := range m.Slots {
 		re.Slots[sl.Name] = sl.Env
 	}
@@ -270,7 +273,7 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 		return u, err
 	}
 	for _, name := range s.roomPlatformNames(m) {
-		u.Platforms[name] = s.uploads[name][room.OS]
+		u.Platforms[name] = s.uploads[name][m.OS]
 	}
 	return u, nil
 }

@@ -64,7 +64,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	for _, room := range rooms {
 		rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
 			OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
-			Slots: []protocol.SlotStatus{}, Platforms: []string{}}
+			Slots: []protocol.SlotStatus{}, Platforms: []string{}, Deadline: room.ProviderDeadline}
 		for _, sl := range slots {
 			if sl.RoomID == room.ID {
 				rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
