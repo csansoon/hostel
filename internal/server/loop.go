@@ -85,6 +85,20 @@ func (s *Server) pass(ctx context.Context) error {
 			s.workers.start(ctx, fmt.Sprintf("room:%d", id), func(ctx context.Context) { s.provisionRoom(ctx, id) }, s.kickScheduler)
 		}
 	}
+	if err := s.schedule(ctx); err != nil {
+		return fmt.Errorf("schedule: %w", err)
+	}
+	leases, err := s.store.ActiveLeases(ctx)
+	if err != nil {
+		return err
+	}
+	for _, l := range leases {
+		switch l.State {
+		case protocol.LeaseAssigned, protocol.LeaseProvisioning, protocol.LeasePreparing, protocol.LeaseCleaning:
+			id := l.ID
+			s.workers.start(ctx, "lease:"+id, func(ctx context.Context) { s.runLease(ctx, id) }, s.kickScheduler)
+		}
+	}
 	return nil
 }
 

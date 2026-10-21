@@ -21,7 +21,8 @@ var migrations embed.FS
 
 // Store is the server database.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	hook func(leaseID string)
 }
 
 // Open opens the database at path, creates it if necessary, and applies the

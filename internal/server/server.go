@@ -11,14 +11,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/provider"
+	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/version"
 )
@@ -33,6 +36,12 @@ type Server struct {
 	providers  map[string]provider.Provider
 	kick       chan struct{}
 	workers    workers
+	notify     notifier
+	gateway    *gateway.Gateway
+	// gatewayAddr is the gateway address for guests.
+	gatewayAddr string
+	// uploads has the platform files and hashes for each platform and OS.
+	uploads map[string]map[string]roomops.Platform
 	// lastReconcile is used only by the loop goroutine.
 	lastReconcile time.Time
 }
@@ -77,6 +86,10 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	defer st.Close()
 	s := &Server{cfg: cfg, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
 		providers: providers, kick: make(chan struct{}, 1)}
+	st.SetLeaseHook(s.notify.notify)
+	if err := s.loadPlatformUploads(); err != nil {
+		return err
+	}
 	if err := s.ensureStaticRooms(ctx); err != nil {
 		return fmt.Errorf("static rooms: %w", err)
 	}
@@ -85,15 +98,26 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 	}
+	gwLn, err := net.Listen("tcp", cfg.GatewayListen)
+	if err != nil {
+		ln.Close()
+		return fmt.Errorf("listen on %s: %w", cfg.GatewayListen, err)
+	}
+	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr())
+	s.gateway = gateway.New(gatewayKey, gwBackend{s}, log)
 	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- httpServer.Serve(ln) }()
+	go func() { errc <- s.gateway.Serve(gwLn) }()
+	defer gwLn.Close()
 
-	if err := writeJSONFile(filepath.Join(cfg.DataDir, "server.json"), protocol.Addresses{Listen: ln.Addr().String()}); err != nil {
+	if err := writeJSONFile(filepath.Join(cfg.DataDir, "server.json"),
+		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String()}); err != nil {
 		httpServer.Close()
 		return err
 	}
-	log.Info("server started", "listen", ln.Addr().String(), "server_id", cfg.ServerID, "version", version.Version)
+	log.Info("server started", "listen", ln.Addr().String(), "gateway", gwLn.Addr().String(),
+		"server_id", cfg.ServerID, "version", version.Version)
 
 	loopCtx, stopLoop := context.WithCancel(ctx)
 	defer s.workers.wg.Wait()
@@ -107,7 +131,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	select {
 	case <-ctx.Done():
 	case err := <-errc:
-		return fmt.Errorf("http server: %w", err)
+		return fmt.Errorf("listener stopped: %w", err)
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -122,6 +146,10 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/info", s.auth(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
+	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
+	mux.HandleFunc("GET /v1/leases/{id}", s.auth(s.handleGetLease))
+	mux.HandleFunc("POST /v1/leases/{id}/touch", s.auth(s.handleTouch))
+	mux.HandleFunc("POST /v1/leases/{id}/release", s.auth(s.handleRelease))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	return mux
@@ -154,7 +182,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.Info{
 		Version:         version.Version,
-		GatewayAddress:  s.cfg.GatewayPublic,
+		GatewayAddress:  s.gatewayAddr,
 		GatewayHostKey:  strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.gatewayKey.PublicKey()))),
 		ServerPublicKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.serverKey.PublicKey()))),
 	})
@@ -168,6 +196,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, protocol.Error{Error: msg, Code: code})
+}
+
+// publicAddr returns the gateway address for guests: gateway_public, with the
+// real port when it has port 0.
+func publicAddr(public string, real net.Addr) string {
+	host, port, err := net.SplitHostPort(public)
+	if err != nil || port != "0" {
+		return public
+	}
+	return net.JoinHostPort(host, strconv.Itoa(real.(*net.TCPAddr).Port))
 }
 
 // writeJSONFile writes a file with a temporary file and a rename, so a reader

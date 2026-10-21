@@ -68,6 +68,8 @@ CREATE TABLE leases (
 	ready_at         INTEGER,
 	expires_at       INTEGER,
 	ended_at         INTEGER,
+	-- end_state is the final state that a lease in cleaning goes to.
+	end_state        TEXT    NOT NULL DEFAULT '',
 	end_reason       TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX leases_state ON leases (state);

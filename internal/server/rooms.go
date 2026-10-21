@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -271,22 +270,7 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 		return u, err
 	}
 	for _, name := range s.roomPlatformNames(m) {
-		p := s.cfg.Platforms[name]
-		// An OS platform without scripts for this OS uploads nothing (empty hash).
-		var files []string
-		if p.Dir != "" && (p.Kind == config.KindDevice || len(p.Scripts[room.OS]) > 0) {
-			if _, err := os.Stat(filepath.Join(p.Dir, "platform.toml")); err == nil {
-				files = append(files, "platform.toml")
-			}
-			for _, f := range p.Scripts[room.OS] {
-				files = append(files, f)
-			}
-		}
-		up, err := roomops.PlatformUpload(p.Dir, files)
-		if err != nil {
-			return u, err
-		}
-		u.Platforms[name] = up
+		u.Platforms[name] = s.uploads[name][room.OS]
 	}
 	return u, nil
 }
