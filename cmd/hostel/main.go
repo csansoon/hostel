@@ -35,7 +35,7 @@ var commands = []command{
 	{name: "release", summary: "End the lease"},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents"},
 	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
-	{name: "server", summary: "Initialize or run the Hostel server"},
+	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
 	{name: "ports", hidden: true},
 	{name: "room", hidden: true},
 }

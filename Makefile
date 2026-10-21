@@ -9,7 +9,7 @@ TARGETS = darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 window
 
 export CGO_ENABLED = 0
 
-.PHONY: build dist lint test-unit
+.PHONY: build dist lint test-unit test-e2e test-e2e-10
 
 build:
 	$(GO) build $(GOFLAGS_BUILD) -o dist/hostel ./cmd/hostel
@@ -29,3 +29,12 @@ lint:
 
 test-unit:
 	$(GO) test ./...
+
+test-e2e:
+	$(GO) test -tags e2e -count=1 -timeout 60m ./test/e2e/...
+
+test-e2e-10:
+	@set -e; for i in 1 2 3 4 5 6 7 8 9 10; do \
+		echo "== E2E run $$i of 10"; \
+		$(GO) test -tags e2e -count=1 -timeout 60m ./test/e2e/...; \
+	done
