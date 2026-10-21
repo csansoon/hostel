@@ -33,6 +33,8 @@ type fixtureOpts struct {
 	serverKeys  string
 	machineKeys string
 	files       map[string]string
+	// platforms are extra platform files: platform → file → content.
+	platforms map[string]map[string]string
 }
 
 func defaultRepoFiles() map[string]string {
@@ -47,13 +49,22 @@ func defaultRepoFiles() map[string]string {
 
 func newFixture(t *testing.T, opts *fixtureOpts) *fixture {
 	t.Helper()
+	e := newEnv(t)
+	e.init()
+	return newFixtureWithEnv(t, e, opts)
+}
+
+// newFixtureWithEnv builds the fixture in an initialized environment.
+func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
+	t.Helper()
 	if opts == nil {
 		opts = &fixtureOpts{}
 	}
-	e := newEnv(t)
-	e.init()
 	c := e.startStaticRoom("box")
 	e.usePlatform("fakedevice")
+	for name, files := range opts.platforms {
+		e.writePlatform(name, files)
+	}
 	e.writeConfig(serverHeader() + opts.serverKeys + fmt.Sprintf(`
 [providers.home]
 kind = "static"

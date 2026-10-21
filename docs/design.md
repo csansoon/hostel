@@ -571,6 +571,7 @@ success; else stdout has `{"error": "..."}`.
 |---|---|---|---|
 | `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
 | `install mise\|mise-config\|room-env --sha256 H` / `install platform <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (platform) | `{}`; refuses data with another hash |
+| `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
 | `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` at each lease start: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). |
 | `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
 | `cleanup` | server | `{"lease_id", "platform", "devices", "ports"}` (from the database, so a repeated cleanup does not need `lease.json`) | `{"steps": [...]}` (section 17) |
@@ -661,7 +662,9 @@ Contract:
   `SIMULATOR_UDIDS` (all, comma-separated). The `android` scripts write
   `ANDROID_SERIAL` and `ANDROID_SERIALS`.
 - Before a platform `provision` script, the server runs `mise install` for the
-  machine-level tools, so scripts can use them.
+  machine-level tools (helper `mise-install`, at each room provisioning), so
+  scripts can use them: the helper adds `hostel/bin` and the output of
+  `mise env --json` (in the script's directory) to the script environment.
 - A non-zero exit code is a failure. The last 4 KB of output go to the event log.
 - The helper runs a script with `/bin/sh <script>` (so the file needs no execute
   bit) in its own process group, and stops the group at the step timeout. A
