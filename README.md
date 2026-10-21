@@ -9,7 +9,7 @@ machine or an on-demand cloud such as Namespace), prepares it, and gives the age
 SSH access through its gateway. When the lease ends, cleanup deletes everything the
 lease left on the room.
 
-Status: design ready; no code yet. Start with milestone M0 in docs/plan.md.
+Status: milestone M0 (repository setup) is done. Next: M1 in docs/plan.md.
 
 | Document | Content |
 |---|---|
