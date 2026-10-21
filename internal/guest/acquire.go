@@ -304,17 +304,11 @@ func runSetup(ctx context.Context, l *lease, cmd string, deadline time.Time, std
 		return 0, nil
 	}
 	if st.SetupJob == "" {
-		conn, err := Dial(ctx, st, "cmd")
-		if err != nil {
-			return 0, err
-		}
-		var started map[string]string
-		err = conn.Helper(ctx, []string{"job", "start"}, protocol.JobRequest{Command: []string{cmd}, Shell: true}, &started)
-		conn.Close()
+		id, err := startJob(ctx, l, protocol.JobRequest{Command: []string{cmd}, Shell: true}, deadline)
 		if err != nil {
 			return 0, fmt.Errorf("start the setup job: %w", err)
 		}
-		st.SetupJob, st.SetupOffset = started["job_id"], 0
+		st.SetupJob, st.SetupOffset = id, 0
 		if err := st.Save(); err != nil {
 			return 0, err
 		}

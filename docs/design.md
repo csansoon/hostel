@@ -1291,8 +1291,10 @@ handles all tunnels and forwards of the lease.
 ## 15. Jobs
 
 - `job start` starts a **supervisor** (`hostel room job supervise`) in a new session
-  (`setsid`) on macOS and Linux, or in a job object on Windows. The helper generates
-  the job ID (`j-<unix-ms>-<4 random hex>`).
+  (`setsid`) on macOS and Linux, or in a job object on Windows. The guest chooses
+  the job ID (`j-<unix-ms>-<4 random hex>`; the helper makes one if the request has
+  none). A start with an existing ID returns that job, so a guest whose connection
+  dropped during the start repeats it with the same ID and gets one job, not two.
 - The supervisor starts the command in its own process group, in `work/`, with the
   lease environment. Output (stdout and stderr together) goes to
   `jobs/<id>/output`. When the command ends, the supervisor writes the exit code to

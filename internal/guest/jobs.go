@@ -14,6 +14,7 @@ import (
 
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/room"
 )
 
 // Job states that run and attach report.
@@ -145,6 +146,33 @@ func sleepUntil(ctx context.Context, d time.Duration, deadline time.Time) bool {
 	}
 }
 
+// startJob starts a job with an ID that the guest chooses. When the connection
+// drops during the start, it connects again and repeats the start with the same
+// ID, so the job runs once and the guest knows its ID.
+func startJob(ctx context.Context, l *lease, req protocol.JobRequest, deadline time.Time) (string, error) {
+	req.JobID = room.NewJobID()
+	for {
+		conn, err := Dial(ctx, l.st, "cmd")
+		if err == nil {
+			err = conn.Helper(ctx, []string{"job", "start"}, req, nil)
+			conn.Close()
+			if err == nil {
+				return req.JobID, nil
+			}
+		}
+		var ended *leaseEndedError
+		if terr := l.touch(); errors.As(terr, &ended) {
+			return "", ended
+		}
+		if !errors.Is(err, ErrConnLost) {
+			return "", err
+		}
+		if !sleepUntil(ctx, time.Second, deadline) {
+			return "", fmt.Errorf("%w; the job %s may run: run \"hostel attach %s\"", err, req.JobID, req.JobID)
+		}
+	}
+}
+
 // reportJob prints the last line of run and attach and returns the exit code
 // (design, section 10, "Exit codes and output").
 func reportJob(res jobResult, asJSON bool, stdout, stderr io.Writer) int {
@@ -185,18 +213,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	deadline := time.Now().Add(*wait)
 	ctx := context.Background()
-	conn, err := Dial(ctx, l.st, "cmd")
-	if err != nil {
-		return l.fail(stderr, err)
-	}
-	req := protocol.JobRequest{Command: pos, Shell: len(pos) == 1}
-	var started map[string]string
-	err = conn.Helper(ctx, []string{"job", "start"}, req, &started)
-	conn.Close()
+	id, err := startJob(ctx, l, protocol.JobRequest{Command: pos, Shell: len(pos) == 1}, deadline)
 	if err != nil {
 		return l.fail(stderr, fmt.Errorf("start the job: %w", err))
 	}
-	id := started["job_id"]
 	if *detach {
 		fmt.Fprintln(stdout, id)
 		fmt.Fprintf(stderr, "hostel: job %s started; run \"hostel attach %s\" for its output\n", id, id)

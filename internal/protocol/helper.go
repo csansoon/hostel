@@ -89,6 +89,9 @@ const (
 type JobRequest struct {
 	Command []string `json:"command"`
 	Shell   bool     `json:"shell"`
+	// JobID is chosen by the guest, so a start that it repeats after a dropped
+	// connection returns the same job instead of a second one.
+	JobID string `json:"job_id,omitempty"`
 }
 
 // JobInfo is one entry of "job list".

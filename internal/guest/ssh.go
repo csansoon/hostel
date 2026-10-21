@@ -46,7 +46,7 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
 	nc, err := d.DialContext(ctx, "tcp", st.Access.GatewayAddress)
 	if err != nil {
-		return nil, fmt.Errorf("connect to the Hostel gateway at %s: %w", st.Access.GatewayAddress, err)
+		return nil, fmt.Errorf("%w: connect to the Hostel gateway at %s: %v", ErrConnLost, st.Access.GatewayAddress, err)
 	}
 	nc.SetDeadline(time.Now().Add(dialTimeout))
 	c, chans, reqs, err := ssh.NewClientConn(nc, st.Access.GatewayAddress, &ssh.ClientConfig{
@@ -57,7 +57,7 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 	})
 	if err != nil {
 		nc.Close()
-		return nil, fmt.Errorf("gateway refused the connection (the lease may have ended): %w", err)
+		return nil, fmt.Errorf("%w: the gateway refused the connection (the lease may have ended): %v", ErrConnLost, err)
 	}
 	nc.SetDeadline(time.Time{})
 	return &Conn{client: ssh.NewClient(c, chans, reqs), access: st.Access}, nil

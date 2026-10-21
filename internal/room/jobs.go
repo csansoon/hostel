@@ -58,28 +58,40 @@ func (h *helper) jobStart(args []string, stdin io.Reader) (map[string]string, er
 	if _, err := h.readLease(slot); err != nil {
 		return nil, err
 	}
-	id := fmt.Sprintf("j-%d-%s", time.Now().UnixMilli(), randHex()[:4])
-	dir, _ := h.jobDir(slot, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	id := req.JobID
+	if id == "" {
+		id = NewJobID()
+	}
+	dir, err := h.jobDir(slot, id)
+	if err != nil {
 		return nil, err
 	}
-	meta, _ := json.Marshal(jobMeta{Command: req.Command, Shell: req.Shell, StartedAt: time.Now().UTC()})
-	if err := writeFileAtomic(filepath.Join(dir, "job.json"), meta, 0o644); err != nil {
+	if err := os.MkdirAll(h.jobsDir(slot), 0o755); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(h.exe, "room", "job", "supervise", "--slot", slot, id)
-	setSession(cmd)
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start the job supervisor: %w", err)
+	// Mkdir is the atomic claim of the ID: a repeated start with the same ID
+	// waits for the first start's supervisor and returns the same job.
+	if err := os.Mkdir(dir, 0o755); err == nil {
+		meta, _ := json.Marshal(jobMeta{Command: req.Command, Shell: req.Shell, StartedAt: time.Now().UTC()})
+		if err := writeFileAtomic(filepath.Join(dir, "job.json"), meta, 0o644); err != nil {
+			return nil, err
+		}
+		cmd := exec.Command(h.exe, "room", "job", "supervise", "--slot", slot, id)
+		setSession(cmd)
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("start the job supervisor: %w", err)
+		}
+		go cmd.Wait()
+	} else if !errors.Is(err, os.ErrExist) {
+		return nil, err
 	}
-	go cmd.Wait()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "supervisor.json")); err == nil {
 			return map[string]string{"job_id": id}, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, errors.New("the job supervisor did not start in 10 seconds")
+			return nil, fmt.Errorf("the supervisor of job %s did not start in 10 seconds", id)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -318,4 +330,9 @@ func (h *helper) jobStop(args []string) (struct{}, error) {
 	}
 	signalGroup(sup.PGID, true)
 	return struct{}{}, nil
+}
+
+// NewJobID returns a job ID: j-<unix ms>-<4 hex digits>.
+func NewJobID() string {
+	return fmt.Sprintf("j-%d-%s", time.Now().UnixMilli(), randHex()[:4])
 }
