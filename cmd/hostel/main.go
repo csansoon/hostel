@@ -13,6 +13,7 @@ type command struct {
 	name    string
 	summary string
 	hidden  bool
+	run     func(args []string, stdout, stderr io.Writer) int
 }
 
 var commands = []command{
@@ -33,7 +34,7 @@ var commands = []command{
 	{name: "status", summary: "Show all leases, rooms, and the queue"},
 	{name: "release", summary: "End the lease"},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents"},
-	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration"},
+	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server"},
 	{name: "ports", hidden: true},
 	{name: "room", hidden: true},
@@ -58,12 +59,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
-			fmt.Fprintf(stderr, "hostel: %s: not implemented yet\n", c.name)
-			return 1
+			if c.run == nil {
+				return notImplemented(c.name, stderr)
+			}
+			return c.run(args[1:], stdout, stderr)
 		}
 	}
 	fmt.Fprintf(stderr, "hostel: unknown command %q; run \"hostel help\" for the list of commands\n", args[0])
 	return 2
+}
+
+func notImplemented(name string, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "hostel: %s: not implemented yet\n", name)
+	return 1
 }
 
 func printHelp(w io.Writer) {
