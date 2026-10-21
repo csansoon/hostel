@@ -504,6 +504,7 @@ hostel/
   bin/hostel                 helper binary (hostel.exe on Windows)
   bin/mise                   mise binary (mise.exe on Windows; "mise on rooms" below)
   mise/config.toml           machine-level tools (MISE_CONFIG_DIR)
+  room-env.json              provider, machine, and slot env and the MISE_* variables (mode 0600)
   platforms/<platform>/      platform scripts for this room's OS
   authorized_keys.base       authorized_keys at the first lease (restored at cleanup)
   cache/                     shared caches; kept between leases (HOSTEL_CACHE_DIR)
@@ -534,11 +535,16 @@ path as a key (for example Xcode DerivedData) are therefore reused.
    platform directory is the SHA-256 of a text with one line `<path> <mode>
    <sha256>\n` for each included file, sorted by path. Included files are
    `platform.toml` and the scripts for the room's OS. Upload candidates: the helper, mise,
-   `hostel/mise/config.toml`, and each platform directory that the room serves
+   `hostel/mise/config.toml`, `hostel/room-env.json`, and each platform directory that the room serves
    (`platform.toml` and the scripts for the room's OS; one hash for each directory,
    which is also `room_platforms.scripts_sha256`).
 3. The server repeats step 2 at each `preparing`, so that a guest cannot leave a
    changed helper or script for the next lease.
+4. Transfer. The helper itself goes first, with `sh -c 'cat > tmp && chmod 755 tmp
+   && mv tmp hostel/bin/hostel'`. All other items go through the helper `install`
+   command, which writes a temporary file, checks the SHA-256, and renames it. mise
+   goes compressed with gzip (151 MB → about 52 MB for Linux). An OS platform without
+   scripts for the room's OS has an empty upload, which removes old scripts.
 
 ### Helper commands
 
@@ -548,9 +554,10 @@ success; else stdout has `{"error": "..."}`.
 
 | Command | Caller | Input | Output |
 |---|---|---|---|
-| `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
+| `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
+| `install mise\|mise-config\|room-env --sha256 H` / `install platform <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (platform) | `{}`; refuses data with another hash |
 | `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` at each lease start: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). |
-| `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...]}` | `{"exit_code", "output_tail"}` |
+| `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
 | `cleanup` | server | `{"lease_id", "platform", "devices", "ports"}` (from the database, so a repeated cleanup does not need `lease.json`) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
@@ -641,6 +648,10 @@ Contract:
 - Before a platform `provision` script, the server runs `mise install` for the
   machine-level tools, so scripts can use them.
 - A non-zero exit code is a failure. The last 4 KB of output go to the event log.
+- The helper runs a script with `/bin/sh <script>` (so the file needs no execute
+  bit) in its own process group, and stops the group at the step timeout. A
+  background process that the script starts (for example a simulator) can keep
+  running after the script ends.
 
 `hostel admin config check` (section 9) fails if a device platform lacks `prepare`
 for an OS that serves it, if a machine lists an unknown platform or an OS platform,

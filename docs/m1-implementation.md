@@ -176,7 +176,7 @@ the hidden `job supervise`. Details:
 - **Harness (`test/e2e`).**
   - `TestMain` builds the host binary and the Linux helpers for the Docker
     architecture once, and checks that the mise binaries exist in `dist/`
-    (`make test-e2e` runs `make dist` first).
+    (`make test-e2e` runs `make mise` first).
   - It removes Docker objects with a `hostel-e2e` label that are older than 2 hours,
     and `hostel ports` processes of earlier runs.
   - Each test: a run ID, a temporary home directory, a temporary git repository, its
@@ -196,8 +196,8 @@ Each test tool comes in the first phase that uses it.
 |---|---|---|
 | 1 | `internal/protocol` (states and priorities; API and helper types come with their first use), `internal/config` (server, platform, repository, guest; defaults; strict decoding; key paths in errors; JSON Schema), `admin config check|schema`, `internal/store` with migrations, `internal/scheduler` with unit tests | — |
 | 2 | E2E harness (temporary home, server process control, wait helpers), `test-e2e` targets, `hostel server init` and `server run` with the configuration check, tokens, `GET /v1/info` | 24 |
-| 3 | `test/roomimage` and the Docker parts of the harness, `roomops`, `static` provider, helper `info`, `install`, `begin`, `run-script`, `cleanup`; server workers for static rooms; HTTP API; tokens; events; `hostel status` | — (room readiness is checked inside scenario 1) |
-| 4 | `test/platforms`; gateway (`cmd` only; `/v1/info` gives the real gateway address when `gateway_public` has port 0); helper `exec`, `shell`, `set-env`, `sync-plan`, `sync-apply`, `diff`, `tar-in`, `tar-out`, jobs; guest `acquire`, `sync`, `run`, `attach`, `jobs`, `stop`, `cp`, `diff`, `ssh`, `ssh-config`, `release`; mise setup job | 1, 11, 12, 13, 16 |
+| 3 | `test/roomimage` and the Docker parts of the harness, `roomops`, `static` provider, helper `info`, `install`, `run-script`; server workers for static rooms; reconcile of unreachable static rooms; status and token API; events; `hostel status`, `admin token`, `admin pubkey` | 22 (static rooms ready at start; provision again after a script change), 25 (offline at start) |
+| 4 | `test/platforms`; helper `begin` and `cleanup`; gateway (`cmd` only; `/v1/info` gives the real gateway address when `gateway_public` has port 0); helper `exec`, `shell`, `set-env`, `sync-plan`, `sync-apply`, `diff`, `tar-in`, `tar-out`, jobs; guest `acquire`, `sync`, `run`, `attach`, `jobs`, `stop`, `cp`, `diff`, `ssh`, `ssh-config`, `release`; mise setup job | 1, 11, 12, 13, 16 |
 | 5 | Queue and lease lifecycle: positions, priority and aging, blocked machines, request checks, `--wait`, poll timeout, idle and `max_lease` expiry, ownership, platforms and devices, `screenshot`, `platforms`, `agent-guide` | 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 22 |
 | 6 | Port process, `ports` gateway purpose, tunnels, forwards, `PUT /v1/leases/{id}/tunnels`, end of access | 14, 15 |
 | 7 | `test/fakeprovider`, `external` provider, on-demand rooms, warm policy, eviction, limits, reconcile, failures, repair, offline static host, early cancel, restarts | 17, 18, 19, 20, 23, 25, 26, 27 |

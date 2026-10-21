@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -52,11 +53,15 @@ func TestConfigErrors(t *testing.T) {
 		config    string
 		platforms map[string]string // file below platforms_dir → content
 		want      []string          // each must be in stderr; {dir} is the config directory
+		// {line} in want is the line number of the first config line that
+		// contains marker.
+		marker string
 	}{
 		{
 			name:   "unknown key",
 			config: staticMachine + "colour = \"blue\"\n",
-			want:   []string{"{dir}/server.toml:11:1: unknown key \"providers.home.machines.box.colour\""},
+			marker: "colour",
+			want:   []string{"{dir}/server.toml:{line}:1: unknown key \"providers.home.machines.box.colour\""},
 		},
 		{
 			name:   "unknown platform",
@@ -98,7 +103,8 @@ func TestConfigErrors(t *testing.T) {
 		{
 			name:   "number as a duration",
 			config: staticMachine + "max_lease = 5\n",
-			want:   []string{"{dir}/server.toml:11:13: providers.home.machines.box.max_lease: wrong type: got a number, want a duration string"},
+			marker: "max_lease",
+			want:   []string{"{dir}/server.toml:{line}:13: providers.home.machines.box.max_lease: wrong type: got a number, want a duration string"},
 		},
 		{
 			name: "several errors at once",
@@ -114,7 +120,14 @@ func TestConfigErrors(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t)
-			e.initServer(serverHeader() + c.config)
+			config := serverHeader() + c.config
+			e.initServer(config)
+			line := 0
+			for i, l := range strings.Split(config, "\n") {
+				if c.marker != "" && line == 0 && strings.Contains(l, c.marker) {
+					line = i + 1
+				}
+			}
 			for file, body := range c.platforms {
 				e.writeFile(filepath.Join(e.configDir(), "platforms", file), body)
 			}
@@ -126,6 +139,7 @@ func TestConfigErrors(t *testing.T) {
 				}
 				for _, w := range c.want {
 					w = strings.ReplaceAll(w, "{dir}", e.configDir())
+					w = strings.ReplaceAll(w, "{line}", fmt.Sprint(line))
 					if !strings.Contains(r.stderr, w) {
 						t.Fatalf("stderr does not contain %q: %s", w, r)
 					}

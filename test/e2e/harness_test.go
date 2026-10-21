@@ -23,6 +23,38 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
+// status returns the server status.
+func (s *serverProc) status() protocol.Status {
+	s.e.t.Helper()
+	var st protocol.Status
+	if code := s.get("/v1/status", s.token, &st); code != http.StatusOK {
+		s.e.t.Fatalf("GET /v1/status: HTTP %d", code)
+	}
+	return st
+}
+
+// room returns the status of the room of a machine ("<provider>/<machine>").
+func (s *serverProc) room(machine string) protocol.RoomStatus {
+	s.e.t.Helper()
+	for _, r := range s.status().Rooms {
+		if r.Provider+"/"+r.Machine == machine {
+			return r
+		}
+	}
+	return protocol.RoomStatus{}
+}
+
+// waitRoom waits until the room of a machine is in state.
+func (s *serverProc) waitRoom(machine, state string, timeout time.Duration) protocol.RoomStatus {
+	s.e.t.Helper()
+	var r protocol.RoomStatus
+	s.e.waitFor("room "+machine+" "+state, timeout, func() bool {
+		r = s.room(machine)
+		return r.State == state
+	})
+	return r
+}
+
 // hostelBin is the host binary that TestMain builds.
 var hostelBin string
 
@@ -40,6 +72,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "e2e: build hostel:", err)
 		os.Exit(1)
 	}
+	if err := setupDocker(dir); err != nil {
+		fmt.Fprintln(os.Stderr, "e2e:", err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -48,17 +84,29 @@ func TestMain(m *testing.M) {
 // env is one isolated machine: a temporary home directory for the server and
 // the guest.
 type env struct {
-	t    *testing.T
-	home string
+	t     *testing.T
+	home  string
+	runID string
+	// vars are extra environment variables for guest commands, for example
+	// HOSTEL_SERVER after the server starts.
+	vars map[string]string
 }
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	return &env{t: t, home: t.TempDir()}
+	b := make([]byte, 6)
+	rand.Read(b)
+	e := &env{t: t, home: t.TempDir(), runID: fmt.Sprintf("%x", b), vars: map[string]string{}}
+	t.Cleanup(e.removeContainers)
+	return e
 }
 
 func (e *env) environ() []string {
-	return []string{"HOME=" + e.home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir()}
+	out := []string{"HOME=" + e.home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir()}
+	for k, v := range e.vars {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 func (e *env) configDir() string { return filepath.Join(e.home, ".config", "hostel") }
@@ -97,9 +145,9 @@ func (e *env) hostel(args ...string) result {
 
 var adminTokenRE = regexp.MustCompile(`admin token \(shown only once\): (\S+)`)
 
-// initServer runs "hostel server init", replaces the template with config, and
-// returns the admin token.
-func (e *env) initServer(config string) string {
+// init runs "hostel server init" and returns the admin token. Guest commands
+// use the admin token unless a test sets HOSTEL_TOKEN.
+func (e *env) init() string {
 	e.t.Helper()
 	r := e.hostel("server", "init")
 	if r.code != 0 {
@@ -109,8 +157,21 @@ func (e *env) initServer(config string) string {
 	if m == nil {
 		e.t.Fatalf("server init printed no admin token: %s", r)
 	}
-	e.writeFile(filepath.Join(e.configDir(), "server.toml"), config)
+	e.vars["HOSTEL_TOKEN"] = m[1]
 	return m[1]
+}
+
+// writeConfig replaces server.toml.
+func (e *env) writeConfig(config string) {
+	e.writeFile(filepath.Join(e.configDir(), "server.toml"), config)
+}
+
+// initServer runs init and writes server.toml.
+func (e *env) initServer(config string) string {
+	e.t.Helper()
+	token := e.init()
+	e.writeConfig(config)
+	return token
 }
 
 func (e *env) writeFile(path, body string) {
@@ -129,7 +190,8 @@ func serverHeader() string {
 	b := make([]byte, 6)
 	rand.Read(b)
 	id := fmt.Sprintf("e2e%x", b)
-	return fmt.Sprintf("server_id = %q\nlisten = \"127.0.0.1:0\"\ngateway_listen = \"127.0.0.1:0\"\n", id)
+	return fmt.Sprintf("server_id = %q\nlisten = \"127.0.0.1:0\"\ngateway_listen = \"127.0.0.1:0\"\nhelper_dir = %q\n"+
+		"intervals = { scheduler = \"1s\", reconcile = \"2s\", tunnel_check = \"1s\" }\n", id, helperDir)
 }
 
 type serverProc struct {
@@ -195,6 +257,7 @@ func (e *env) startServer(token string) *serverProc {
 		s.addr = a.Listen
 		return true
 	})
+	e.vars["HOSTEL_SERVER"] = "http://" + s.addr
 	return s
 }
 
