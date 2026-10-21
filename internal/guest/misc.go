@@ -213,7 +213,10 @@ func copyOut(conn *Conn, src, dst string) error {
 	return err
 }
 
-// extract writes a tar stream whose first path component is replaced by target.
+// extract writes a tar stream whose first path component is replaced by
+// target. It never writes outside target: parent directories that are
+// symbolic links or files are refused, and a symbolic link at a file path is
+// replaced, not followed (the room side, tar-in, has the same rules).
 func extract(r io.Reader, target string) error {
 	tr := tar.NewReader(r)
 	for {
@@ -226,26 +229,44 @@ func extract(r io.Reader, target string) error {
 		}
 		name := strings.TrimSuffix(hdr.Name, "/")
 		_, rest, _ := strings.Cut(name, "/")
+		full := target
 		if rest != "" {
 			if err := syncfs.CheckPath(rest); err != nil {
 				return err
 			}
-		}
-		full := filepath.Join(target, filepath.FromSlash(rest))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			if err := syncfs.MkdirSafe(target, rest); err != nil {
+				return err
+			}
+			full = filepath.Join(target, filepath.FromSlash(rest))
+		} else if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
+		info, statErr := os.Lstat(full)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if statErr == nil && !info.IsDir() {
+				return fmt.Errorf("%s exists and is not a directory", full)
+			}
 			if err := os.MkdirAll(full, 0o755); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
+			if statErr == nil && info.IsDir() {
+				return fmt.Errorf("%s is a directory", full)
+			}
 			os.Remove(full)
 			if err := os.Symlink(hdr.Linkname, full); err != nil {
 				return err
 			}
 		case tar.TypeReg:
+			if statErr == nil && info.Mode()&fs.ModeSymlink != 0 {
+				if err := os.Remove(full); err != nil {
+					return err
+				}
+			}
 			f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode).Perm())
 			if err != nil {
 				return err
@@ -257,6 +278,8 @@ func extract(r io.Reader, target string) error {
 			if err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("%s: unsupported file type", hdr.Name)
 		}
 	}
 }

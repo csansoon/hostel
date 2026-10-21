@@ -40,8 +40,8 @@ func slotFlag(name string, args []string) (string, []string, error) {
 	return *slot, pos, nil
 }
 
-// begin writes the lease data of a slot and saves authorized_keys, so cleanup
-// can restore it (a guest must not keep a key it added).
+// begin writes the lease data of a slot and saves authorized_keys as the base
+// that cleanup restores (a guest must not keep a key it added).
 func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	slot, _, err := slotFlag("begin", args)
 	if err != nil {
@@ -61,11 +61,34 @@ func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	if err := writeFileAtomic(filepath.Join(h.slotDir(slot), "lease.json"), data, 0o644); err != nil {
 		return struct{}{}, err
 	}
+	// The base comes from a moment when the room has no other lease: with a
+	// lease in another slot, authorized_keys can have a key that that lease
+	// added, and the base must not keep it.
+	if busy, err := h.otherSlotBusy(slot); err != nil || busy {
+		return struct{}{}, err
+	}
 	keys, err := os.ReadFile(h.authorizedKeysPath())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return struct{}{}, err
 	}
 	return struct{}{}, writeFileAtomic(h.authorizedKeysBase(), keys, 0o600)
+}
+
+// otherSlotBusy reports whether another slot of the room has a lease.
+func (h *helper) otherSlotBusy(slot string) (bool, error) {
+	des, err := os.ReadDir(filepath.Join(h.root, "slots"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	for _, de := range des {
+		if de.Name() == slot || !de.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(h.slotDir(de.Name()), "lease.json")); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (h *helper) authorizedKeysPath() string {

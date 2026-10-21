@@ -301,7 +301,11 @@ func Apply(work string, plan Plan, next Manifest, r io.Reader) (written, deleted
 			full := filepath.Join(work, filepath.FromSlash(sub))
 			switch {
 			case i < len(parts) && !info.IsDir():
-				// A file or a symbolic link where a directory must be.
+				// A file or a symbolic link where a directory must be. Only a
+				// blocker that the plan lists goes; a newer room object stays.
+				if !overwrite[sub] {
+					return 0, deleted, fmt.Errorf("%s: a room file is in the way of %s; it is not in the plan's overwrite list (run the sync again)", sub, p)
+				}
 				if err := os.Remove(full); err != nil {
 					return 0, deleted, err
 				}

@@ -223,3 +223,25 @@ func TestRejectsUnplannedPaths(t *testing.T) {
 		t.Fatal("plan with ../x succeeded")
 	}
 }
+
+func TestApplyKeepsUnplannedBlockers(t *testing.T) {
+	guest, work := t.TempDir(), t.TempDir()
+	write(t, guest, "a/b", "x")
+	m := manifest(t, guest, "a/b")
+	plan, err := MakePlan(work, Manifest{}, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After the plan, a room job writes a file where the directory a must go.
+	write(t, work, "a", "room data")
+	var buf bytes.Buffer
+	if err := WriteTar(&buf, guest, m, plan.Send); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Apply(work, plan, m, &buf); err == nil {
+		t.Fatal("apply removed a room file that the plan does not list")
+	}
+	if read(t, work, "a") != "room data" {
+		t.Fatal("the room file changed")
+	}
+}
