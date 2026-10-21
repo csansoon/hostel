@@ -19,3 +19,4 @@ Status: milestone M0 (repository setup) is done. Next: M1 in docs/plan.md.
 | [docs/design.md](docs/design.md) | Architecture and contracts |
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [docs/namespace.md](docs/namespace.md) | Namespace facts, limits, and traps |
+| [docs/m1-implementation.md](docs/m1-implementation.md) | M1 build order and technical decisions |
