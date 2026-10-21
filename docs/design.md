@@ -217,7 +217,9 @@ Rules:
   room runs this cleanup before it takes a new lease: when a probe succeeds again,
   the server runs the cleanup of each dirty slot, then sets the room to `running`.
 - When a lease returns to `queued`, its `began_at`, room, and slot are cleared. A new
-  assignment calls `begin` again.
+  assignment calls `begin` again. Its old slot keeps no `lease_id` (a dirty slot has
+  the lease data in `cleanup_data`), and every slot update for a lease is limited to
+  the lease's current room, so a later step of the lease never changes the old slot.
 
 An append-only `events` table records each change. `hostel status` and debug
 output read from it.
@@ -572,7 +574,7 @@ success; else stdout has `{"error": "..."}`.
 | `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
 | `install mise\|mise-config\|room-env --sha256 H` / `install platform <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (platform) | `{}`; refuses data with another hash |
 | `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
-| `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` at each lease start: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). |
+| `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
 | `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
 | `cleanup` | server | `{"lease_id", "platform", "devices", "ports"}` (from the database, so a repeated cleanup does not need `lease.json`) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
@@ -948,7 +950,7 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel run [--detach] [--wait 100s] [--json] -- <command>` | Starts a job in the work directory and streams its output. One argument runs with `sh -c` (`hostel run -- "make && make test"`); several arguments run without a shell. The command is found in the job's PATH (with the mise tools). |
 | `hostel attach <job> [--wait 100s]` / `hostel jobs` / `hostel stop <job>` | Job control. |
 | `hostel screenshot [--device d] [-o file.png]` | Runs the platform `screenshot` script and downloads the PNG. |
-| `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. The target is the full new path; a target that ends with `/` (or an existing local directory) receives the source with its own name. |
+| `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. The target is the full new path; a target that ends with `/` (or an existing local directory) receives the source with its own name. Both sides refuse to write below a symbolic link and replace a link at a file path instead of following it. |
 | `hostel diff` | Shows the temporary changes against the last baseline commit. |
 | `hostel ssh [-- command]` | Interactive shell, or one command, with the system `ssh` client and the file of `ssh-config`. |
 | `hostel ssh-config` | Writes an `ssh_config` file for `ssh -F` (gateway address, lease user, lease key, pinned gateway host key) and prints its path. |
@@ -1055,8 +1057,9 @@ machine names, room OS and architecture, `tunnel_check`, `expires_at`, and
       empty, up to `work/`.
    2. For each `send` path: if any existing parent component is not a directory (a
       file or a symbolic link), or the path itself has another type (for example a
-      directory where a file must go), remove that object first. Remove a directory
-      recursively only if the plan lists it in `overwrite`; else stop with an error.
+      directory where a file must go), remove that object first, but only if the
+      plan lists it in `overwrite`; else stop with an error (a room job made it after
+      the plan).
    3. Write the files, and create missing parent directories.
    4. Replace `manifest.json` and make a baseline commit.
 6. `hostel sync` prints the `overwrite` paths.
@@ -1215,10 +1218,15 @@ room's loopback interface).
   (`[{"name", "room_port"}]`, `room_port` 0 = from the pool). The scheduler uses
   them for candidate matching (section 5). The server records the room ports in
   `lease_tunnels` when it assigns the slot, and returns them with the `ready` lease.
-  `PUT /v1/leases/{id}/tunnels` changes the list during a lease. The server refuses a
-  port that another lease on the room uses (HTTP 409). The gateway accepts a remote
-  forward only for a registered port of that lease. From M6, the scheduler treats
-  fixed room ports as a resource of the room.
+  `PUT /v1/leases/{id}/tunnels` changes the list during a lease (and raises the
+  lease revision). The server refuses a port that another lease on the room uses
+  (HTTP 409), and two tunnels with the same fixed room port (also in `hostel.toml`).
+  The gateway accepts a remote forward only for a registered port of that lease, and
+  after each change it closes the forwards of ports that the lease no longer
+  registers. At assignment, a lease does not get a room where another lease uses one
+  of its fixed room ports; it waits. From M6, the scheduler treats fixed room ports as
+  a resource of the room (today such a lease can wait for that room although another
+  room is free).
 - **Changing the room port.** `hostel tunnel set <name> --room-port P` registers the
   new port, closes the old forward, and opens the new one. The guest updates
   `lease.env`, so new jobs get the new `HOSTEL_TUNNEL_<NAME>_PORT` and the new values

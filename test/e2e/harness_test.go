@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -301,10 +302,21 @@ func (s *serverProc) get(path, token string, out any) int {
 	return s.do(http.MethodGet, path, token, out)
 }
 
+// put sends a PUT request with a JSON body and returns the HTTP status.
+func (s *serverProc) put(path, token, body string) int {
+	s.e.t.Helper()
+	return s.send(http.MethodPut, path, token, strings.NewReader(body), nil)
+}
+
 // do sends an API request without a body and decodes the JSON response.
 func (s *serverProc) do(method, path, token string, out any) int {
 	s.e.t.Helper()
-	req, err := http.NewRequest(method, "http://"+s.addr+path, nil)
+	return s.send(method, path, token, nil, out)
+}
+
+func (s *serverProc) send(method, path, token string, body io.Reader, out any) int {
+	s.e.t.Helper()
+	req, err := http.NewRequest(method, "http://"+s.addr+path, body)
 	if err != nil {
 		s.e.t.Fatal(err)
 	}
