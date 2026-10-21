@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/csansoon/hostel/internal/guest"
 	"github.com/csansoon/hostel/internal/room"
 	"github.com/csansoon/hostel/internal/version"
 )
@@ -19,21 +20,21 @@ type command struct {
 
 var commands = []command{
 	{name: "platforms", summary: "List platforms with free slots, queue length, and estimated wait"},
-	{name: "acquire", summary: "Create or continue a lease for a platform"},
-	{name: "sync", summary: "Send changed files to the lease again"},
-	{name: "run", summary: "Run a command in the lease work directory"},
-	{name: "attach", summary: "Attach to the output of a job"},
-	{name: "jobs", summary: "List the jobs of the lease"},
-	{name: "stop", summary: "Stop a job"},
+	{name: "acquire", summary: "Create or continue a lease for a platform", run: guest.Acquire},
+	{name: "sync", summary: "Send changed files to the lease again", run: guest.Sync},
+	{name: "run", summary: "Run a command in the lease work directory", run: guest.Run},
+	{name: "attach", summary: "Attach to the output of a job", run: guest.Attach},
+	{name: "jobs", summary: "List the jobs of the lease", run: guest.Jobs},
+	{name: "stop", summary: "Stop a job", run: guest.Stop},
 	{name: "screenshot", summary: "Take a screenshot of a device"},
-	{name: "cp", summary: "Copy files to or from the lease work directory"},
-	{name: "diff", summary: "Show changes on the room since the last sync"},
-	{name: "ssh", summary: "Open an interactive shell in the lease"},
-	{name: "ssh-config", summary: "Write an ssh_config file for the lease"},
+	{name: "cp", summary: "Copy files to or from the lease work directory", run: guest.Cp},
+	{name: "diff", summary: "Show changes on the room since the last sync", run: guest.Diff},
+	{name: "ssh", summary: "Open an interactive shell in the lease", run: guest.SSH},
+	{name: "ssh-config", summary: "Write an ssh_config file for the lease", run: guest.SSHConfig},
 	{name: "tunnel", summary: "List or change tunnels from the room to this machine"},
 	{name: "forward", summary: "Forward a local port to a port on the room"},
 	{name: "status", summary: "Show all leases, rooms, and the queue", run: statusCmd},
-	{name: "release", summary: "End the lease"},
+	{name: "release", summary: "End the lease", run: guest.Release},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents"},
 	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
