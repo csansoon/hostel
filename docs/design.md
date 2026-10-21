@@ -330,7 +330,14 @@ Broken on-demand rooms are destroyed. Broken static rooms stay until the owner r
 `hostel admin room repair <room> [--accept-host-key]`. Repair runs the full cleanup
 (section 17) of each `broken` or `dirty` slot again (this also restores
 `authorized_keys`), then the `health` scripts, and sets the room to `running` if all
-pass.
+pass. It does this through the probe: a broken slot (with its `cleanup_data`)
+becomes `dirty`, and the room goes to `provisioning`; the probe cleans each dirty
+slot before the room is `running`.
+
+**Workers and retries.** A room worker ends when a step does not change the room
+state (for example a failed destroy); the next loop pass starts it again, so such
+a retry follows `intervals.scheduler`. The provider `provision` call is retried
+inside the worker with backoff (2 s, 4 s), three attempts in total.
 
 **Room host key.** The server pins a room's SSH host key at the first connection. A
 different key later makes the room `broken` with reason "host key changed". Only
@@ -368,7 +375,14 @@ type RoomAccess struct {
 ```
 
 - `Dial` with a proxy command runs the command and uses its stdin and stdout as
-  the connection.
+  the connection. A proxy connection has no deadlines, so a timer bounds the SSH
+  handshake.
+- The server asks an external provider for the capabilities of each machine at
+  start; a failure stops the start with the provider's message.
+- `rooms.os` is the probed OS: it selects the helper and mise binaries. The
+  machine's configured `os` selects the platform scripts; the server writes it to
+  `room-env.json` (`"os"`), and the helper uses it for script names and
+  `HOSTEL_ROOM_OS`. For static machines both must be the same.
 - `Signers` is the server key for `static` and `external` rooms. For Namespace it can
   be the key that the provider CLI manages (verify in M3).
 
@@ -1002,7 +1016,7 @@ everything. Any token can read `status` and `platforms`.
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
 | `POST /v1/leases/{id}/release` | Releases or cancels. |
 | `GET /v1/status` | Leases, rooms, queue. |
-| `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. |
+| `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. `repair` takes `{"accept_host_key": bool}` and is for broken static rooms; `destroy` is for on-demand rooms without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "machine"}` (`machine` = `<provider>/<machine>`, only for `room`). A new token is returned once. |
 
 A `ready` lease includes the access data: gateway address, gateway host key,
@@ -1435,7 +1449,14 @@ Privilege escalation to root on a room stays out of scope.
   run), and stops `hostel ports` processes of earlier runs.
 - Two providers in tests: `static` with fixed containers, and `external` with
   `test/fakeprovider`, which starts containers on demand. Environment variables
-  control its delay, its limit, and its failures.
+  control its delay (`FAKE_DELAY`), a limit (`FAKE_LIMIT`, counted over its
+  containers, also ones without the prefix), failures (`FAKE_FAIL`), stop support
+  (`FAKE_CAN_STOP`), and access through a proxy command (`FAKE_PROXY`). A lock
+  file for each name makes `provision` idempotent when a killed server's call
+  still runs.
+- The test platform `fakedevice` reads markers in the room cache: `slow-prepare`,
+  `fail-prepare`, `slow-reset`, `fail-reset`. Tests create them with `docker exec`
+  to drive failures and restarts at a known state.
 - Test platforms in `test/platforms/`: a device platform whose scripts simulate a
   device (they write `device.env` and a fake screenshot), with scripts for `linux`
   and for `macos`. An `external` machine with `os = "macos"` runs the `.macos.sh`

@@ -200,7 +200,7 @@ Each test tool comes in the first phase that uses it.
 | 4 | `test/platforms`; helper `begin` and `cleanup`; gateway (`cmd` only; `/v1/info` gives the real gateway address when `gateway_public` has port 0); helper `exec`, `shell`, `set-env`, `sync-plan`, `sync-apply`, `diff`, `tar-in`, `tar-out`, jobs; guest `acquire`, `sync`, `run`, `attach`, `jobs`, `stop`, `cp`, `diff`, `ssh`, `ssh-config`, `release`; mise setup job | 1, 11, 12, 13, 16 |
 | 5 | Queue and lease lifecycle: positions, priority and aging, blocked machines, request checks, `--wait`, poll timeout, idle and `max_lease` expiry, ownership, platforms and devices, `screenshot`, `platforms`, `agent-guide` | 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 22 |
 | 6 | Port process, `ports` gateway purpose, tunnels, forwards, `PUT /v1/leases/{id}/tunnels`, end of access | 14, 15 |
-| 7 | `test/fakeprovider`, `external` provider, on-demand rooms, warm policy, eviction, limits, reconcile, failures, repair, offline static host, early cancel, restarts | 17, 18, 19, 20, 23, 25, 26, 27 |
+| 7 | `test/fakeprovider`, `external` provider, on-demand rooms, warm policy, eviction, limits, reconcile, failures, repair, offline static host, early cancel, restarts | 17, 18, 19, 20, 22 (on-demand, OS selection), 23, 25, 26, 27 |
 | 8 | mise on rooms: machine-level tools, repository tools, cache between leases | 28 |
 | 9 | Stability: `make test-e2e-10`; fix flaky tests; update `design.md` and `README.md` | all |
 

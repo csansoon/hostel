@@ -29,6 +29,8 @@ var (
 	helperDir string
 	// dockerArch is the Go architecture of the Docker rooms.
 	dockerArch string
+	// fakeProviderBin is test/fakeprovider, built for the host.
+	fakeProviderBin string
 )
 
 func docker(args ...string) (string, error) {
@@ -71,6 +73,13 @@ func setupDocker(binDir string) error {
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
 		return fmt.Errorf("build the linux helper: %w", err)
+	}
+	fakeProviderBin = filepath.Join(binDir, "fakeprovider")
+	build = exec.Command("go", "build", "-o", fakeProviderBin, "../fakeprovider")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	build.Stdout, build.Stderr = os.Stderr, os.Stderr
+	if err := build.Run(); err != nil {
+		return fmt.Errorf("build the fake provider: %w", err)
 	}
 	mise, err := filepath.Abs("../../dist/mise-linux-" + dockerArch)
 	if err != nil {
@@ -183,4 +192,39 @@ func (c *container) sh(cmd string) string {
 		c.e.t.Fatal(err)
 	}
 	return out
+}
+
+// externalProvider returns the server.toml section of a fake external provider
+// with its machines. vars are extra FAKE_* settings; keys are extra provider keys.
+func (e *env) externalProvider(name, keys string, vars map[string]string, machines string) string {
+	e.t.Helper()
+	state := filepath.Join(e.home, "fake-"+name)
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	env := fmt.Sprintf("FAKE_RUN_ID = %q, FAKE_STATE_DIR = %q", e.runID, state)
+	for k, v := range vars {
+		env += fmt.Sprintf(", %s = %q", k, v)
+	}
+	return fmt.Sprintf(`
+[providers.%s]
+kind = "external"
+command = [%q]
+command_env = { %s }
+timeouts = { provision = "3m", default = "1m" }
+%s
+%s`, name, fakeProviderBin, env, keys, machines)
+}
+
+// fakeRooms returns the names of the fake provider's containers of this test.
+func (e *env) fakeRooms() []string {
+	e.t.Helper()
+	out, err := docker("ps", "-a", "--filter", "label="+dockerLabel+"="+e.runID, "--filter", "label=hostel-fake=1", "--format", "{{.Names}}")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
 }

@@ -425,3 +425,16 @@ func (e *env) useGuestToken() string {
 func (e *env) stopPortProcesses() {
 	exec.Command("pkill", "-f", "hostel ports --dir "+e.home+"/").Run()
 }
+
+// kill stops the server with SIGKILL, as a crash.
+func (s *serverProc) kill() {
+	s.cmd.Process.Kill()
+	<-s.done
+}
+
+// restartAfterKill kills the server and starts it again on the same ports.
+func (s *serverProc) restartAfterKill() *serverProc {
+	s.e.t.Helper()
+	s.kill()
+	return s.restart()
+}
