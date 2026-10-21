@@ -92,6 +92,8 @@ type env struct {
 	vars map[string]string
 	// cwd is the directory of guest commands (the test repository, if any).
 	cwd string
+	// admin is the admin token from "server init".
+	admin string
 }
 
 func newEnv(t *testing.T) *env {
@@ -161,6 +163,7 @@ func (e *env) init() string {
 		e.t.Fatalf("server init printed no admin token: %s", r)
 	}
 	e.vars["HOSTEL_TOKEN"] = m[1]
+	e.admin = m[1]
 	return m[1]
 }
 
@@ -284,7 +287,13 @@ func (s *serverProc) stop() {
 // get sends an API request with the token and decodes the JSON response.
 func (s *serverProc) get(path, token string, out any) int {
 	s.e.t.Helper()
-	req, err := http.NewRequest(http.MethodGet, "http://"+s.addr+path, nil)
+	return s.do(http.MethodGet, path, token, out)
+}
+
+// do sends an API request without a body and decodes the JSON response.
+func (s *serverProc) do(method, path, token string, out any) int {
+	s.e.t.Helper()
+	req, err := http.NewRequest(method, "http://"+s.addr+path, nil)
 	if err != nil {
 		s.e.t.Fatal(err)
 	}
@@ -321,7 +330,13 @@ func (e *env) waitFor(what string, timeout time.Duration, cond func() bool) {
 // the directory of guest commands.
 func (e *env) newRepo(files map[string]string) string {
 	e.t.Helper()
-	dir := filepath.Join(e.home, "repo")
+	return e.newRepoNamed("repo", files)
+}
+
+// newRepoNamed creates another repository (another worktree of a guest).
+func (e *env) newRepoNamed(name string, files map[string]string) string {
+	e.t.Helper()
+	dir := filepath.Join(e.home, name)
 	for p, body := range files {
 		e.writeFile(filepath.Join(dir, p), body)
 	}
@@ -382,4 +397,14 @@ func (s *serverProc) restart() *serverProc {
 	cfg = strings.Replace(cfg, "\ngateway_listen = \"127.0.0.1:0\"", fmt.Sprintf("\ngateway_listen = %q", s.gateway), 1)
 	s.e.writeConfig(cfg)
 	return s.e.startServer(s.token)
+}
+
+// useGuestToken creates a guest token and makes guest commands use it. The
+// server's admin token stays in serverProc.token.
+func (e *env) useGuestToken() string {
+	e.t.Helper()
+	e.vars["HOSTEL_TOKEN"] = e.admin
+	r := e.mustHostel("admin", "token", "create", "--name", "guest")
+	e.vars["HOSTEL_TOKEN"] = strings.TrimSpace(r.stdout)
+	return e.vars["HOSTEL_TOKEN"]
 }

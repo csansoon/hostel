@@ -941,13 +941,17 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel status` | All leases, rooms, and the queue. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
 | `hostel agent-guide` | Prints short usage instructions for coding agents. |
+| `hostel screenshot [--device d] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
 
 Admin commands: `hostel admin token create|revoke`, `admin pubkey`,
 `admin lease release <lease-id>`, `admin room drain|undrain|repair|destroy <room>`,
 `admin config check|schema`. `hostel status` shows lease and room IDs.
 
 All guest commands except `platforms`, `status`, and `agent-guide` call
-`POST /v1/leases/{id}/touch`.
+`POST /v1/leases/{id}/touch`. When a lease command fails (for example because
+the gateway closed the connection at expiry), the guest calls `touch` again; if
+the lease ended, it reports the end reason instead of the connection error. An
+attach that cannot connect again stops at once when the lease ended.
 
 Example:
 
@@ -993,7 +997,7 @@ everything. Any token can read `status` and `platforms`.
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
 | `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait. |
 | `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
-| `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait`. Updates `last_poll_at`. |
+| `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait`. Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). |
 | `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
 | `POST /v1/leases/{id}/release` | Releases or cancels. |

@@ -27,13 +27,34 @@ setup = ["echo setup-ran > setup.txt"]
 env = { REPO_VAR = "repo-value" }
 `
 
-func newFixture(t *testing.T, files map[string]string) *fixture {
+// fixtureOpts changes the fixture: server keys (top level of server.toml),
+// keys of the machine "box", and the repository files.
+type fixtureOpts struct {
+	serverKeys  string
+	machineKeys string
+	files       map[string]string
+}
+
+func defaultRepoFiles() map[string]string {
+	return map[string]string{
+		"hostel.toml": fixtureRepoConfig,
+		"a.txt":       "hello\n",
+		".gitignore":  "ignored.txt\n.env\n",
+		"ignored.txt": "not sent\n",
+		".env":        "SECRET=1\n",
+	}
+}
+
+func newFixture(t *testing.T, opts *fixtureOpts) *fixture {
 	t.Helper()
+	if opts == nil {
+		opts = &fixtureOpts{}
+	}
 	e := newEnv(t)
 	e.init()
 	c := e.startStaticRoom("box")
 	e.usePlatform("fakedevice")
-	e.writeConfig(serverHeader() + fmt.Sprintf(`
+	e.writeConfig(serverHeader() + opts.serverKeys + fmt.Sprintf(`
 [providers.home]
 kind = "static"
 
@@ -42,17 +63,13 @@ address = %q
 os = "linux"
 platforms = ["fakedevice"]
 env = { MACHINE_VAR = "machine-value" }
-`, c.address()))
+`, c.address()) + opts.machineKeys)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	e.useGuestToken()
+	files := opts.files
 	if files == nil {
-		files = map[string]string{
-			"hostel.toml": fixtureRepoConfig,
-			"a.txt":       "hello\n",
-			".gitignore":  "ignored.txt\n.env\n",
-			"ignored.txt": "not sent\n",
-			".env":        "SECRET=1\n",
-		}
+		files = defaultRepoFiles()
 	}
 	e.newRepo(files)
 	return &fixture{e: e, s: s, c: c}
