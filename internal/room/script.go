@@ -115,6 +115,16 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 	maps.Copy(env, roomEnv.Env)
 	if slot != "" {
 		maps.Copy(env, roomEnv.Slots[slot])
+		// A script that a guest runs (screenshot) gets the same lease values as
+		// a script that the server runs.
+		if l, err := h.readLease(slot); err == nil {
+			env["HOSTEL_LEASE_ID"] = l.LeaseID
+			env["HOSTEL_PLATFORM"] = l.Platform
+			env["HOSTEL_DEVICES"] = strings.Join(l.Devices, ",")
+			if p, err := h.platformInfo(l.Platform); err == nil {
+				env["HOSTEL_PLATFORM_DEVICES"] = strings.Join(p.Devices, ",")
+			}
+		}
 	}
 	maps.Copy(env, reqEnv)
 	cache := filepath.Join(h.root, "cache")

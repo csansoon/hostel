@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/client"
@@ -37,6 +38,25 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "LEASE\tSTATE\tPLATFORM\tDEVICES\tPRIORITY\tGUEST\tROOM\tAGE\tEXPIRES\tTASK")
+	for _, l := range st.Leases {
+		state := l.State
+		if l.State == protocol.LeaseQueued {
+			state = fmt.Sprintf("queued #%d (%s)", l.Position, l.Reason)
+		}
+		room, expires := "-", "-"
+		if l.RoomID != 0 {
+			room = fmt.Sprintf("%d/%s", l.RoomID, l.Slot)
+		}
+		if !l.ExpiresAt.IsZero() {
+			expires = l.ExpiresAt.Local().Format(time.TimeOnly)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l.ID, state, l.Platform, strings.Join(l.Devices, ","),
+			l.Priority, l.Guest+":"+l.Repo, room, time.Since(l.CreatedAt).Round(time.Second), expires, l.Task)
+	}
+	tw.Flush()
+	fmt.Fprintln(stdout)
+	tw = tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ROOM\tNAME\tMACHINE\tOS\tSTATE\tSLOTS\tPLATFORMS")
 	for _, r := range st.Rooms {
 		var slots []string

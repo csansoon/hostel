@@ -107,14 +107,14 @@ func Sync(args []string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	rc, err := l.repo.RepoConfig()
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	// A running setup job from an earlier command continues; no new sync then.
 	cmd := ""
 	if l.st.SetupJob == "" {
 		sent, err := syncFiles(ctx, l.st, l.repo, rc, stderr)
 		if err != nil {
-			return fail(stderr, err)
+			return l.fail(stderr, err)
 		}
 		switch {
 		case *setup:
@@ -123,9 +123,9 @@ func Sync(args []string, stdout, stderr io.Writer) int {
 			cmd = setupCommand(rc, l.st.Platform, false)
 		}
 	}
-	code, err = runSetup(ctx, l.st, cmd, deadline, stderr)
+	code, err = runSetup(ctx, l, cmd, deadline, stderr)
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	if code == ExitNotFinished {
 		fmt.Fprintln(stderr, "hostel: not finished; run \"hostel sync\" again")

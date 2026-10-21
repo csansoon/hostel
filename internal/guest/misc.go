@@ -64,11 +64,11 @@ func Diff(args []string, stdout, stderr io.Writer) int {
 	}
 	conn, err := Dial(context.Background(), l.st, "cmd")
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	defer conn.Close()
 	if err := conn.Stream(context.Background(), []string{"diff"}, nil, stdout); err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	return 0
 }
@@ -88,7 +88,7 @@ func Cp(args []string, stdout, stderr io.Writer) int {
 	}
 	conn, err := Dial(context.Background(), l.st, "cmd")
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	defer conn.Close()
 	if strings.HasPrefix(pos[1], ":") {
@@ -97,7 +97,7 @@ func Cp(args []string, stdout, stderr io.Writer) int {
 		err = copyOut(conn, strings.TrimPrefix(pos[0], ":"), pos[1])
 	}
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	return 0
 }
@@ -307,7 +307,7 @@ func SSHConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	file, alias, err := writeSSHConfig(l.st)
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	fmt.Fprintln(stdout, file)
 	fmt.Fprintf(stderr, "hostel: use it with: ssh -F %s %s\n", file, alias)
@@ -329,7 +329,7 @@ func SSH(args []string, stdout, stderr io.Writer) int {
 	}
 	file, alias, err := writeSSHConfig(l.st)
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	cmd := exec.Command("ssh", append([]string{"-F", file, alias}, pos...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, stdout, stderr
@@ -338,7 +338,7 @@ func SSH(args []string, stdout, stderr io.Writer) int {
 		if errors.As(err, &exitErr) {
 			return exitErr.ExitCode()
 		}
-		return fail(stderr, fmt.Errorf("run ssh: %w", err))
+		return l.fail(stderr, fmt.Errorf("run ssh: %w", err))
 	}
 	return 0
 }

@@ -98,13 +98,18 @@ func (w *trailerWriter) flush(n int) error {
 
 // attachJob streams a job's output from offset until the job ends or the
 // deadline passes. It connects again when the connection drops.
-func attachJob(ctx context.Context, st *State, jobID string, offset int64, out io.Writer, deadline time.Time) (jobResult, error) {
+func attachJob(ctx context.Context, l *lease, jobID string, offset int64, out io.Writer, deadline time.Time) (jobResult, error) {
 	res := jobResult{JobID: jobID, Status: JobRunning, offset: offset}
 	for time.Now().Before(deadline) {
 		actx, cancel := context.WithDeadline(ctx, deadline)
-		conn, err := Dial(actx, st, "cmd")
+		conn, err := Dial(actx, l.st, "cmd")
 		if err != nil {
 			cancel()
+			// The gateway refuses a lease that ended; then waiting is useless.
+			var ended *leaseEndedError
+			if terr := l.touch(); errors.As(terr, &ended) {
+				return res, ended
+			}
 			if !sleepUntil(ctx, time.Second, deadline) {
 				break
 			}
@@ -182,14 +187,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	conn, err := Dial(ctx, l.st, "cmd")
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	req := protocol.JobRequest{Command: pos, Shell: len(pos) == 1}
 	var started map[string]string
 	err = conn.Helper(ctx, []string{"job", "start"}, req, &started)
 	conn.Close()
 	if err != nil {
-		return fail(stderr, fmt.Errorf("start the job: %w", err))
+		return l.fail(stderr, fmt.Errorf("start the job: %w", err))
 	}
 	id := started["job_id"]
 	if *detach {
@@ -201,12 +206,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if *asJSON {
 		out = stderr
 	}
-	res, err := attachJob(ctx, l.st, id, 0, out, deadline)
+	res, err := attachJob(ctx, l, id, 0, out, deadline)
 	if serr := l.saveOffset(id, res); err == nil {
 		err = serr
 	}
 	if err != nil {
-		return fail(stderr, fmt.Errorf("job %s: %w; run \"hostel attach %s\"", id, err, id))
+		return l.fail(stderr, fmt.Errorf("job %s: %w; run \"hostel attach %s\"", id, err, id))
 	}
 	return reportJob(res, *asJSON, stdout, stderr)
 }
@@ -244,12 +249,12 @@ func Attach(args []string, stdout, stderr io.Writer) int {
 	if *asJSON {
 		out = stderr
 	}
-	res, err := attachJob(context.Background(), l.st, pos[0], l.st.JobOffsets[pos[0]], out, time.Now().Add(*wait))
+	res, err := attachJob(context.Background(), l, pos[0], l.st.JobOffsets[pos[0]], out, time.Now().Add(*wait))
 	if serr := l.saveOffset(pos[0], res); err == nil {
 		err = serr
 	}
 	if err != nil {
-		return fail(stderr, fmt.Errorf("job %s: %w", pos[0], err))
+		return l.fail(stderr, fmt.Errorf("job %s: %w", pos[0], err))
 	}
 	return reportJob(res, *asJSON, stdout, stderr)
 }
@@ -267,14 +272,14 @@ func Jobs(args []string, stdout, stderr io.Writer) int {
 	}
 	conn, err := Dial(context.Background(), l.st, "cmd")
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	defer conn.Close()
 	var list struct {
 		Jobs []protocol.JobInfo `json:"jobs"`
 	}
 	if err := conn.Helper(context.Background(), []string{"job", "list"}, nil, &list); err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "JOB\tSTATE\tEXIT\tSTARTED\tCOMMAND")
@@ -304,11 +309,11 @@ func Stop(args []string, stdout, stderr io.Writer) int {
 	}
 	conn, err := Dial(context.Background(), l.st, "cmd")
 	if err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	defer conn.Close()
 	if err := conn.Helper(context.Background(), []string{"job", "stop", pos[0]}, nil, nil); err != nil {
-		return fail(stderr, err)
+		return l.fail(stderr, err)
 	}
 	fmt.Fprintf(stdout, "stopped job %s\n", pos[0])
 	return 0

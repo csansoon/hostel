@@ -72,7 +72,23 @@ func (l *lease) touch() error {
 	if errors.As(err, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Code == protocol.CodeLeaseEnded) {
 		l.st.Final = true
 		l.st.Save()
-		return fmt.Errorf("%s; run \"hostel acquire %s --task ...\" for a new lease", apiErr.Message, l.st.Platform)
+		return &leaseEndedError{fmt.Sprintf("%s; run \"hostel acquire %s --task ...\" for a new lease", apiErr.Message, l.st.Platform)}
 	}
 	return err
+}
+
+// leaseEndedError: the server reports that the lease ended or does not exist.
+type leaseEndedError struct{ msg string }
+
+func (e *leaseEndedError) Error() string { return e.msg }
+
+// fail reports an error of a lease command. If the lease ended in the
+// meantime (for example the gateway closed the connection at expiry), it
+// reports the end of the lease, which explains the error.
+func (l *lease) fail(stderr io.Writer, err error) int {
+	var ended *leaseEndedError
+	if terr := l.touch(); errors.As(terr, &ended) {
+		err = ended
+	}
+	return fail(stderr, err)
 }

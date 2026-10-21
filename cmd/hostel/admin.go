@@ -33,6 +33,12 @@ func adminCmd(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "pubkey":
 			return adminPubkey(args[1:], stdout, stderr)
+		case "lease":
+			if len(args) == 3 && args[1] == "release" {
+				return adminLeaseRelease(args[2], stdout, stderr)
+			}
+			fmt.Fprintln(stderr, "hostel: usage: hostel admin lease release <lease-id>")
+			return 2
 		case "token":
 			if len(args) >= 2 && args[1] == "create" {
 				return adminTokenCreate(args[2:], stdout, stderr)
@@ -205,5 +211,20 @@ func adminConfigSchema(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(stdout, *out)
+	return 0
+}
+
+func adminLeaseRelease(id string, stdout, stderr io.Writer) int {
+	c, err := apiClient()
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	var l protocol.Lease
+	if err := c.Do(context.Background(), "POST", "/v1/leases/"+url.PathEscape(id)+"/release", nil, &l); err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "lease %s: %s\n", l.ID, l.State)
 	return 0
 }

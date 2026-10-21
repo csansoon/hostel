@@ -92,7 +92,7 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		{StepEnv, func() (int, error) { return 0, setLeaseEnv(ctx, st, rc) }},
 		{StepSynced, func() (int, error) { _, err := syncFiles(ctx, st, repo, rc, stderr); return 0, err }},
 		{StepSetup, func() (int, error) {
-			return runSetup(ctx, st, setupCommand(rc, platform, true), deadline, stderr)
+			return runSetup(ctx, l, setupCommand(rc, platform, true), deadline, stderr)
 		}},
 	}
 	order := []string{StepCreated, StepEnv, StepSynced, StepSetup, StepDone}
@@ -242,6 +242,9 @@ func describe(l protocol.Lease) string {
 		if l.Reason != "" {
 			s += " (" + l.Reason + ")"
 		}
+		if l.Position > 0 {
+			s += ", estimated wait " + FormatWait(l.EstimatedWaitSeconds)
+		}
 	}
 	if l.Machine != "" && l.State != protocol.LeaseQueued {
 		s += " on " + l.Provider + "/" + l.Machine
@@ -293,7 +296,8 @@ func setupCommand(rc *config.Repo, platform string, full bool) string {
 
 // runSetup continues the running setup job, or starts cmd as the setup job
 // (if not empty), and streams its output to stderr.
-func runSetup(ctx context.Context, st *State, cmd string, deadline time.Time, stderr io.Writer) (int, error) {
+func runSetup(ctx context.Context, l *lease, cmd string, deadline time.Time, stderr io.Writer) (int, error) {
+	st := l.st
 	if cmd == "" && st.SetupJob == "" {
 		return 0, nil
 	}
@@ -314,7 +318,7 @@ func runSetup(ctx context.Context, st *State, cmd string, deadline time.Time, st
 		}
 		fmt.Fprintf(stderr, "hostel: setup job %s: %s\n", st.SetupJob, cmd)
 	}
-	res, err := attachJob(ctx, st, st.SetupJob, st.SetupOffset, stderr, deadline)
+	res, err := attachJob(ctx, l, st.SetupJob, st.SetupOffset, stderr, deadline)
 	st.SetupOffset = res.offset
 	if serr := st.Save(); err == nil {
 		err = serr
