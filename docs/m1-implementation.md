@@ -1,6 +1,6 @@
 # M1 implementation plan
 
-Status: proposal, 2026-10-21. Milestone M1 in `plan.md`: the full lease flow on
+Status: implemented, 2026-10-21; in review in PR #1. Milestone M1 in `plan.md`: the full lease flow on
 Linux rooms in Docker, with no cloud. This file gives the build order, the package
 contents, the technical decisions inside the design, and the risks. `design.md`
 stays the contract. When this plan adds a detail to the contract, the same commit
@@ -214,3 +214,12 @@ Each test tool comes in the first phase that uses it.
 | Interaction of SSH remote forwards with OpenSSH on the room (`localhost` bind for both loopback addresses). | Scenario 14 tests `127.0.0.1` and `::1`. Containers have an IPv6 loopback (checked). |
 | Scenario 28 needs internet and a GitHub download. | Skip that part with `HOSTEL_E2E_OFFLINE=1`; use a small tool. |
 | Docker resources on the shared Mac (8 CPU, 8 GB). | Limit test parallelism (`-parallel 4`) if the suite overloads the machine. Never touch containers that the tests did not create. |
+
+## 10. Result
+
+- All 28 E2E scenarios of `plan.md` have tests in `test/e2e`.
+- Suite time: about 2 to 4 minutes on the owner's Mac (8 CPUs for Docker), and
+  about 9.5 minutes on a GitHub Actions Linux runner.
+- Not covered by E2E: the provider deadline extension (`Extend`) of a warm room
+  that is used again much later (the creation deadline is always later in a test),
+  and Windows rooms (milestone M6).

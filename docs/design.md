@@ -1468,6 +1468,9 @@ Privilege escalation to root on a room stays out of scope.
   conditions with a deadline. They never use a fixed sleep as an assertion.
 - Real providers: opt-in smoke tests (`HOSTEL_SMOKE_NAMESPACE=1`) and manual tests
   on the spare MacBook.
+- CI (GitHub Actions, Linux `amd64`): `make lint`, `make test-unit`, builds for all
+  six targets, and one `make test-e2e` run. `make test-e2e` fetches only the Linux
+  mise binaries; CI caches them.
 
 ## 21. Decisions in this design
 

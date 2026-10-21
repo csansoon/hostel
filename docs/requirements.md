@@ -38,6 +38,8 @@ All other terms are plain technical words.
 
 | Date | Decision |
 |---|---|
+| 2026-10-21 | The server sends the mise binary to rooms compressed with gzip; the helper decompresses it and checks the hash. |
+| 2026-10-21 | CI (GitHub Actions) runs lint, the unit tests, the cross-builds, and one E2E run for each pull request. |
 | 2026-10-21 | Three pieces: a central server, thin guests, and rooms. The server holds the orchestration logic. |
 | 2026-10-21 | The server must run on a Mac and on a small Linux VPS. It starts on the owner's Mac; later it moves to a VPS. |
 | 2026-10-21 | Code transfer: the guest sends its working-tree files that git does not ignore, plus opt-in extra files such as `.env`. Rooms need no git access to the repository. |
