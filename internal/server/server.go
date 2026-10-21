@@ -90,6 +90,9 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err := s.loadPlatformUploads(); err != nil {
 		return err
 	}
+	if err := st.ResetTimers(ctx, time.Now()); err != nil {
+		return err
+	}
 	if err := s.ensureStaticRooms(ctx); err != nil {
 		return fmt.Errorf("static rooms: %w", err)
 	}
@@ -146,6 +149,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/info", s.auth(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
+	mux.HandleFunc("GET /v1/platforms", s.auth(s.handlePlatforms))
 	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
 	mux.HandleFunc("GET /v1/leases/{id}", s.auth(s.handleGetLease))
 	mux.HandleFunc("POST /v1/leases/{id}/touch", s.auth(s.handleTouch))

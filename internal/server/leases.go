@@ -232,9 +232,13 @@ func (s *Server) handleGetLease(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	wait, _ := time.ParseDuration(r.URL.Query().Get("wait"))
 	wait = min(wait, maxWait)
-	if err := s.store.Poll(r.Context(), l.ID, time.Now()); err != nil {
-		s.internalError(w, "record poll", err)
-		return
+	// Only the owner's polls keep a queued lease alive; an admin can look
+	// without that effect.
+	if requestToken(r).ID == l.TokenID {
+		if err := s.store.Poll(r.Context(), l.ID, time.Now()); err != nil {
+			s.internalError(w, "record poll", err)
+			return
+		}
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -312,6 +316,9 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	out := protocol.Lease{ID: l.ID, State: l.State, Revision: l.Revision, Position: l.Position, Reason: l.Reason,
 		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority),
 		Provider: l.Provider, Machine: l.Machine, CreatedAt: l.CreatedAt, EndReason: l.EndReason}
+	if l.State == protocol.LeaseQueued {
+		out.EstimatedWaitSeconds = s.leaseWait(r.Context(), l)
+	}
 	if l.State != protocol.LeaseReady {
 		return out
 	}

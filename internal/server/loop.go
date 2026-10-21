@@ -92,6 +92,12 @@ func (s *Server) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.expire(ctx, leases); err != nil {
+		return fmt.Errorf("expire: %w", err)
+	}
+	if leases, err = s.store.ActiveLeases(ctx); err != nil {
+		return err
+	}
 	for _, l := range leases {
 		switch l.State {
 		case protocol.LeaseAssigned, protocol.LeaseProvisioning, protocol.LeasePreparing, protocol.LeaseCleaning:

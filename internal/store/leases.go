@@ -379,3 +379,35 @@ func (s *Store) updateLease(ctx context.Context, id string, from []string, now t
 	}
 	return ok, nil
 }
+
+// ResetTimers sets last_activity_at of each ready lease and last_poll_at of
+// each lease before ready to now, so a server restart does not expire or
+// cancel leases.
+func (s *Store) ResetTimers(ctx context.Context, now time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE leases SET last_activity_at = ? WHERE state = 'ready'`, now.UnixMilli()); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE leases SET last_poll_at = ?
+		WHERE state IN ('queued', 'assigned', 'provisioning', 'preparing')`, now.UnixMilli())
+	return err
+}
+
+// RecentDurations returns the durations (from ready to end) of the last n
+// ended leases of a platform.
+func (s *Store) RecentDurations(ctx context.Context, platform string, n int) ([]time.Duration, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT ended_at - ready_at FROM leases
+		WHERE platform = ? AND ready_at IS NOT NULL AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT ?`, platform, n)
+	if err != nil {
+		return nil, fmt.Errorf("read lease durations: %w", err)
+	}
+	defer rows.Close()
+	var out []time.Duration
+	for rows.Next() {
+		var d int64
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, time.Duration(d)*time.Millisecond)
+	}
+	return out, rows.Err()
+}

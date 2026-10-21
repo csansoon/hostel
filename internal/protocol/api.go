@@ -31,7 +31,43 @@ type Addresses struct {
 
 // Status is the response of GET /v1/status.
 type Status struct {
-	Rooms []RoomStatus `json:"rooms"`
+	Rooms  []RoomStatus  `json:"rooms"`
+	Leases []LeaseStatus `json:"leases"`
+}
+
+// LeaseStatus is a lease that is not final, in GET /v1/status.
+type LeaseStatus struct {
+	ID        string    `json:"id"`
+	State     string    `json:"state"`
+	Position  int       `json:"position,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	Platform  string    `json:"platform"`
+	Devices   []string  `json:"devices"`
+	Task      string    `json:"task"`
+	Priority  string    `json:"priority"`
+	Guest     string    `json:"guest"`
+	Repo      string    `json:"repo"`
+	Provider  string    `json:"provider,omitempty"`
+	Machine   string    `json:"machine,omitempty"`
+	RoomID    int64     `json:"room_id,omitempty"`
+	Slot      string    `json:"slot,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+}
+
+// Platform is one entry of GET /v1/platforms.
+type Platform struct {
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind"`
+	Description string   `json:"description"`
+	Devices     []string `json:"devices"`
+	MaxDevices  int      `json:"max_devices"`
+	// FreeSlots counts free slots in running rooms. NewRoom is true when an
+	// on-demand machine can create a room now.
+	FreeSlots            int  `json:"free_slots"`
+	NewRoom              bool `json:"new_room"`
+	Queue                int  `json:"queue"`
+	EstimatedWaitSeconds int  `json:"estimated_wait_seconds"`
 }
 
 type RoomStatus struct {
@@ -118,6 +154,8 @@ type Lease struct {
 	Machine   string    `json:"machine,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	EndReason string    `json:"end_reason,omitempty"`
+	// EstimatedWaitSeconds is set for a queued lease.
+	EstimatedWaitSeconds int `json:"estimated_wait_seconds,omitempty"`
 	// Access is set when the lease is ready.
 	Access *Access `json:"access,omitempty"`
 }

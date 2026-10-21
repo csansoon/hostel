@@ -77,6 +77,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Rooms = append(out.Rooms, rs)
 	}
+	leases, err := s.store.ActiveLeases(ctx)
+	if err != nil {
+		s.internalError(w, "read leases", err)
+		return
+	}
+	out.Leases = []protocol.LeaseStatus{}
+	for _, l := range leases {
+		out.Leases = append(out.Leases, protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
+			Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), Guest: l.GuestHost,
+			Repo: l.Repo, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
+			ExpiresAt: l.ExpiresAt})
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
