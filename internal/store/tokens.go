@@ -72,3 +72,15 @@ func (s *Store) CountTokens(ctx context.Context) (int, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens`).Scan(&n)
 	return n, err
 }
+
+// RevokeToken revokes a token. It returns ErrNotFound if no active token has the ID.
+func (s *Store) RevokeToken(ctx context.Context, id int64, now time.Time) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now.UnixMilli(), id)
+	if err != nil {
+		return fmt.Errorf("revoke token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

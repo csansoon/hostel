@@ -18,6 +18,7 @@ import (
 
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/provider"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/version"
 )
@@ -29,6 +30,30 @@ type Server struct {
 	log        *slog.Logger
 	gatewayKey ssh.Signer
 	serverKey  ssh.Signer
+	providers  map[string]provider.Provider
+	kick       chan struct{}
+	workers    workers
+	// lastReconcile is used only by the loop goroutine.
+	lastReconcile time.Time
+}
+
+func newProviders(cfg *config.Server, serverKey ssh.Signer) (map[string]provider.Provider, error) {
+	out := map[string]provider.Provider{}
+	for _, name := range cfg.ProviderOrder {
+		p := cfg.Providers[name]
+		switch p.Kind {
+		case config.ProviderStatic:
+			for _, mn := range p.MachineOrder {
+				if p.Machines[mn].Connect {
+					return nil, fmt.Errorf("providers.%s.machines.%s: connect = true is not supported yet (milestone M5)", name, mn)
+				}
+			}
+			out[name] = provider.NewStatic(p, serverKey)
+		default:
+			return nil, fmt.Errorf("providers.%s: kind %q is not supported yet", name, p.Kind)
+		}
+	}
+	return out, nil
 }
 
 // Run starts the server and blocks until ctx ends.
@@ -41,12 +66,20 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	providers, err := newProviders(cfg, serverKey)
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "hostel.db"))
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	s := &Server{cfg: cfg, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey}
+	s := &Server{cfg: cfg, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
+		providers: providers, kick: make(chan struct{}, 1)}
+	if err := s.ensureStaticRooms(ctx); err != nil {
+		return fmt.Errorf("static rooms: %w", err)
+	}
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -61,6 +94,15 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		return err
 	}
 	log.Info("server started", "listen", ln.Addr().String(), "server_id", cfg.ServerID, "version", version.Version)
+
+	loopCtx, stopLoop := context.WithCancel(ctx)
+	defer s.workers.wg.Wait()
+	defer stopLoop()
+	s.workers.wg.Add(1)
+	go func() {
+		defer s.workers.wg.Done()
+		s.loop(loopCtx)
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -79,6 +121,9 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/info", s.auth(s.handleInfo))
+	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
+	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
+	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	return mux
 }
 
