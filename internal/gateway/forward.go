@@ -31,22 +31,82 @@ type directPayload struct {
 	OriginPort uint32
 }
 
+// forwardSet has the remote forwards of one ports connection.
+type forwardSet struct {
+	mu        sync.Mutex
+	listeners map[forwardRequest][]net.Listener
+}
+
+func (f *forwardSet) set(fr forwardRequest, lns []net.Listener) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	closeAll(f.listeners[fr])
+	f.listeners[fr] = lns
+}
+
+func (f *forwardSet) remove(fr forwardRequest) bool {
+	f.mu.Lock()
+	lns, ok := f.listeners[fr]
+	delete(f.listeners, fr)
+	f.mu.Unlock()
+	closeAll(lns)
+	return ok
+}
+
+func closeAll(lns []net.Listener) {
+	for _, ln := range lns {
+		ln.Close()
+	}
+}
+
+// RecheckForwards closes the remote forwards of a lease whose room ports the
+// lease no longer registers (after a change of its tunnels). A guest that
+// does not cancel a removed tunnel keeps no listener on the room.
+func (g *Gateway) RecheckForwards(ctx context.Context, leaseID string) {
+	g.mu.Lock()
+	sets := make([]*forwardSet, 0, len(g.forwards[leaseID]))
+	for f := range g.forwards[leaseID] {
+		sets = append(sets, f)
+	}
+	g.mu.Unlock()
+	for _, f := range sets {
+		f.mu.Lock()
+		var gone []forwardRequest
+		for fr := range f.listeners {
+			if !g.be.AllowForward(ctx, leaseID, int(fr.Port)) {
+				gone = append(gone, fr)
+			}
+		}
+		f.mu.Unlock()
+		for _, fr := range gone {
+			g.log.Info("gateway: close a forward that the lease no longer registers", "lease_id", leaseID, "port", fr.Port)
+			f.remove(fr)
+		}
+	}
+}
+
 // globalRequests handles the remote forwards of a ports connection: the
 // gateway asks the room's SSH server to listen on 127.0.0.1:<port> and
 // [::1]:<port>, only for ports that the lease registered, and relays each
 // connection back to the guest.
 func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request, upstream *ssh.Client, leaseID, purpose string) {
-	var mu sync.Mutex
-	listeners := map[forwardRequest][]net.Listener{}
-	closeAll := func(lns []net.Listener) {
-		for _, ln := range lns {
-			ln.Close()
-		}
+	fs := &forwardSet{listeners: map[forwardRequest][]net.Listener{}}
+	g.mu.Lock()
+	if g.forwards[leaseID] == nil {
+		g.forwards[leaseID] = map[*forwardSet]bool{}
 	}
+	g.forwards[leaseID][fs] = true
+	g.mu.Unlock()
 	defer func() {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, lns := range listeners {
+		g.mu.Lock()
+		delete(g.forwards[leaseID], fs)
+		if len(g.forwards[leaseID]) == 0 {
+			delete(g.forwards, leaseID)
+		}
+		g.mu.Unlock()
+		fs.mu.Lock()
+		defer fs.mu.Unlock()
+		for _, lns := range fs.listeners {
 			closeAll(lns)
 		}
 	}()
@@ -80,10 +140,7 @@ func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request,
 			if ln6, err := upstream.Listen("tcp", net.JoinHostPort("::1", port)); err == nil {
 				lns = append(lns, ln6)
 			}
-			mu.Lock()
-			closeAll(listeners[fr])
-			listeners[fr] = lns
-			mu.Unlock()
+			fs.set(fr, lns)
 			req.Reply(true, nil)
 			for _, ln := range lns {
 				go g.acceptForwarded(conn, ln, fr)
@@ -94,12 +151,7 @@ func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request,
 				req.Reply(false, nil)
 				continue
 			}
-			mu.Lock()
-			lns := listeners[fr]
-			delete(listeners, fr)
-			mu.Unlock()
-			closeAll(lns)
-			req.Reply(lns != nil, nil)
+			req.Reply(fs.remove(fr), nil)
 		default:
 			if req.WantReply {
 				req.Reply(false, nil)

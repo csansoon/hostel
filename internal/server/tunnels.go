@@ -106,5 +106,6 @@ func (s *Server) handleSetTunnels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, protocol.CodeLeaseEnded, fmt.Sprintf("lease %s is no longer ready", l.ID))
 		return
 	}
+	s.gateway.RecheckForwards(ctx, l.ID)
 	writeJSON(w, http.StatusOK, map[string]map[string]int{"tunnel_ports": ports})
 }

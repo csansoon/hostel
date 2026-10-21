@@ -49,15 +49,16 @@ type Gateway struct {
 	log    *slog.Logger
 	config *ssh.ServerConfig
 
-	mu    sync.Mutex
-	conns map[string]map[*ssh.ServerConn]string // lease → connection → purpose
+	mu       sync.Mutex
+	conns    map[string]map[*ssh.ServerConn]string // lease → connection → purpose
+	forwards map[string]map[*forwardSet]bool       // lease → remote forwards of its ports connections
 }
 
 // handshakeTimeout bounds the guest handshake and the upstream dial.
 const handshakeTimeout = 30 * time.Second
 
 func New(hostKey ssh.Signer, be Backend, log *slog.Logger) *Gateway {
-	g := &Gateway{be: be, log: log, conns: map[string]map[*ssh.ServerConn]string{}}
+	g := &Gateway{be: be, log: log, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
 	g.config = &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			leaseID, purpose, ok := strings.Cut(meta.User(), ".")

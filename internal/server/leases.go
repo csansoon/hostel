@@ -164,7 +164,14 @@ func checkDevices(p *config.Platform, devices []string) ([]string, string, strin
 
 func checkTunnels(tunnels []protocol.TunnelRequest) string {
 	seen := map[string]bool{}
+	fixed := map[int]string{}
 	for _, t := range tunnels {
+		if other, ok := fixed[t.RoomPort]; ok && t.RoomPort != 0 {
+			return fmt.Sprintf("tunnels %s and %s use the same room port %d", other, t.Name, t.RoomPort)
+		}
+		if t.RoomPort != 0 {
+			fixed[t.RoomPort] = t.Name
+		}
 		if !config.ValidName(t.Name) {
 			return fmt.Sprintf("tunnel name %q must match ^[a-z][a-z0-9-]*$", t.Name)
 		}

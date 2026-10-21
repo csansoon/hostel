@@ -155,12 +155,31 @@ func (s *Server) schedule(ctx context.Context) error {
 	for _, a := range out.Assignments {
 		l := byID[a.LeaseID]
 		m := s.cfg.Machine(a.Machine)
+		// The ports come first: a lease whose tunnels cannot be placed fails
+		// before any room is resumed or created for it.
+		ports, err := tunnelPorts(l.Tunnels, slotConfig(m, a.Slots[0]).Ports)
+		if err != nil {
+			if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeaseQueued}, protocol.LeaseFailed, err.Error(), now); err != nil {
+				return err
+			}
+			continue
+		}
 		var room store.Room
+		if a.Action != scheduler.CreateRoom {
+			room = roomByID[a.RoomID]
+			// Another lease on the room can use a fixed room port (rooms with
+			// several slots). The lease waits; it does not get a port twice.
+			if busy, err := s.fixedPortInUse(ctx, room.ID, l); err != nil {
+				return err
+			} else if busy != 0 {
+				if err := s.store.SetQueue(ctx, l.ID, max(l.Position, 1), fmt.Sprintf("room port %d is in use by another lease on the room", busy)); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		switch a.Action {
-		case scheduler.UseRoom, scheduler.ProvisionRoom:
-			room = roomByID[a.RoomID]
 		case scheduler.ResumeRoom:
-			room = roomByID[a.RoomID]
 			ok, err := s.store.SetRoomState(ctx, room.ID, []string{protocol.RoomStopped}, protocol.RoomResuming, "", now)
 			if err != nil {
 				return err
@@ -172,19 +191,11 @@ func (s *Server) schedule(ctx context.Context) error {
 		case scheduler.CreateRoom:
 			// The room row exists before the provider call, with the name that
 			// the provider gets (design, section 7, ownership).
-			var err error
 			room, err = s.store.InsertRoom(ctx, store.Room{Provider: m.Provider, Machine: m.Name, State: protocol.RoomCreating, OS: m.OS},
 				s.cfg.ServerID, slotNames(m), now)
 			if err != nil {
 				return err
 			}
-		}
-		ports, err := tunnelPorts(l.Tunnels, slotConfig(m, a.Slots[0]).Ports)
-		if err != nil {
-			if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeaseQueued}, protocol.LeaseFailed, err.Error(), now); err != nil {
-				return err
-			}
-			continue
 		}
 		ok, err := s.store.Assign(ctx, l.ID, room, a.Slots, ports, now)
 		if err != nil {
@@ -273,4 +284,19 @@ func (s *Server) brokenReason(l store.Lease, rooms []store.Room, fallback string
 		return fallback
 	}
 	return reason
+}
+
+// fixedPortInUse returns a fixed room port of the lease that another active
+// lease on the room uses, or 0.
+func (s *Server) fixedPortInUse(ctx context.Context, roomID int64, l store.Lease) (int, error) {
+	others, err := s.store.RoomTunnelPorts(ctx, roomID, l.ID)
+	if err != nil {
+		return 0, err
+	}
+	for _, t := range l.Tunnels {
+		if t.RoomPort != 0 && others[t.RoomPort] {
+			return t.RoomPort, nil
+		}
+	}
+	return 0, nil
 }

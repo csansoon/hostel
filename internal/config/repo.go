@@ -59,9 +59,16 @@ func LoadRepo(file string) (*Repo, error) {
 			el.add(fmt.Sprintf("include[%d]", i), "invalid glob pattern %q", pattern)
 		}
 	}
+	fixed := map[int]string{}
 	for _, name := range r.TunnelNames() {
 		t := r.Tunnels[name]
 		key := "tunnels." + name
+		if other, ok := fixed[t.RoomPort]; ok && t.RoomPort != 0 {
+			el.add(key+".room_port", "room port %d is also the room port of tunnel %s", t.RoomPort, other)
+		}
+		if t.RoomPort != 0 {
+			fixed[t.RoomPort] = name
+		}
 		if !nameRE.MatchString(name) {
 			el.add(key, "tunnel name must match %s", nameRE)
 		}
