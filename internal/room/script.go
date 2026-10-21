@@ -45,6 +45,12 @@ func (h *helper) runScript(args []string, stdin io.Reader) (protocol.RunScriptRe
 		return resp, fmt.Errorf("read the request: %w", err)
 	}
 
+	return h.script(platform, step, *slot, req.Args, req.Env, time.Duration(req.TimeoutSeconds)*time.Second)
+}
+
+// script runs a platform script step. A missing script is not an error.
+func (h *helper) script(platform, step, slot string, args []string, reqEnv map[string]string, timeout time.Duration) (protocol.RunScriptResponse, error) {
+	var resp protocol.RunScriptResponse
 	script := filepath.Join(h.platformDir(platform), step+"."+h.os+config.ScriptExt(h.os))
 	if _, err := os.Stat(script); errors.Is(err, os.ErrNotExist) {
 		resp.Missing = true
@@ -52,26 +58,24 @@ func (h *helper) runScript(args []string, stdin io.Reader) (protocol.RunScriptRe
 	}
 	dir := h.root
 	if step != config.StepProvision && step != config.StepHealth {
-		if *slot == "" {
+		if slot == "" {
 			return resp, fmt.Errorf("%w: step %s needs --slot", cli.ErrUsage, step)
 		}
-		dir = h.slotDir(*slot)
+		dir = h.slotDir(slot)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return resp, err
 		}
 	}
-	env, err := h.scriptEnv(*slot, step, req.Env)
+	env, err := h.scriptEnv(slot, step, reqEnv)
 	if err != nil {
 		return resp, err
 	}
-
-	timeout := time.Duration(req.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 3 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", append([]string{script}, req.Args...)...)
+	cmd := exec.CommandContext(ctx, "/bin/sh", append([]string{script}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = env
 	var out tailBuffer

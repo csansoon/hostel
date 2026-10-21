@@ -34,6 +34,47 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		out, err = h.install(args[1:], stdin)
 	case "run-script":
 		out, err = h.runScript(args[1:], stdin)
+	case "begin":
+		out, err = h.begin(args[1:], stdin)
+	case "cleanup":
+		out, err = h.cleanup(args[1:], stdin)
+	case "set-env":
+		out, err = h.setEnv(args[1:], stdin)
+	case "sync-plan":
+		out, err = h.syncPlan(args[1:], stdin)
+	case "sync-apply":
+		out, err = h.syncApply(args[1:], stdin)
+	case "tar-in":
+		out, err = h.tarIn(args[1:], stdin)
+	case "job":
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "hostel room: job start|attach|list|stop|supervise")
+			return 2
+		}
+		switch args[1] {
+		case "start":
+			out, err = h.jobStart(args[2:], stdin)
+		case "list":
+			out, err = h.jobList(args[2:])
+		case "stop":
+			out, err = h.jobStop(args[2:])
+		case "attach":
+			return streamResult(h.jobAttach(args[2:], stdout), stderr)
+		case "supervise":
+			return streamResult(h.jobSupervise(args[2:]), stderr)
+		default:
+			fmt.Fprintf(stderr, "hostel room: unknown job command %q\n", args[1])
+			return 2
+		}
+	// Streaming commands: their output is not JSON; errors go to stderr.
+	case "diff":
+		return streamResult(h.diff(args[1:], stdout), stderr)
+	case "tar-out":
+		return streamResult(h.tarOut(args[1:], stdout), stderr)
+	case "exec":
+		return streamResult(h.execCommand(args[1:], stderr), stderr)
+	case "shell":
+		return streamResult(h.shell(args[1:], stderr), stderr)
 	default:
 		fmt.Fprintf(stderr, "hostel room: unknown command %q\n", args[0])
 		return 2
@@ -49,6 +90,19 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// streamResult reports the error of a streaming command on stderr.
+func streamResult(err error, stderr io.Writer) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, cli.ErrUsage):
+		fmt.Fprintln(stderr, "hostel room:", err)
+		return 2
+	}
+	fmt.Fprintln(stderr, "hostel:", err)
+	return 1
 }
 
 func fail(stdout io.Writer, err error) int {

@@ -1,5 +1,7 @@
 package protocol
 
+import "time"
+
 // HelperInfo is the output of "hostel room info".
 type HelperInfo struct {
 	OS      string       `json:"os"`
@@ -45,4 +47,52 @@ type RunScriptResponse struct {
 // HelperError is the output of a helper command that fails.
 type HelperError struct {
 	Error string `json:"error"`
+}
+
+// BeginRequest is the input of "hostel room begin".
+type BeginRequest struct {
+	LeaseID  string   `json:"lease_id"`
+	Platform string   `json:"platform"`
+	Devices  []string `json:"devices"`
+}
+
+// CleanupRequest is the input of "hostel room cleanup". It comes from the
+// database, so a repeated cleanup does not need lease.json.
+type CleanupRequest struct {
+	LeaseID  string   `json:"lease_id"`
+	Platform string   `json:"platform"`
+	Devices  []string `json:"devices"`
+	Ports    []int    `json:"ports"`
+}
+
+// CleanupResponse lists the result of each cleanup step.
+type CleanupResponse struct {
+	Steps []CleanupStep `json:"steps"`
+}
+
+type CleanupStep struct {
+	Name  string `json:"name"`
+	Error string `json:"error,omitempty"`
+}
+
+// Job trailers end the output of "job attach" (design, section 15).
+const (
+	TrailerExit = "\x00hostel-exit "
+	TrailerLost = "\x00hostel-lost\n"
+)
+
+// JobRequest is the input of "job start". With Shell, Command has one string
+// that runs with sh -c.
+type JobRequest struct {
+	Command []string `json:"command"`
+	Shell   bool     `json:"shell"`
+}
+
+// JobInfo is one entry of "job list".
+type JobInfo struct {
+	ID        string    `json:"id"`
+	Command   []string  `json:"command"`
+	State     string    `json:"state"` // running, exited, lost
+	ExitCode  *int      `json:"exit_code,omitempty"`
+	StartedAt time.Time `json:"started_at"`
 }
