@@ -132,12 +132,13 @@ database stores runtime state.
 | `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
 | `room_platforms` | room_id, platform, scripts_sha256, provisioned_at |
 | `slots` | room_id, name, state, lease_id, cleanup_data |
-| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_reason |
+| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
 | `lease_tunnels` | lease_id, name, room_port |
 | `tokens` | id, name, role, machine (for `room` tokens), sha256, created_at, revoked_at |
 | `events` | id, time, lease_id, room_id, kind, message |
 
-`rooms.home` is the room user's home directory from the probe. `leases.tunnels`
+`rooms.home` is the room user's home directory from the probe. `leases.end_state`
+is the final state that a lease in `cleaning` goes to. `leases.tunnels`
 holds the requested tunnels (`[{"name", "room_port"}]`) until the server assigns
 the room ports in `lease_tunnels`. Times are Unix milliseconds.
 
@@ -788,7 +789,8 @@ env = { EXAMPLEAPP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
 - The platform's `requires`, the repository platform `requires`, and `--require`
   are merged. `--device` replaces `devices`.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
-  Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows).
+  Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows):
+  the setup job is `mise install && (command 1) && (command 2)`.
   The first failure stops the job.
 - `hostel admin config check --repo hostel.toml` validates a repository file.
 
@@ -926,12 +928,12 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `--platform <name>` | On all lease commands below: selects the lease when the worktree has more than one. |
 | `hostel acquire <platform> --task ... [--device d]... [--priority low\|normal\|high] [--require label]... [--fresh] [--wait 100s]` | Creates or continues a lease. |
 | `hostel sync [--setup]` | Sends the changed files again. `--setup` runs the setup job again. |
-| `hostel run [--detach] [--wait 100s] -- <command>` | Starts a job in the work directory and streams its output. |
+| `hostel run [--detach] [--wait 100s] [--json] -- <command>` | Starts a job in the work directory and streams its output. One argument runs with `sh -c` (`hostel run -- "make && make test"`); several arguments run without a shell. The command is found in the job's PATH (with the mise tools). |
 | `hostel attach <job> [--wait 100s]` / `hostel jobs` / `hostel stop <job>` | Job control. |
 | `hostel screenshot [--device d] [-o file.png]` | Runs the platform `screenshot` script and downloads the PNG. |
-| `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. |
+| `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. The target is the full new path; a target that ends with `/` (or an existing local directory) receives the source with its own name. |
 | `hostel diff` | Shows the temporary changes against the last baseline commit. |
-| `hostel ssh` | Interactive shell. |
+| `hostel ssh [-- command]` | Interactive shell, or one command, with the system `ssh` client and the file of `ssh-config`. |
 | `hostel ssh-config` | Writes an `ssh_config` file for `ssh -F` (gateway address, lease user, lease key, pinned gateway host key) and prints its path. |
 | `hostel tunnel list` | Lists the tunnels with their local and room ports. |
 | `hostel tunnel add <name> (--local-port N \| --local-port-env VAR) [--room-port P]` / `tunnel set <name> [--local-port N] [--room-port P]` / `tunnel remove <name>` | Changes tunnels during a lease (section 14). |
@@ -992,7 +994,7 @@ everything. Any token can read `status` and `platforms`.
 | `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait. |
 | `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
 | `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait`. Updates `last_poll_at`. |
-| `POST /v1/leases/{id}/touch` | Records guest activity. |
+| `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
 | `POST /v1/leases/{id}/release` | Releases or cancels. |
 | `GET /v1/status` | Leases, rooms, queue. |
@@ -1263,6 +1265,9 @@ handles all tunnels and forwards of the lease.
 - `job attach <id> --offset N` streams the output from byte `N`. When `exit` exists,
   it sends the rest and a trailer line `\x00hostel-exit <code>`. If the supervisor is
   dead and `exit` does not exist, the trailer is `\x00hostel-lost`.
+- `hostel run` and `hostel attach` record in the local state how many output bytes
+  they printed, so a later `hostel attach` continues there and does not print the
+  same output again. With `--json`, the job output goes to stderr.
 - `hostel run` = `job start` + `job attach`. When the connection drops, the guest
   attaches again from the last offset. If the guest process stops (for example an
   agent tool timeout), the job continues.

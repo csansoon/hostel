@@ -90,6 +90,8 @@ type env struct {
 	// vars are extra environment variables for guest commands, for example
 	// HOSTEL_SERVER after the server starts.
 	vars map[string]string
+	// cwd is the directory of guest commands (the test repository, if any).
+	cwd string
 }
 
 func newEnv(t *testing.T) *env {
@@ -97,6 +99,7 @@ func newEnv(t *testing.T) *env {
 	b := make([]byte, 6)
 	rand.Read(b)
 	e := &env{t: t, home: t.TempDir(), runID: fmt.Sprintf("%x", b), vars: map[string]string{}}
+	e.cwd = e.home
 	t.Cleanup(e.removeContainers)
 	return e
 }
@@ -128,7 +131,7 @@ func (e *env) hostel(args ...string) result {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, hostelBin, args...)
 	cmd.Env = e.environ()
-	cmd.Dir = e.home
+	cmd.Dir = e.cwd
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -195,12 +198,13 @@ func serverHeader() string {
 }
 
 type serverProc struct {
-	e     *env
-	cmd   *exec.Cmd
-	addr  string
-	token string
-	done  chan struct{}
-	log   *syncBuffer
+	e       *env
+	cmd     *exec.Cmd
+	addr    string
+	gateway string
+	token   string
+	done    chan struct{}
+	log     *syncBuffer
 }
 
 type syncBuffer struct {
@@ -254,7 +258,7 @@ func (e *env) startServer(token string) *serverProc {
 		if json.Unmarshal(data, &a) != nil {
 			return false
 		}
-		s.addr = a.Listen
+		s.addr, s.gateway = a.Listen, a.Gateway
 		return true
 	})
 	e.vars["HOSTEL_SERVER"] = "http://" + s.addr
@@ -311,4 +315,71 @@ func (e *env) waitFor(what string, timeout time.Duration, cond func() bool) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// newRepo creates a git repository with files (path → content) and makes it
+// the directory of guest commands.
+func (e *env) newRepo(files map[string]string) string {
+	e.t.Helper()
+	dir := filepath.Join(e.home, "repo")
+	for p, body := range files {
+		e.writeFile(filepath.Join(dir, p), body)
+	}
+	e.git(dir, "init", "-q")
+	e.cwd = dir
+	return dir
+}
+
+func (e *env) git(dir string, args ...string) {
+	e.t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = e.environ()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		e.t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+}
+
+// usePlatform copies a platform directory from test/platforms to the server
+// configuration.
+func (e *env) usePlatform(name string) {
+	e.t.Helper()
+	src := filepath.Join("..", "platforms", name)
+	des, err := os.ReadDir(src)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for _, de := range des {
+		data, err := os.ReadFile(filepath.Join(src, de.Name()))
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		e.writeFile(filepath.Join(e.configDir(), "platforms", name, de.Name()), string(data))
+	}
+}
+
+// mustHostel runs a guest command and fails the test if its exit code is not 0.
+func (e *env) mustHostel(args ...string) result {
+	e.t.Helper()
+	r := e.hostel(args...)
+	if r.code != 0 {
+		e.t.Fatalf("hostel %s: %s", strings.Join(args, " "), r)
+	}
+	return r
+}
+
+// restart stops the server and starts it again on the same ports, so guests
+// and port processes find it again.
+func (s *serverProc) restart() *serverProc {
+	s.e.t.Helper()
+	s.stop()
+	file := filepath.Join(s.e.configDir(), "server.toml")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		s.e.t.Fatal(err)
+	}
+	cfg := strings.Replace(string(data), "\nlisten = \"127.0.0.1:0\"", fmt.Sprintf("\nlisten = %q", s.addr), 1)
+	cfg = strings.Replace(cfg, "\ngateway_listen = \"127.0.0.1:0\"", fmt.Sprintf("\ngateway_listen = %q", s.gateway), 1)
+	s.e.writeConfig(cfg)
+	return s.e.startServer(s.token)
 }
