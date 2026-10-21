@@ -421,9 +421,14 @@ func (e *env) useGuestToken() string {
 }
 
 // stopPortProcesses stops the "hostel ports" processes of this test: their
-// arguments contain the test's home directory.
+// arguments contain the test's home directory, with symbolic links resolved
+// (git gives the resolved path; on macOS /var is a link to /private/var).
 func (e *env) stopPortProcesses() {
-	exec.Command("pkill", "-f", "hostel ports --dir "+e.home+"/").Run()
+	home, err := filepath.EvalSymlinks(e.home)
+	if err != nil {
+		home = e.home
+	}
+	exec.Command("pkill", "-f", "hostel ports --dir "+home+"/").Run()
 }
 
 // kill stops the server with SIGKILL, as a crash.
