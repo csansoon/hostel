@@ -1,6 +1,6 @@
 # M1 implementation plan
 
-Status: implemented, 2026-10-21; in review in PR #1. Milestone M1 in `plan.md`: the full lease flow on
+Status: done; PR #1 merged on 2026-10-22. Milestone M1 in `plan.md`: the full lease flow on
 Linux rooms in Docker, with no cloud. This file gives the build order, the package
 contents, the technical decisions inside the design, and the risks. `design.md`
 stays the contract. When this plan adds a detail to the contract, the same commit
