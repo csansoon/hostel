@@ -56,8 +56,8 @@ administrator.
 3. Turn off password login for SSH. Add this file as an administrator:
 
    ```sh
-   echo 'PasswordAuthentication no
-   KbdInteractiveAuthentication no' | sudo tee /etc/ssh/sshd_config.d/100-hostel.conf
+   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' | sudo tee /etc/ssh/sshd_config.d/100-hostel.conf
+   sudo sshd -t && echo "sshd config OK"
    sudo launchctl kickstart -k system/com.openssh.sshd
    ```
 
