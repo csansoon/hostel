@@ -91,6 +91,15 @@ Exit codes of run and attach
                                     Do NOT run "hostel run" again: that starts
                                     a second job.
 
+Devices and the local API
+  Commands get the device facts in their environment. iOS: SIMULATOR_UDID (the
+  first device) and SIMULATOR_UDIDS. Each lease gets new, clean simulators:
+    xcodebuild ... -destination "id=$SIMULATOR_UDID" build
+    xcrun simctl install "$SIMULATOR_UDID" <path to the .app>
+    xcrun simctl launch "$SIMULATOR_UDID" <bundle id>
+  Tunnels in hostel.toml make your local servers reachable on the room at
+  localhost:$HOSTEL_TUNNEL_<NAME>_PORT.
+
 End
   hostel release                when you are done. A lease also ends after
                                 10 minutes without a hostel command.

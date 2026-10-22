@@ -81,16 +81,37 @@ Each check gives a short result in `design.md` (or a fix), with the date.
 
 ## 4. ExampleApp
 
-- `hostel.toml` proposal (not committed to ExampleApp; given to the owner):
-  `include = [".env"]`, the `api` tunnel from `PORT`, `ios` setup
-  (`cd apps/ios && tuist install && tuist generate --no-open`), and
-  `EXAMPLEAPP_API_BASE_URL = "http://localhost:{tunnels.api.port}"`.
-- The build command for agents: `xcodebuild` with the `exampleapp` scheme, the simulator
-  destination `id=$SIMULATOR_UDID`, DerivedData in `$HOSTEL_CACHE_DIR` (kept
-  between leases), then `simctl install` and `simctl launch`.
-- `hostel agent-guide`: add a short iOS section (device facts, build, install,
-  launch, screenshot). The text stays generic; the ExampleApp-specific commands go to
-  ExampleApp's `AGENTS.md` (proposal for the owner).
+`hostel.toml` proposal for the ExampleApp repository root (not committed to ExampleApp; the
+owner adds it):
+
+```toml
+# The guest reads PORT from the local .env for each connection, so .env is not
+# sent to the room (it has secrets).
+[tunnels.api]
+local_port_env = "PORT"
+
+[platforms.ios]
+devices = ["iphone-17-pro"]
+setup = ["cd apps/ios && tuist install && tuist generate --no-open"]
+# Debug builds read the API URL from TUIST_DEBUG_API_BASE_URL at generate time.
+env = { TUIST_DEBUG_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
+```
+
+- ExampleApp's `.mise.toml` pins `node`, `tuist`, `pnpm`, and `java`. The setup job runs
+  `mise install`, so the room also gets Java, which iOS does not need. The cost is
+  one download; the mise cache keeps it.
+- Build command for agents (ExampleApp `apps/ios/QA.md`, section 3):
+
+  ```sh
+  hostel run -- "cd apps/ios && xcodebuild -workspace exampleapp.xcworkspace -scheme exampleapp \
+    -configuration Debug -destination id=\$SIMULATOR_UDID build"
+  ```
+
+  Then `xcrun simctl install` and `xcrun simctl launch` (bundle ID
+  `com.example.app`). DerivedData stays in its default place; the `work` path of a slot
+  is the same for each lease, so the warm build reuses it.
+- `hostel agent-guide` has a short generic part for devices and tunnels. The
+  ExampleApp-specific commands go to ExampleApp's `AGENTS.md` (proposal for the owner).
 
 ## 5. Acceptance (the "done when" of M2)
 
@@ -119,6 +140,7 @@ the MacBook are manual; their results go into this file (section 8).
 | Simulator boot over SSH needs the desktop session. | The setup has automatic login; if a boot fails without it, `health` reports it. |
 | An Xcode prompt (license, first launch, developer tools) stops a script. | The setup guide covers them; scripts have timeouts; `health` checks `xcodebuild -version`. |
 | Building ExampleApp takes long. The default `max_lease` (`2h`) and the `run` wait need checks. | DerivedData in the cache; measure the first and the warm build. |
+| ExampleApp must not build with `CODE_SIGNING_ALLOWED=NO` (its QA notes: the Keychain fails). A simulator build can need a signing identity for its entitlements. | Check the first build. If it needs an Apple account in Xcode for the `hostel` user, ask the owner. |
 | The MacBook sleeps or loses the network. | `pmset` in the setup; the room becomes unreachable, and the server reports it. |
 
 ## 8. Results
