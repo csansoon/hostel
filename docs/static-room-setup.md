@@ -1,12 +1,20 @@
 # Static room setup: a Mac for iOS
 
 This guide prepares a Mac as a static Hostel room (milestone M2: the spare MacBook).
-The owner does these steps once. Hostel does the rest (helper, mise, platform
-scripts, simulators) over SSH.
+The owner does these steps once.
 
-In M2, the Hostel server runs on the owner's Mac, and it connects to the MacBook
-over the local network. A room behind NAT that a remote server uses needs
-`hostel room connect` (M5).
+Two machines take part:
+
+- **The server Mac**: the owner's own Mac. The Hostel server runs on it.
+- **The room Mac**: the spare MacBook.
+
+Do not install Hostel on the room Mac. The server connects to it over SSH and
+installs everything itself (the helper binary, mise, the platform scripts, and the
+simulators). Except where a step says "on the server Mac", do the steps on the room
+Mac.
+
+In M2, the server reaches the room Mac over the local network. A room behind NAT
+that a remote server uses needs `hostel room connect` (M5).
 
 ## 1. Requirements
 
@@ -64,7 +72,7 @@ administrator.
    hostel admin pubkey
    ```
 
-2. On the MacBook, add it as the `hostel` user:
+2. On the room Mac, add it for the `hostel` user:
 
    ```sh
    sudo -u hostel mkdir -p -m 700 /Users/hostel/.ssh
@@ -118,7 +126,7 @@ the console after each restart.
    display off when inactive" to "Never", and "Require password after screen saver
    begins or display is turned off" to "Never" for the `hostel` user. A locked
    screen gives a screenshot of the lock screen.
-3. Do not let the MacBook sleep:
+3. Do not let the room Mac sleep:
 
    ```sh
    sudo pmset -a sleep 0 disksleep 0
@@ -130,12 +138,12 @@ the console after each restart.
    that this is the correct entry (design, section 9).
 
 Security note: with FileVault off and automatic login, a person with physical
-access to the MacBook can read its disk and use the `hostel` session. Use this only
+access to the room Mac can read its disk and use the `hostel` session. Use this only
 on a spare machine with no personal data.
 
 ## 7. Check and send the details
 
-From the server Mac:
+On the server Mac:
 
 ```sh
 ssh -i ~/.local/share/hostel/server_ed25519 hostel@<address> 'uname -sm; sw_vers -productVersion; xcodebuild -version; df -h ~'
