@@ -93,12 +93,17 @@ func TestCleanup(t *testing.T) {
 	base := f.c.sh("cat /home/hostel/.ssh/authorized_keys")
 	f.e.mustHostel("run", "--", "setsid sleep 1000 > /dev/null 2>&1 < /dev/null &")
 	f.e.mustHostel("run", "--detach", "--", "nc -l 127.0.0.1 7501")
+	// Without HOSTEL_LEASE in their environment (as on macOS, where ps -E
+	// does not show it for system binaries), cleanup finds these processes by
+	// their session: one from a job, one from a guest SSH command.
+	f.e.mustHostel("run", "--", "nohup env -u HOSTEL_LEASE sleep 1001 > /dev/null 2>&1 < /dev/null &")
+	f.e.mustHostel("ssh", "--", "env -u HOSTEL_LEASE sleep 1002 > /dev/null 2>&1 < /dev/null &")
 	f.e.mustHostel("run", "--", "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuestAddedKeyGuestAddedKeyGuestAddedK guest' >> ~/.ssh/authorized_keys")
 	if got := f.c.sh("grep -c guest /home/hostel/.ssh/authorized_keys"); got != "1" {
 		t.Fatalf("the guest key was not added: %s", got)
 	}
-	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c -e '^sleep 1000' -e '^nc -l' || true"
-	if got := f.c.sh(procs); got != "2" {
+	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c -e '^sleep 100[012]' -e '^nc -l' || true"
+	if got := f.c.sh(procs); got != "4" {
 		t.Fatalf("lease processes before release: %s", got)
 	}
 	f.e.mustHostel("release")

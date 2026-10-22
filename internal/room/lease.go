@@ -242,6 +242,9 @@ func (h *helper) execCommand(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := h.recordSession(*slot); err != nil {
+		return err
+	}
 	if err := os.Chdir(h.workDir(*slot)); err != nil {
 		return err
 	}
@@ -256,6 +259,9 @@ func (h *helper) shell(args []string, stderr io.Writer) error {
 	}
 	env, err := h.leaseEnv(slot, stderr)
 	if err != nil {
+		return err
+	}
+	if err := h.recordSession(slot); err != nil {
 		return err
 	}
 	if err := os.Chdir(h.workDir(slot)); err != nil {

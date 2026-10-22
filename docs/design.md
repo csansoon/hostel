@@ -1345,16 +1345,24 @@ The gateway has already closed the lease's connections (section 13). The helper
 failed; the result lists each step.
 
 1. Stop all processes of the lease: job process groups from `supervisor.json`, and
-   all processes of the room user whose environment contains
-   `HOSTEL_LEASE=<lease id>` (macOS: `ps -E`, Linux: `/proc/<pid>/environ`).
-   Processes that detach from their group (Gradle daemon, `nohup`) still have this
-   variable. Send SIGTERM, wait 10 seconds, then SIGKILL. Verify in M2 that `ps -E`
-   shows the environment of the user's own processes on the room's macOS version.
+   all processes of the room user that either have `HOSTEL_LEASE=<lease id>` in
+   their environment (macOS: `ps -E`, Linux: `/proc/<pid>/environ`) or are in a
+   session of the lease. Processes that detach from their group (Gradle daemon,
+   `nohup`) still have this variable. On macOS 27.2, `ps -E` does not show the
+   environment of Apple's own binaries (for example `sh` and `sleep`; checked on
+   2026-10-22), so the sessions are necessary: `exec` and `shell` record their
+   session ID and the start time of its leader in `slots/<slot>/sessions`, and
+   each job supervisor has its own session (`supervisor.json`). A process started
+   with `&` or `nohup` stays in that session. A session ID is not reused while a
+   process is in the session; when the leader runs with another start time, the
+   number belongs to a new session, and cleanup ignores it. Only a process that
+   starts a new session (`setsid`) and hides its environment escapes both checks.
+   Send SIGTERM, wait 10 seconds, then SIGKILL.
 2. Run the `reset` script of the lease's platform. If `slots/<slot>/` does not exist
    (a repeated cleanup after step 5), the helper creates it empty first; `reset` must
    then do nothing.
 3. Restore `authorized_keys` from `authorized_keys.base`.
-4. Check that no process with `HOSTEL_LEASE=<lease id>` remains, and that the slot
+4. Check that no process of the lease (step 1) remains, and that the slot
    ports and the lease's fixed room ports (`ports` in the input) are free: try to
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the room has no IPv6
    loopback address), and retry for up to 10 seconds, because

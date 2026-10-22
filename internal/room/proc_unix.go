@@ -47,6 +47,29 @@ func exitCode(st *os.ProcessState) int {
 	return st.ExitCode()
 }
 
+func currentSession() (int, error) { return processSession(os.Getpid()) }
+
+// sessionProcesses returns the room user's processes in one of the sessions.
+func sessionProcesses(sids map[int]bool) ([]int, error) {
+	if len(sids) == 0 {
+		return nil, nil
+	}
+	pids, err := userPIDs()
+	if err != nil {
+		return nil, err
+	}
+	var out []int
+	for _, pid := range pids {
+		if pid == os.Getpid() {
+			continue
+		}
+		if sid, err := processSession(pid); err == nil && sids[sid] {
+			out = append(out, pid)
+		}
+	}
+	return out, nil
+}
+
 func execProcess(path string, argv, env []string) error {
 	return syscall.Exec(path, argv, env)
 }

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -30,10 +31,28 @@ func processStart(pid int) (string, error) {
 	return s, nil
 }
 
-// leaseProcesses returns the processes of the room user whose environment has
-// HOSTEL_LEASE=<id>. "ps -E" shows the environment of the user's own processes
-// (verify on each macOS version; design, section 17).
-func leaseProcesses(leaseID string) ([]int, error) {
+func processSession(pid int) (int, error) { return syscall.Getsid(pid) }
+
+// userPIDs returns the processes of the room user.
+func userPIDs() ([]int, error) {
+	out, err := psOutput("-U", strconv.Itoa(os.Getuid()), "-o", "pid=")
+	if err != nil {
+		return nil, err
+	}
+	var pids []int
+	for _, f := range strings.Fields(out) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+// envProcesses returns the processes of the room user whose environment has
+// HOSTEL_LEASE=<id>. "ps -E" does not show the environment of Apple's own
+// binaries (for example sh and sleep; macOS 27.2), so cleanup also finds
+// processes by their session (design, section 17).
+func envProcesses(leaseID string) ([]int, error) {
 	out, err := psOutput("-E", "-ww", "-U", strconv.Itoa(os.Getuid()), "-o", "pid=,command=")
 	if err != nil {
 		return nil, err

@@ -145,4 +145,10 @@ the MacBook are manual; their results go into this file (section 8).
 
 ## 8. Results
 
-(Filled in during M2.)
+- 2026-10-22, `ps -E` (check 2), on the owner's Mac (macOS 27.2): `ps -E` shows
+  the environment of a Python process, but not of `/bin/sleep` or `/bin/zsh`
+  (Apple's own binaries). Cleanup did not find a guest's leftover `sh` or `sleep`.
+  Fix: cleanup also finds the processes in the lease's sessions (design, section
+  17). `TestCleanup` has two leftover processes without `HOSTEL_LEASE`; it fails
+  on the old code (2 processes stay) and passes now. Check again on the MacBook
+  (macOS 26).
