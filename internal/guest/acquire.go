@@ -286,7 +286,9 @@ var miseFiles = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.lo
 func setupCommand(rc *config.Repo, platform string, full bool) string {
 	var parts []string
 	if rc.MiseEnabled() {
-		parts = append(parts, "mise install")
+		// The job PATH comes from "mise env" at the job start, so it does not
+		// have the tools that this "mise install" adds.
+		parts = append(parts, `mise install`, `PATH="$(mise bin-paths | tr '\n' ':')$PATH"`)
 	}
 	if rp := rc.Platforms[platform]; full && rp != nil {
 		for _, c := range rp.Setup {

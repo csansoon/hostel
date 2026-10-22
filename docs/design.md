@@ -814,8 +814,10 @@ env = { EXAMPLEAPP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
   are merged. `--device` replaces `devices`.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
   Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows):
-  the setup job is `mise install && (command 1) && (command 2)`.
-  The first failure stops the job.
+  the setup job is `mise install && PATH="$(mise bin-paths | tr '\n' ':')$PATH" &&
+  (command 1) && (command 2)`. The `PATH` step is necessary because the job
+  environment comes from `mise env` at the job start, before this `mise install`
+  (found in M2). The first failure stops the job.
 - `hostel admin config check --repo hostel.toml` validates a repository file.
 
 **Caches.** mise installs, package stores, DerivedData, and Gradle caches are outside

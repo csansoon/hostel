@@ -17,12 +17,15 @@ func TestMise(t *testing.T) {
 	t.Parallel()
 	offline := os.Getenv("HOSTEL_E2E_OFFLINE") == "1"
 	machineKeys, repoTools := "tools = { jq = \"1.7.1\" }\n", "[tools]\nripgrep = \"14.1.1\"\n"
+	// The setup uses a tool that the same setup job installs.
+	repoConfig := "[platforms.fakedevice]\nsetup = [\"rg --version | head -1 > setup-rg.txt\"]\n"
 	if offline {
-		machineKeys, repoTools = "", ""
+		machineKeys, repoTools, repoConfig = "", "", ""
 	}
 	files := map[string]string{
-		"mise.toml": repoTools + "[env]\nREPO_MISE_VAR = \"from-mise\"\n",
-		"a.txt":     "hello\n",
+		"mise.toml":   repoTools + "[env]\nREPO_MISE_VAR = \"from-mise\"\n",
+		"hostel.toml": repoConfig,
+		"a.txt":       "hello\n",
 	}
 	e := newEnv(t)
 	e.init()
@@ -47,6 +50,9 @@ func TestMise(t *testing.T) {
 	}
 	if offline {
 		return
+	}
+	if got := f.work("cat setup-rg.txt"); !strings.HasPrefix(got, "ripgrep 14.1.1") {
+		t.Fatalf("tool in the setup: %q", got)
 	}
 	if r := f.e.mustHostel("run", "--", "rg --version | head -1; jq --version"); !strings.HasPrefix(r.stdout, "ripgrep 14.1.1") || !strings.HasSuffix(r.stdout, "jq-1.7.1\n") {
 		t.Fatalf("tools in run: %q", r.stdout)
