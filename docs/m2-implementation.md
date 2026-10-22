@@ -152,3 +152,34 @@ the MacBook are manual; their results go into this file (section 8).
   17). `TestCleanup` has two leftover processes without `HOSTEL_LEASE`; it fails
   on the old code (2 processes stay) and passes now. Check again on the MacBook
   (macOS 26).
+- 2026-10-22, the room Mac: MacBook, macOS 26.6.2, arm64, 8 cores, 8 GB memory,
+  Xcode 26.5 (17F42), iOS 26.5 runtime (23F77). The server on the owner's Mac
+  reaches it by its `.local` name over IPv6; IPv4 between the two Wi-Fi address
+  ranges does not work on this network.
+- 2026-10-22, setup guide: the `echo` with a line break inside quotes wrote one
+  bad line to `100-hostel.conf` when it was pasted, and sshd closed each
+  connection. The guide now uses `printf` and runs `sshd -t`.
+- 2026-10-22, `ios` provision at server start: 72 s (two golden simulators,
+  each booted once).
+- 2026-10-22, timing (check 1), 5 times each, seconds:
+
+  | Device | clone | boot after clone | total | erase | boot after erase | total |
+  |---|---|---|---|---|---|---|
+  | iphone-17-pro | 2.2–2.7 | 9.6–10.3 | 12.2–12.6 | 0.2–0.3 | 28.5–30.6 | 28.8–30.8 |
+  | ipad-pro-13 | 2.6–2.8 | 9.8–10.1 | 12.5–12.9 | 0.2–0.3 | 28.9–35.3 | 29.2–35.5 |
+
+  A clone of the golden simulator (booted once at provision) boots about 2.4
+  times faster than an erased device. `prepare` keeps the clone method.
+- 2026-10-22, `ps -E` (check 2) on macOS 26.6.2: `ps -E` shows `HOSTEL_LEASE`
+  for none of `sleep`, `sh`, `/usr/bin/python3`, and `/usr/bin/perl`. With a
+  real lease, cleanup found and stopped all 4 leftover processes (two with
+  `HOSTEL_LEASE` removed, one from `hostel ssh`, one `nc` on a port) by their
+  sessions. The slot simulators were deleted and the port was free.
+- 2026-10-22, Screen Recording (check 4): without the permission,
+  `screencapture` over SSH fails ("could not create image from display"). With
+  the permission for `/usr/libexec/sshd-keygen-wrapper` in the `hostel` session,
+  it gives the full desktop with windows. `hostel screenshot` of a `macos`
+  lease with `--require desktop` works.
+- 2026-10-22, simulator window (check 5): `simctl boot` does not open the
+  Simulator app. `open -a Simulator` from a lease job shows the booted lease
+  device on the desktop. The device screenshot (`simctl io`) works without it.
