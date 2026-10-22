@@ -9,7 +9,7 @@ machine or an on-demand cloud such as Namespace), prepares it, and gives the age
 SSH access through its gateway. When the lease ends, cleanup deletes everything the
 lease left on the room.
 
-Status: milestone M0 (repository setup) is done. Next: M1 in docs/plan.md.
+Status: milestone M1 (core with Docker rooms) is in review in PR #1. Next: M2 in docs/plan.md.
 
 | Document | Content |
 |---|---|
@@ -19,3 +19,4 @@ Status: milestone M0 (repository setup) is done. Next: M1 in docs/plan.md.
 | [docs/design.md](docs/design.md) | Architecture and contracts |
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [docs/namespace.md](docs/namespace.md) | Namespace facts, limits, and traps |
+| [docs/m1-implementation.md](docs/m1-implementation.md) | M1 build order and technical decisions |

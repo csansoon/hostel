@@ -129,13 +129,18 @@ database stores runtime state.
 
 | Table | Main columns |
 |---|---|
-| `rooms` | id, name, provider, machine, provider_ref, state, os, arch, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
+| `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
 | `room_platforms` | room_id, platform, scripts_sha256, provisioned_at |
 | `slots` | room_id, name, state, lease_id, cleanup_data |
-| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnel_names, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_reason |
+| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
 | `lease_tunnels` | lease_id, name, room_port |
 | `tokens` | id, name, role, machine (for `room` tokens), sha256, created_at, revoked_at |
 | `events` | id, time, lease_id, room_id, kind, message |
+
+`rooms.home` is the room user's home directory from the probe. `leases.end_state`
+is the final state that a lease in `cleaning` goes to. `leases.tunnels`
+holds the requested tunnels (`[{"name", "room_port"}]`) until the server assigns
+the room ports in `lease_tunnels`. Times are Unix milliseconds.
 
 `room_platforms` records which platforms a room is ready for, and with which
 version of the platform scripts. Jobs are not in the database. They exist only on
@@ -212,7 +217,9 @@ Rules:
   room runs this cleanup before it takes a new lease: when a probe succeeds again,
   the server runs the cleanup of each dirty slot, then sets the room to `running`.
 - When a lease returns to `queued`, its `began_at`, room, and slot are cleared. A new
-  assignment calls `begin` again.
+  assignment calls `begin` again. Its old slot keeps no `lease_id` (a dirty slot has
+  the lease data in `cleanup_data`), and every slot update for a lease is limited to
+  the lease's current room, so a later step of the lease never changes the old slot.
 
 An append-only `events` table records each change. `hostel status` and debug
 output read from it.
@@ -325,7 +332,14 @@ Broken on-demand rooms are destroyed. Broken static rooms stay until the owner r
 `hostel admin room repair <room> [--accept-host-key]`. Repair runs the full cleanup
 (section 17) of each `broken` or `dirty` slot again (this also restores
 `authorized_keys`), then the `health` scripts, and sets the room to `running` if all
-pass.
+pass. It does this through the probe: a broken slot (with its `cleanup_data`)
+becomes `dirty`, and the room goes to `provisioning`; the probe cleans each dirty
+slot before the room is `running`.
+
+**Workers and retries.** A room worker ends when a step does not change the room
+state (for example a failed destroy); the next loop pass starts it again, so such
+a retry follows `intervals.scheduler`. The provider `provision` call is retried
+inside the worker with backoff (2 s, 4 s), three attempts in total.
 
 **Room host key.** The server pins a room's SSH host key at the first connection. A
 different key later makes the room `broken` with reason "host key changed". Only
@@ -363,7 +377,14 @@ type RoomAccess struct {
 ```
 
 - `Dial` with a proxy command runs the command and uses its stdin and stdout as
-  the connection.
+  the connection. A proxy connection has no deadlines, so a timer bounds the SSH
+  handshake.
+- The server asks an external provider for the capabilities of each machine at
+  start; a failure stops the start with the provider's message.
+- `rooms.os` is the probed OS: it selects the helper and mise binaries. The
+  machine's configured `os` selects the platform scripts; the server writes it to
+  `room-env.json` (`"os"`), and the helper uses it for script names and
+  `HOSTEL_ROOM_OS`. For static machines both must be the same.
 - `Signers` is the server key for `static` and `external` rooms. For Namespace it can
   be the key that the provider CLI manages (verify in M3).
 
@@ -500,6 +521,7 @@ hostel/
   bin/hostel                 helper binary (hostel.exe on Windows)
   bin/mise                   mise binary (mise.exe on Windows; "mise on rooms" below)
   mise/config.toml           machine-level tools (MISE_CONFIG_DIR)
+  room-env.json              provider, machine, and slot env and the MISE_* variables (mode 0600)
   platforms/<platform>/      platform scripts for this room's OS
   authorized_keys.base       authorized_keys at the first lease (restored at cleanup)
   cache/                     shared caches; kept between leases (HOSTEL_CACHE_DIR)
@@ -530,11 +552,16 @@ path as a key (for example Xcode DerivedData) are therefore reused.
    platform directory is the SHA-256 of a text with one line `<path> <mode>
    <sha256>\n` for each included file, sorted by path. Included files are
    `platform.toml` and the scripts for the room's OS. Upload candidates: the helper, mise,
-   `hostel/mise/config.toml`, and each platform directory that the room serves
+   `hostel/mise/config.toml`, `hostel/room-env.json`, and each platform directory that the room serves
    (`platform.toml` and the scripts for the room's OS; one hash for each directory,
    which is also `room_platforms.scripts_sha256`).
 3. The server repeats step 2 at each `preparing`, so that a guest cannot leave a
    changed helper or script for the next lease.
+4. Transfer. The helper itself goes first, with `sh -c 'cat > tmp && chmod 755 tmp
+   && mv tmp hostel/bin/hostel'`. All other items go through the helper `install`
+   command, which writes a temporary file, checks the SHA-256, and renames it. mise
+   goes compressed with gzip (151 MB → about 52 MB for Linux). An OS platform without
+   scripts for the room's OS has an empty upload, which removes old scripts.
 
 ### Helper commands
 
@@ -544,9 +571,11 @@ success; else stdout has `{"error": "..."}`.
 
 | Command | Caller | Input | Output |
 |---|---|---|---|
-| `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
-| `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` at each lease start: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). |
-| `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...]}` | `{"exit_code", "output_tail"}` |
+| `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
+| `install mise\|mise-config\|room-env --sha256 H` / `install platform <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (platform) | `{}`; refuses data with another hash |
+| `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
+| `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
+| `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
 | `cleanup` | server | `{"lease_id", "platform", "devices", "ports"}` (from the database, so a repeated cleanup does not need `lease.json`) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
@@ -601,7 +630,10 @@ Each room has a `room_platforms` row for its OS platform too (with no scripts, t
 row has an empty hash).
 
 **Script files.** `<step>.<os>.sh` for `macos` and `linux`, `<step>.<os>.ps1` for
-`windows`. The room's OS selects the file. Steps:
+`windows`. The room's OS selects the file. A `.sh` or `.ps1` file with another
+name is a configuration error (it catches typing errors such as `prepar.linux.sh`).
+Other files in the directory are ignored and not uploaded. An OS platform directory
+can only have scripts for its own OS. Steps:
 
 | Step | When | Example for `ios` on macOS |
 |---|---|---|
@@ -632,8 +664,14 @@ Contract:
   `SIMULATOR_UDIDS` (all, comma-separated). The `android` scripts write
   `ANDROID_SERIAL` and `ANDROID_SERIALS`.
 - Before a platform `provision` script, the server runs `mise install` for the
-  machine-level tools, so scripts can use them.
+  machine-level tools (helper `mise-install`, at each room provisioning), so
+  scripts can use them: the helper adds `hostel/bin` and the output of
+  `mise env --json` (in the script's directory) to the script environment.
 - A non-zero exit code is a failure. The last 4 KB of output go to the event log.
+- The helper runs a script with `/bin/sh <script>` (so the file needs no execute
+  bit) in its own process group, and stops the group at the step timeout. A
+  background process that the script starts (for example a simulator) can keep
+  running after the script ends.
 
 `hostel admin config check` (section 9) fails if a device platform lacks `prepare`
 for an OS that serves it, if a machine lists an unknown platform or an OS platform,
@@ -643,6 +681,9 @@ or if an OS platform directory declares devices.
 
 All configuration uses TOML: the same format as `mise.toml`. The server decodes
 strictly: an unknown key or a wrong type is an error with the file name and line.
+Durations are strings with a unit (`"10m"`); a number is a type error. In
+`server.toml`, a path that starts with `~/` is relative to the home directory, and
+another relative path is relative to the directory of `server.toml`.
 
 ### Server (`server.toml`)
 
@@ -695,6 +736,7 @@ Server-level keys and defaults:
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
 | `platforms_dir` | `~/.config/hostel/platforms` |
 | `idle_timeout`, `aging`, `poll_timeout`, `limit_retry` | `10m`, `10m`, `5m`, `2m` |
+| `port_process_offline` | `10m` (section 14) |
 | `intervals` | `{ scheduler = "10s", reconcile = "5m", tunnel_check = "30s" }` (short values in tests) |
 | `[mise]` | `idiomatic_tools = ["node", "python"]`; `github_token` unset |
 
@@ -754,6 +796,7 @@ local_port_env = "PORT"
 
 [platforms.ios]
 devices = ["iphone-17-pro"]         # default devices for this repository
+# requires = ["xcode-26.5"]         # labels that this repository needs on this platform
 setup = ["cd apps/ios && tuist install && tuist generate --no-open"]
 env = { EXAMPLEAPP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
@@ -762,9 +805,11 @@ env = { EXAMPLEAPP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
 
 ```
 
-- `requires` and `--require` are merged. `--device` replaces `devices`.
+- The platform's `requires`, the repository platform `requires`, and `--require`
+  are merged. `--device` replaces `devices`.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
-  Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows).
+  Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows):
+  the setup job is `mise install && (command 1) && (command 2)`.
   The first failure stops the job.
 - `hostel admin config check --repo hostel.toml` validates a repository file.
 
@@ -902,12 +947,12 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `--platform <name>` | On all lease commands below: selects the lease when the worktree has more than one. |
 | `hostel acquire <platform> --task ... [--device d]... [--priority low\|normal\|high] [--require label]... [--fresh] [--wait 100s]` | Creates or continues a lease. |
 | `hostel sync [--setup]` | Sends the changed files again. `--setup` runs the setup job again. |
-| `hostel run [--detach] [--wait 100s] -- <command>` | Starts a job in the work directory and streams its output. |
+| `hostel run [--detach] [--wait 100s] [--json] -- <command>` | Starts a job in the work directory and streams its output. One argument runs with `sh -c` (`hostel run -- "make && make test"`); several arguments run without a shell. The command is found in the job's PATH (with the mise tools). |
 | `hostel attach <job> [--wait 100s]` / `hostel jobs` / `hostel stop <job>` | Job control. |
 | `hostel screenshot [--device d] [-o file.png]` | Runs the platform `screenshot` script and downloads the PNG. |
-| `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. |
+| `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. The target is the full new path; a target that ends with `/` (or an existing local directory) receives the source with its own name. Both sides refuse to write below a symbolic link and replace a link at a file path instead of following it. |
 | `hostel diff` | Shows the temporary changes against the last baseline commit. |
-| `hostel ssh` | Interactive shell. |
+| `hostel ssh [-- command]` | Interactive shell, or one command, with the system `ssh` client and the file of `ssh-config`. |
 | `hostel ssh-config` | Writes an `ssh_config` file for `ssh -F` (gateway address, lease user, lease key, pinned gateway host key) and prints its path. |
 | `hostel tunnel list` | Lists the tunnels with their local and room ports. |
 | `hostel tunnel add <name> (--local-port N \| --local-port-env VAR) [--room-port P]` / `tunnel set <name> [--local-port N] [--room-port P]` / `tunnel remove <name>` | Changes tunnels during a lease (section 14). |
@@ -915,13 +960,17 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel status` | All leases, rooms, and the queue. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
 | `hostel agent-guide` | Prints short usage instructions for coding agents. |
+| `hostel screenshot [--device d] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
 
 Admin commands: `hostel admin token create|revoke`, `admin pubkey`,
 `admin lease release <lease-id>`, `admin room drain|undrain|repair|destroy <room>`,
 `admin config check|schema`. `hostel status` shows lease and room IDs.
 
 All guest commands except `platforms`, `status`, and `agent-guide` call
-`POST /v1/leases/{id}/touch`.
+`POST /v1/leases/{id}/touch`. When a lease command fails (for example because
+the gateway closed the connection at expiry), the guest calls `touch` again; if
+the lease ended, it reports the end reason instead of the connection error. An
+attach that cannot connect again stops at once when the lease ended.
 
 Example:
 
@@ -967,12 +1016,12 @@ everything. Any token can read `status` and `platforms`.
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
 | `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait. |
 | `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
-| `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait`. Updates `last_poll_at`. |
-| `POST /v1/leases/{id}/touch` | Records guest activity. |
+| `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait`. Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). |
+| `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
 | `POST /v1/leases/{id}/release` | Releases or cancels. |
 | `GET /v1/status` | Leases, rooms, queue. |
-| `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. |
+| `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. `repair` takes `{"accept_host_key": bool}` and is for broken static rooms; `destroy` is for on-demand rooms without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "machine"}` (`machine` = `<provider>/<machine>`, only for `room`). A new token is returned once. |
 
 A `ready` lease includes the access data: gateway address, gateway host key,
@@ -1008,8 +1057,9 @@ machine names, room OS and architecture, `tunnel_check`, `expires_at`, and
       empty, up to `work/`.
    2. For each `send` path: if any existing parent component is not a directory (a
       file or a symbolic link), or the path itself has another type (for example a
-      directory where a file must go), remove that object first. Remove a directory
-      recursively only if the plan lists it in `overwrite`; else stop with an error.
+      directory where a file must go), remove that object first, but only if the
+      plan lists it in `overwrite`; else stop with an error (a room job made it after
+      the plan).
    3. Write the files, and create missing parent directories.
    4. Replace `manifest.json` and make a baseline commit.
 6. `hostel sync` prints the `overwrite` paths.
@@ -1168,10 +1218,15 @@ room's loopback interface).
   (`[{"name", "room_port"}]`, `room_port` 0 = from the pool). The scheduler uses
   them for candidate matching (section 5). The server records the room ports in
   `lease_tunnels` when it assigns the slot, and returns them with the `ready` lease.
-  `PUT /v1/leases/{id}/tunnels` changes the list during a lease. The server refuses a
-  port that another lease on the room uses (HTTP 409). The gateway accepts a remote
-  forward only for a registered port of that lease. From M6, the scheduler treats
-  fixed room ports as a resource of the room.
+  `PUT /v1/leases/{id}/tunnels` changes the list during a lease (and raises the
+  lease revision). The server refuses a port that another lease on the room uses
+  (HTTP 409), and two tunnels with the same fixed room port (also in `hostel.toml`).
+  The gateway accepts a remote forward only for a registered port of that lease, and
+  after each change it closes the forwards of ports that the lease no longer
+  registers. At assignment, a lease does not get a room where another lease uses one
+  of its fixed room ports; it waits. From M6, the scheduler treats fixed room ports as
+  a resource of the room (today such a lease can wait for that room although another
+  room is free).
 - **Changing the room port.** `hostel tunnel set <name> --room-port P` registers the
   new port, closes the old forward, and opens the new one. The guest updates
   `lease.env`, so new jobs get the new `HOSTEL_TUNNEL_<NAME>_PORT` and the new values
@@ -1204,12 +1259,21 @@ handles all tunnels and forwards of the lease.
   `direct-tcpip`. `ports` connections do not count as guest activity (section 16):
   a forgotten forward does not keep a lease alive.
 - **Room listeners.** The gateway asks the room's SSH server to listen on
-  `localhost:<room port>`, which covers `127.0.0.1` and `::1`.
+  `127.0.0.1:<room port>` (this must succeed) and on `[::1]:<room port>` (best
+  effort; the room can have no IPv6 loopback). It does not ask for `localhost`:
+  OpenSSH accepts `localhost` when only one of the two addresses is free, and a
+  room service on `127.0.0.1` would then get the tunnel's connections.
 - **Control.** The process listens on a local control socket. Unix socket paths
   are limited to 104 bytes on macOS, so the socket is
   `/tmp/hostel-<uid>/<first 16 hex digits of sha256(local state directory)>.sock`
-  (directory mode 0700; not `$TMPDIR`, which is long on macOS). On Windows it is the
-  named pipe `\\.\pipe\hostel-<same hash>`. The local state records the path. `hostel tunnel add|set|remove`
+  (not `$TMPDIR`, which is long on macOS). The directory must belong to the user
+  and have mode 0700, because `/tmp` is shared. On Windows the socket is a Unix
+  socket in `%LOCALAPPDATA%\hostel\` (Go supports Unix sockets on Windows 10 and
+  later), so no named pipe is necessary.
+- **Files.** The tunnels of a lease (local port source, requested and given room
+  port) are in `tunnels.json` in the local state directory; only `acquire` (before
+  the process starts) and the process write it. The process writes its log to
+  `ports.log` there (events only, no data). `hostel tunnel add|set|remove`
   and `hostel forward ...` send their request there. The process applies it and
   replies with the result. If the room's SSH server refuses a remote forward (for
   example a room service already uses a fixed port), the command fails with that
@@ -1227,8 +1291,10 @@ handles all tunnels and forwards of the lease.
 ## 15. Jobs
 
 - `job start` starts a **supervisor** (`hostel room job supervise`) in a new session
-  (`setsid`) on macOS and Linux, or in a job object on Windows. The helper generates
-  the job ID (`j-<unix-ms>-<4 random hex>`).
+  (`setsid`) on macOS and Linux, or in a job object on Windows. The guest chooses
+  the job ID (`j-<unix-ms>-<4 random hex>`; the helper makes one if the request has
+  none). A start with an existing ID returns that job, so a guest whose connection
+  dropped during the start repeats it with the same ID and gets one job, not two.
 - The supervisor starts the command in its own process group, in `work/`, with the
   lease environment. Output (stdout and stderr together) goes to
   `jobs/<id>/output`. When the command ends, the supervisor writes the exit code to
@@ -1238,7 +1304,12 @@ handles all tunnels and forwards of the lease.
   the start time too, because PIDs are reused.
 - `job attach <id> --offset N` streams the output from byte `N`. When `exit` exists,
   it sends the rest and a trailer line `\x00hostel-exit <code>`. If the supervisor is
-  dead and `exit` does not exist, the trailer is `\x00hostel-lost`.
+  dead and `exit` does not exist, the trailer is `\x00hostel-lost`. The job output
+  can contain the same bytes, so the guest accepts a trailer only as the last bytes
+  of a stream that the helper ended with exit status 0.
+- `hostel run` and `hostel attach` record in the local state how many output bytes
+  they printed, so a later `hostel attach` continues there and does not print the
+  same output again. With `--json`, the job output goes to stderr.
 - `hostel run` = `job start` + `job attach`. When the connection drops, the guest
   attaches again from the last offset. If the guest process stops (for example an
   agent tool timeout), the job continues.
@@ -1393,7 +1464,14 @@ Privilege escalation to root on a room stays out of scope.
   run), and stops `hostel ports` processes of earlier runs.
 - Two providers in tests: `static` with fixed containers, and `external` with
   `test/fakeprovider`, which starts containers on demand. Environment variables
-  control its delay, its limit, and its failures.
+  control its delay (`FAKE_DELAY`), a limit (`FAKE_LIMIT`, counted over its
+  containers, also ones without the prefix), failures (`FAKE_FAIL`), stop support
+  (`FAKE_CAN_STOP`), and access through a proxy command (`FAKE_PROXY`). A lock
+  file for each name makes `provision` idempotent when a killed server's call
+  still runs.
+- The test platform `fakedevice` reads markers in the room cache: `slow-prepare`,
+  `fail-prepare`, `slow-reset`, `fail-reset`. Tests create them with `docker exec`
+  to drive failures and restarts at a known state.
 - Test platforms in `test/platforms/`: a device platform whose scripts simulate a
   device (they write `device.env` and a fake screenshot), with scripts for `linux`
   and for `macos`. An `external` machine with `os = "macos"` runs the `.macos.sh`
@@ -1402,6 +1480,9 @@ Privilege escalation to root on a room stays out of scope.
   conditions with a deadline. They never use a fixed sleep as an assertion.
 - Real providers: opt-in smoke tests (`HOSTEL_SMOKE_NAMESPACE=1`) and manual tests
   on the spare MacBook.
+- CI (GitHub Actions, Linux `amd64`): `make lint`, `make test-unit`, builds for all
+  six targets, and one `make test-e2e` run. `make test-e2e` fetches only the Linux
+  mise binaries; CI caches them.
 
 ## 21. Decisions in this design
 

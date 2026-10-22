@@ -1,11 +1,15 @@
 #!/bin/sh
 # Downloads the pinned mise binaries into a directory and verifies each one
-# against the committed checksum file. Usage: fetch-mise.sh <version> <checksums> <outdir>
+# against the committed checksum file.
+# Usage: fetch-mise.sh <version> <checksums> <outdir> [<goos>/<goarch>...]
+# Without targets, it fetches all six.
 set -eu
 
 version=$1
 checksums=$2
 outdir=$3
+shift 3
+targets=${*:-darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64}
 
 sha256() {
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -16,7 +20,7 @@ sha256() {
 }
 
 mkdir -p "$outdir"
-for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+for target in $targets; do
 	goos=${target%/*}
 	goarch=${target#*/}
 	case $goos in
