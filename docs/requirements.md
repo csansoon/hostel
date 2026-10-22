@@ -38,6 +38,8 @@ All other terms are plain technical words.
 
 | Date | Decision |
 |---|---|
+| 2026-10-22 | The spare MacBook has FileVault off and logs in the `hostel` user automatically, so that it has a desktop session (label `desktop`). It holds no personal data. |
+| 2026-10-22 | In M2, the server runs on the owner's Mac and reaches the MacBook over the local network. |
 | 2026-10-21 | The server sends the mise binary to rooms compressed with gzip; the helper decompresses it and checks the hash. |
 | 2026-10-21 | CI (GitHub Actions) runs lint, the unit tests, the cross-builds, and one E2E run for each pull request. |
 | 2026-10-21 | Three pieces: a central server, thin guests, and rooms. The server holds the orchestration logic. |
