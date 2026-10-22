@@ -661,7 +661,12 @@ Contract:
   `reset` can shut them down cleanly.
 - **Device facts.** `prepare` writes them to `device.env`. Each platform documents
   its variable names. The `ios` scripts write `SIMULATOR_UDID` (first device) and
-  `SIMULATOR_UDIDS` (all, comma-separated). The `android` scripts write
+  `SIMULATOR_UDIDS` (all, comma-separated). The `ios` scripts (`platforms/ios`)
+  act only on simulators with the name prefix `hostel-`: the golden simulators
+  `hostel-golden-<device>-<iOS version>` (from `provision`) and the lease's
+  simulators `hostel-<slot>-<device>`. The machine `env` value `HOSTEL_IOS_RUNTIME`
+  (for example `26.5`) selects the runtime; the default is the newest iOS runtime.
+  The `android` scripts write
   `ANDROID_SERIAL` and `ANDROID_SERIALS`.
 - Before a platform `provision` script, the server runs `mise install` for the
   machine-level tools (helper `mise-install`, at each room provisioning), so

@@ -151,3 +151,29 @@ func TestConfigErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestShippedPlatforms: the platform directories in platforms/ pass the
+// configuration check for a static Mac (docs/m2-implementation.md). The ios
+// scripts run only on a real Mac; M2 checks them there.
+func TestShippedPlatforms(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	dir, err := filepath.Abs(filepath.Join("..", "..", "platforms"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.initServer(serverHeader() + fmt.Sprintf("platforms_dir = %q\n", dir) + `
+[providers.home]
+kind = "static"
+
+[providers.home.machines.macbook]
+address = "hostel@macbook.local"
+os = "macos"
+platforms = ["ios"]
+labels = ["xcode-26.5", "desktop"]
+`)
+	r := e.hostel("admin", "config", "check")
+	if r.code != 0 || !strings.Contains(r.stdout, "iphone-17-pro") {
+		t.Fatalf("config check of platforms/: %s", r)
+	}
+}
