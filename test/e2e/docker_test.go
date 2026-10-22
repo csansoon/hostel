@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -114,14 +116,33 @@ func (e *env) removeContainers() {
 	docker(append([]string{"rm", "-f", "-v"}, strings.Fields(out)...)...)
 }
 
-// freePort returns a free TCP port on 127.0.0.1.
+var (
+	portsMu    sync.Mutex
+	portsGiven = map[int]bool{}
+)
+
+// freePort returns a free TCP port on 127.0.0.1. The port is outside the
+// ephemeral ranges of macOS (49152+) and Linux (32768+): a port that is free
+// now must stay free until "docker start", and the outbound connections of
+// the tests take their local ports from the ephemeral range.
 func freePort(t interface{ Fatal(...any) }) int {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	portsMu.Lock()
+	defer portsMu.Unlock()
+	for range 100 {
+		port := 20000 + rand.IntN(12000)
+		if portsGiven[port] {
+			continue
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		portsGiven[port] = true
+		defer ln.Close()
+		return ln.Addr().(*net.TCPAddr).Port
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	t.Fatal("no free port in 20000-31999")
+	return 0
 }
 
 // container is a test room container.
@@ -135,9 +156,21 @@ type container struct {
 // explicit port mapping survives "docker stop" and "docker start".
 func (e *env) startStaticRoom(name string) *container {
 	e.t.Helper()
-	c := e.createStaticRoom(name)
-	c.start()
-	return c
+	for attempt := 1; ; attempt++ {
+		c := e.createStaticRoom(name)
+		_, err := docker("start", c.name)
+		// Another process can take the free port before Docker binds it. Nothing
+		// uses the port yet, so a new container with a new port is safe.
+		if err != nil && strings.Contains(err.Error(), "address already in use") && attempt < 3 {
+			docker("rm", "-f", "-v", c.name)
+			continue
+		}
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		c.waitSSH()
+		return c
+	}
 }
 
 // createStaticRoom creates the room container but does not start it.
@@ -161,6 +194,11 @@ func (c *container) start() {
 	if _, err := docker("start", c.name); err != nil {
 		c.e.t.Fatal(err)
 	}
+	c.waitSSH()
+}
+
+func (c *container) waitSSH() {
+	c.e.t.Helper()
 	c.e.waitFor("SSH banner of "+c.name, time.Minute, func() bool {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", c.port), time.Second)
 		if err != nil {
