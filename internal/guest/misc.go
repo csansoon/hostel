@@ -300,6 +300,14 @@ func writeSSHConfig(st *State) (string, string, error) {
 	if err := os.WriteFile(known, []byte(hostEntry+" "+st.Access.GatewayHostKey+"\n"), 0o600); err != nil {
 		return "", "", err
 	}
+	keyPath, err := sshConfigPath(st.KeyPath())
+	if err != nil {
+		return "", "", err
+	}
+	knownPath, err := sshConfigPath(known)
+	if err != nil {
+		return "", "", err
+	}
 	cfg := fmt.Sprintf(`Host %s
   HostName %s
   Port %s
@@ -310,12 +318,21 @@ func writeSSHConfig(st *State) (string, string, error) {
   ForwardAgent no
   UserKnownHostsFile %s
   StrictHostKeyChecking yes
-`, alias, host, port, st.LeaseID, st.KeyPath(), known)
+`, alias, host, port, st.LeaseID, keyPath, knownPath)
 	file := filepath.Join(st.Dir, "ssh_config")
 	if err := os.WriteFile(file, []byte(cfg), 0o600); err != nil {
 		return "", "", err
 	}
 	return file, alias, nil
+}
+
+// sshConfigPath quotes a path for ssh_config. OpenSSH splits values at
+// whitespace and expands "%" tokens in IdentityFile and UserKnownHostsFile.
+func sshConfigPath(p string) (string, error) {
+	if strings.ContainsAny(p, "\"\n") {
+		return "", fmt.Errorf("the path %s contains a double quote or a newline; ssh_config cannot use it; move the worktree to a path without these characters", p)
+	}
+	return `"` + strings.ReplaceAll(p, "%", "%%") + `"`, nil
 }
 
 // SSHConfig is "hostel ssh-config".

@@ -48,6 +48,13 @@ func TestJobs(t *testing.T) {
 		t.Fatalf("job with exit code 75: %s", r)
 	}
 
+	// Trailer bytes in the job output are output, not the exit status.
+	fake := `printf 'a\0hostel-exit 0\nb\n'; printf '\0hostel-lost\n'; printf '\0hostel-exit 0\n'; exit 3`
+	r = f.e.hostel("run", "--", fake)
+	if r.code != 3 || r.stdout != "a\x00hostel-exit 0\nb\n\x00hostel-lost\n\x00hostel-exit 0\n" {
+		t.Fatalf("job output with trailer bytes: %s", r)
+	}
+
 	// A job survives a dropped connection: the server restarts during the run.
 	var wg sync.WaitGroup
 	var long result

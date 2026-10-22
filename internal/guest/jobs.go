@@ -31,70 +31,58 @@ type jobResult struct {
 	offset   int64
 }
 
-// trailerWriter forwards job output and removes the exit trailer at its end.
-// Bytes from a NUL byte on are held until they are known not to be a trailer.
+// trailerWriter forwards job output and keeps back a possible exit trailer at
+// its end. Job output can contain trailer bytes too, so a trailer counts only
+// when the helper ends the stream right after it (finish).
 type trailerWriter struct {
 	out     io.Writer
 	pending []byte
 	written int64
-	done    bool
-	status  string
-	code    int
 }
 
 const maxTrailer = 64
 
 func (w *trailerWriter) Write(p []byte) (int, error) {
 	w.pending = append(w.pending, p...)
-	for len(w.pending) > 0 && !w.done {
-		i := bytes.IndexByte(w.pending, 0)
-		if i < 0 {
-			return len(p), w.flush(len(w.pending))
-		}
-		if i > 0 {
-			if err := w.flush(i); err != nil {
-				return len(p), err
-			}
-			continue
-		}
-		nl := bytes.IndexByte(w.pending, '\n')
-		if nl < 0 {
-			if len(w.pending) < maxTrailer && (strings.HasPrefix(protocol.TrailerExit, string(w.pending)) ||
-				strings.HasPrefix(string(w.pending), protocol.TrailerExit) || strings.HasPrefix(protocol.TrailerLost, string(w.pending))) {
-				return len(p), nil // wait for more bytes
-			}
-			if err := w.flush(1); err != nil {
-				return len(p), err
-			}
-			continue
-		}
-		line := string(w.pending[:nl+1])
-		switch {
-		case line == protocol.TrailerLost:
-			w.done, w.status = true, JobLost
-		case strings.HasPrefix(line, protocol.TrailerExit):
-			code, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, protocol.TrailerExit)))
-			if err != nil {
-				if err := w.flush(1); err != nil {
-					return len(p), err
-				}
-				continue
-			}
-			w.done, w.status, w.code = true, JobExited, code
-		default:
-			if err := w.flush(1); err != nil {
-				return len(p), err
-			}
-		}
+	n := len(w.pending)
+	if i := bytes.LastIndexByte(w.pending, 0); i >= 0 && maybeTrailer(w.pending[i:]) {
+		n = i
 	}
-	return len(p), nil
-}
-
-func (w *trailerWriter) flush(n int) error {
 	_, err := w.out.Write(w.pending[:n])
 	w.written += int64(n)
 	w.pending = w.pending[n:]
-	return err
+	return len(p), err
+}
+
+// maybeTrailer reports whether b is a trailer or the start of one.
+func maybeTrailer(b []byte) bool {
+	s := string(b)
+	if len(s) > maxTrailer {
+		return false
+	}
+	if strings.HasPrefix(protocol.TrailerLost, s) || strings.HasPrefix(protocol.TrailerExit, s) {
+		return true
+	}
+	rest, ok := strings.CutPrefix(s, protocol.TrailerExit)
+	if !ok {
+		return false
+	}
+	rest = strings.TrimPrefix(strings.TrimSuffix(rest, "\n"), "-")
+	return strings.Trim(rest, "0123456789") == ""
+}
+
+// finish reads the trailer after the helper ended the stream normally.
+func (w *trailerWriter) finish() (status string, code int, ok bool) {
+	s := string(w.pending)
+	if s == protocol.TrailerLost {
+		return JobLost, 0, true
+	}
+	rest, found := strings.CutPrefix(s, protocol.TrailerExit)
+	if !found || !strings.HasSuffix(rest, "\n") {
+		return "", 0, false
+	}
+	code, err := strconv.Atoi(strings.TrimSuffix(rest, "\n"))
+	return JobExited, code, err == nil
 }
 
 // attachJob streams a job's output from offset until the job ends or the
@@ -121,13 +109,17 @@ func attachJob(ctx context.Context, l *lease, jobID string, offset int64, out io
 		conn.Close()
 		cancel()
 		res.offset += w.written
-		if w.done {
-			res.Status, res.ExitCode = w.status, w.code
+		if err == nil {
+			status, code, ok := w.finish()
+			if !ok {
+				return res, errors.New("the job output ended without an exit status")
+			}
+			res.Status, res.ExitCode = status, code
 			return res, nil
 		}
 		// A dropped connection or the deadline: the job continues; attach
 		// again from the offset, or report it as running.
-		if err != nil && !errors.Is(err, ErrConnLost) && !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, ErrConnLost) && !errors.Is(err, context.DeadlineExceeded) {
 			return res, err
 		}
 	}

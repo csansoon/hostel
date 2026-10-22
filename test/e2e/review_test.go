@@ -3,12 +3,15 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
+	"golang.org/x/crypto/ssh"
 )
 
 // TestDirtySlotStaysDirty: a lease leaves a dirty slot on an unreachable room
@@ -153,6 +156,15 @@ func TestDuplicateFixedPorts(t *testing.T) {
 	body := `[{"name":"a","room_port":7600},{"name":"b","room_port":7600}]`
 	if code := f.s.put("/v1/leases/"+id+"/tunnels", f.e.vars["HOSTEL_TOKEN"], body); code != 400 {
 		t.Fatalf("PUT tunnels with a duplicate fixed port: HTTP %d, want 400", code)
+	}
+	create, err := json.Marshal(protocol.CreateLeaseRequest{Platform: "fakedevice", Task: "x",
+		PublicKey: string(ssh.MarshalAuthorizedKey(f.leaseKey().PublicKey())),
+		Tunnels:   []protocol.TunnelRequest{{Name: "a", RoomPort: 7600}, {Name: "b", RoomPort: 7600}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := f.s.send(http.MethodPost, "/v1/leases", f.e.vars["HOSTEL_TOKEN"], strings.NewReader(string(create)), nil); code != 400 {
+		t.Fatalf("create a lease with a duplicate fixed port: HTTP %d, want 400", code)
 	}
 }
 

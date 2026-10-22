@@ -1304,7 +1304,9 @@ handles all tunnels and forwards of the lease.
   the start time too, because PIDs are reused.
 - `job attach <id> --offset N` streams the output from byte `N`. When `exit` exists,
   it sends the rest and a trailer line `\x00hostel-exit <code>`. If the supervisor is
-  dead and `exit` does not exist, the trailer is `\x00hostel-lost`.
+  dead and `exit` does not exist, the trailer is `\x00hostel-lost`. The job output
+  can contain the same bytes, so the guest accepts a trailer only as the last bytes
+  of a stream that the helper ended with exit status 0.
 - `hostel run` and `hostel attach` record in the local state how many output bytes
   they printed, so a later `hostel attach` continues there and does not print the
   same output again. With `--json`, the job output goes to stderr.

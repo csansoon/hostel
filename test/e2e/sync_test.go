@@ -115,7 +115,8 @@ func TestSyncPathSafety(t *testing.T) {
 	}
 }
 
-// TestCopyDiffShell: cp in both directions, diff without changes, and ssh.
+// TestCopyDiffShell: cp in both directions, diff without changes, and ssh (also
+// from a worktree path with a space and a "%").
 func TestCopyDiffShell(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
@@ -145,5 +146,14 @@ func TestCopyDiffShell(t *testing.T) {
 	r = f.e.mustHostel("ssh-config")
 	if !strings.HasSuffix(strings.TrimSpace(r.stdout), "ssh_config") {
 		t.Fatalf("ssh-config: %s", r)
+	}
+
+	// ssh_config paths with a space and a "%" token.
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+	f.e.newRepoNamed("my repo %d", defaultRepoFiles())
+	f.acquire()
+	if r := f.e.mustHostel("ssh", "--", "echo ok"); strings.TrimSpace(r.stdout) != "ok" {
+		t.Fatalf("ssh from a path with a space: %s", r)
 	}
 }
