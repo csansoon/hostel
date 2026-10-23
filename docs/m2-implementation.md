@@ -225,3 +225,9 @@ the MacBook are manual; their results go into this file (section 8).
   Mode for XCTest UI automation. The ExampleApp Mac Catalyst build failed without team
   provisioning profiles. Owner decision: Hostel focuses on iOS for now; macOS
   desktop apps are future work (`requirements.md`, open question 8).
+- 2026-10-23, 10-run gate: the first two attempts failed on short fixed waits in
+  tests under high load (load average up to 65) and showed a real bug: a long
+  poll could outlast a short `poll_timeout`, so the server cancelled a lease that
+  the guest was polling. Fixes: tests wait for lease states with a deadline;
+  the server limits a long poll to half of `poll_timeout`. Then `make
+  test-e2e-10` passed 10 of 10 runs (157–327 s each), on commit aed8c6c.
