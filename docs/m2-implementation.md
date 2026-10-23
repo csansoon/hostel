@@ -220,3 +220,8 @@ the MacBook are manual; their results go into this file (section 8).
   sidebar). With the iPhone run above, item 1 is done.
 - 2026-10-23, memory: the 8 GB MacBook ran the builds, one simulator, and
   agent-device without failures. I did not measure two devices in one lease.
+- 2026-10-23, macOS desktop with agent-device: `open Calculator` worked, but
+  `snapshot` timed out, because macOS asks an administrator to enable Automation
+  Mode for XCTest UI automation. The ExampleApp Mac Catalyst build failed without team
+  provisioning profiles. Owner decision: Hostel focuses on iOS for now; macOS
+  desktop apps are future work (`requirements.md`, open question 8).

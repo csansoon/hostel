@@ -136,7 +136,8 @@ the console after each restart.
    Privacy & Security > Screen & System Audio Recording. Click "+", press
    Cmd-Shift-G, type `/usr/libexec/sshd-keygen-wrapper`, and add it. M2 verified
    this entry on 2026-10-22.
-5. Let UI automation of desktop apps run without a password prompt. `agent-device`
+5. Optional, for future macOS desktop support (not needed for iOS): let UI
+   automation of desktop apps run without a password prompt. `agent-device`
    drives macOS apps with XCTest, and macOS asks for an administrator before it
    allows this (Automation Mode). As an administrator:
 

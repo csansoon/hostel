@@ -38,6 +38,7 @@ All other terms are plain technical words.
 
 | Date | Decision |
 |---|---|
+| 2026-10-23 | Hostel focuses on iOS (simulators) for now. macOS desktop apps (UI control with Automation Mode, Mac Catalyst builds with team signing) are future work. The `macos` platform keeps its desktop screenshot. |
 | 2026-10-23 | Each room gets `agent-device` (Callstack) by default, so that agents can tap, type, and read the screen of simulators, emulators, and desktops on the room. Hostel pins its version (the same as T3 Code). The server option `mise.agent_device = false` turns it off. |
 | 2026-10-22 | The spare MacBook has FileVault off and logs in the `hostel` user automatically, so that it has a desktop session (label `desktop`). It holds no personal data. |
 | 2026-10-22 | In M2, the server runs on the owner's Mac and reaches the MacBook over the local network. |
@@ -238,3 +239,8 @@ experiment.
    `nsc` instance? (M3, M4)
 7. Does the Android emulator run inside a Namespace macOS devbox (virtualization
    inside a virtual machine)? (M4)
+8. Future macOS desktop support: can a provision script set Automation Mode and
+   Screen Recording on a Namespace devbox (passwordless `sudo`, image
+   permissions)? How do on-demand rooms get team signing for Mac Catalyst builds
+   (a shared `.p12` and an App Store Connect API key, given to the room as
+   secrets)? (not planned yet)
