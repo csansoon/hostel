@@ -134,12 +134,24 @@ the console after each restart.
 
 4. Screen Recording permission for screenshots over SSH: System Settings >
    Privacy & Security > Screen & System Audio Recording. Click "+", press
-   Cmd-Shift-G, type `/usr/libexec/sshd-keygen-wrapper`, and add it. M2 verifies
-   that this is the correct entry (design, section 9).
+   Cmd-Shift-G, type `/usr/libexec/sshd-keygen-wrapper`, and add it. M2 verified
+   this entry on 2026-10-22.
+5. Let UI automation of desktop apps run without a password prompt. `agent-device`
+   drives macOS apps with XCTest, and macOS asks for an administrator before it
+   allows this (Automation Mode). As an administrator:
+
+   ```sh
+   sudo automationmodetool enable-automationmode-without-authentication
+   automationmodetool
+   ```
+
+   The second command must not say "requires user authentication". The iOS
+   Simulator does not need this step.
 
 Security note: with FileVault off and automatic login, a person with physical
 access to the room Mac can read its disk and use the `hostel` session. Use this only
-on a spare machine with no personal data.
+on a spare machine with no personal data. Step 5 also lets any process on the room
+Mac control its desktop through UI automation, without a password.
 
 ## 7. Check and send the details
 
