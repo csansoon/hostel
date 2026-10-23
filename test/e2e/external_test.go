@@ -332,11 +332,10 @@ func TestReconcile(t *testing.T) {
 // creation frees its slot without a helper call; the room becomes warm.
 func TestEarlyCancel(t *testing.T) {
 	t.Parallel()
-	f := newExternalFixture(t, "", `warm_running = "10m"`, map[string]string{"FAKE_DELAY": "6s"}, smallMachine)
-	r := f.e.hostel("acquire", "fakedevice", "--task", "cancel early", "--wait", "2s")
-	if r.code != 75 || !strings.Contains(r.stderr, "provisioning") {
-		t.Fatalf("acquire during creation: %s", r)
-	}
+	// The room creation takes 20 s, so the release comes during creation also on
+	// a slow machine.
+	f := newExternalFixture(t, "", `warm_running = "10m"`, map[string]string{"FAKE_DELAY": "20s"}, smallMachine)
+	f.acquireUntil(protocol.LeaseProvisioning)
 	f.e.mustHostel("release")
 	f.e.waitFor("warm room", 2*time.Minute, func() bool {
 		rooms := f.cloudRooms()

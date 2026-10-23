@@ -29,7 +29,8 @@ func TestJobs(t *testing.T) {
 
 	// run --wait ends before the job: exit code 75 and the attach line; a later
 	// attach continues from the offset.
-	r := f.e.hostel("run", "--wait", "2s", "--", "echo first; sleep 4; echo second")
+	// The job runs 20 s, a wide margin for the two short waits below.
+	r := f.e.hostel("run", "--wait", "2s", "--", "echo first; sleep 20; echo second")
 	if r.code != 75 || r.stdout != "first\n" || !strings.Contains(r.stderr, "is still running; run \"hostel attach") {
 		t.Fatalf("run with a short wait: %s", r)
 	}

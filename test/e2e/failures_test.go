@@ -85,9 +85,7 @@ func TestStaticOffline(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.marker("slow-prepare", true)
-	if r := f.e.hostel("acquire", "fakedevice", "--task", "offline", "--wait", "3s"); r.code != 75 || !strings.Contains(r.stderr, "preparing") {
-		t.Fatalf("acquire with a slow prepare: %s", r)
-	}
+	f.acquireUntil(protocol.LeasePreparing)
 	f.c.stop()
 	f.e.waitFor("room unreachable", time.Minute, func() bool {
 		room := f.s.room("home/box")
@@ -125,9 +123,7 @@ func TestRestart(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, nil)
 		f.marker("slow-prepare", true)
-		if r := f.e.hostel("acquire", "fakedevice", "--task", "x", "--wait", "3s"); r.code != 75 || !strings.Contains(r.stderr, "preparing") {
-			t.Fatalf("acquire: %s", r)
-		}
+		f.acquireUntil(protocol.LeasePreparing)
 		f.s.kill()
 		f.marker("slow-prepare", false)
 		f.s = f.s.restart()
@@ -153,10 +149,8 @@ func TestRestart(t *testing.T) {
 	})
 	t.Run("provisioning during the provider call", func(t *testing.T) {
 		t.Parallel()
-		f := newExternalFixture(t, "", "", map[string]string{"FAKE_DELAY": "8s"}, smallMachine)
-		if r := f.e.hostel("acquire", "fakedevice", "--task", "x", "--wait", "2s"); r.code != 75 || !strings.Contains(r.stderr, "provisioning") {
-			t.Fatalf("acquire: %s", r)
-		}
+		f := newExternalFixture(t, "", "", map[string]string{"FAKE_DELAY": "20s"}, smallMachine)
+		f.acquireUntil(protocol.LeaseProvisioning)
 		f.s = f.s.restartAfterKill()
 		f.acquire()
 		if rooms := f.e.fakeRooms(); len(rooms) != 1 {

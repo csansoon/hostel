@@ -39,6 +39,19 @@ func (f *fixture) queued(args ...string) string {
 	return createdID(f.e.t, r)
 }
 
+// acquireUntil starts an acquire that does not finish (exit code 75) and waits
+// until the lease is in state.
+func (f *fixture) acquireUntil(state string) string {
+	f.e.t.Helper()
+	r := f.e.hostel("acquire", "fakedevice", "--task", "until "+state, "--wait", "1s")
+	if r.code != 75 {
+		f.e.t.Fatalf("acquire: %s", r)
+	}
+	id := createdID(f.e.t, r)
+	f.e.waitFor("lease "+state, time.Minute, func() bool { return f.lease(id).State == state })
+	return id
+}
+
 func (f *fixture) lease(id string) protocol.Lease {
 	f.e.t.Helper()
 	var l protocol.Lease
