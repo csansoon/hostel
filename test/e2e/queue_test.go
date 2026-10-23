@@ -69,7 +69,7 @@ func TestTwoGuestsOneSlot(t *testing.T) {
 	f := newFixture(t, nil)
 	f.acquire()
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
-	r := f.e.hostel("acquire", "fakedevice", "--task", "second", "--wait", "2s")
+	r := f.e.hostel("acquire", "fakedevice", "--task", "second", "--wait", "5s")
 	if r.code != 75 || !strings.Contains(r.stderr, "queued, position 1 (no free slot)") {
 		t.Fatalf("second guest: %s", r)
 	}

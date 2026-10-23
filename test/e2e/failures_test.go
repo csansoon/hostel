@@ -171,7 +171,7 @@ func TestRestartQueue(t *testing.T) {
 	down := time.Now()
 	f.e.waitFor("server down longer than poll_timeout", time.Minute, func() bool { return time.Since(down) > 5*time.Second })
 	f.s = f.s.restart()
-	r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "1s")
+	r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "5s")
 	if r.code != 75 || !strings.Contains(r.stderr, "lease "+id+" queued") {
 		t.Fatalf("the queued lease after the restart: %s", r)
 	}
