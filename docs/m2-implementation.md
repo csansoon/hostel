@@ -214,3 +214,9 @@ the MacBook are manual; their results go into this file (section 8).
   sessions (design, section 17). `TestCleanup` has a daemon that starts a child
   in a new session; it fails on the old code (1 process stays) and passes now.
   On the room, two leases with `agent-device` left 0 processes.
+- 2026-10-23, acceptance item 1 on `ipad-pro-13`: the build took 54–65 s (the
+  DerivedData of the iPhone builds was reused), and the app signed in as
+  `user@dev.local` through the tunnel (agent-device read the account in the
+  sidebar). With the iPhone run above, item 1 is done.
+- 2026-10-23, memory: the 8 GB MacBook ran the builds, one simulator, and
+  agent-device without failures. I did not measure two devices in one lease.
