@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var jobIDRE = regexp.MustCompile(`job (j-[0-9]+-[0-9a-f]+)`)
@@ -98,14 +99,15 @@ func TestCleanup(t *testing.T) {
 	// their session: one from a job, one from a guest SSH command.
 	f.e.mustHostel("run", "--", "nohup env -u HOSTEL_LEASE sleep 1001 > /dev/null 2>&1 < /dev/null &")
 	f.e.mustHostel("ssh", "--", "env -u HOSTEL_LEASE sleep 1002 > /dev/null 2>&1 < /dev/null &")
+	// A daemon that starts a child in a new session (as agent-device does with
+	// its iOS runner): cleanup finds the child as a descendant of the daemon.
+	f.e.mustHostel("run", "--", "nohup env -u HOSTEL_LEASE sh -c 'setsid sleep 1003 & wait' > /dev/null 2>&1 < /dev/null &")
 	f.e.mustHostel("run", "--", "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuestAddedKeyGuestAddedKeyGuestAddedK guest' >> ~/.ssh/authorized_keys")
 	if got := f.c.sh("grep -c guest /home/hostel/.ssh/authorized_keys"); got != "1" {
 		t.Fatalf("the guest key was not added: %s", got)
 	}
-	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c -e '^sleep 100[012]' -e '^nc -l' || true"
-	if got := f.c.sh(procs); got != "4" {
-		t.Fatalf("lease processes before release: %s", got)
-	}
+	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c -e '^sleep 100[0-3]' -e '^nc -l' || true"
+	f.e.waitFor("5 lease processes before release", time.Minute, func() bool { return f.c.sh(procs) == "5" })
 	f.e.mustHostel("release")
 	f.waitSlotFree()
 	if got := f.c.sh(procs); got != "0" {

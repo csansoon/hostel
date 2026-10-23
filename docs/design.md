@@ -743,7 +743,7 @@ Server-level keys and defaults:
 | `idle_timeout`, `aging`, `poll_timeout`, `limit_retry` | `10m`, `10m`, `5m`, `2m` |
 | `port_process_offline` | `10m` (section 14) |
 | `intervals` | `{ scheduler = "10s", reconcile = "5m", tunnel_check = "30s" }` (short values in tests) |
-| `[mise]` | `idiomatic_tools = ["node", "python"]`; `github_token` unset |
+| `[mise]` | `idiomatic_tools = ["node", "python"]`; `github_token` unset; `agent_device = true` |
 
 Provider and machine keys. A machine inherits only these provider keys: `tools`,
 `env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`. `max_rooms` is
@@ -882,6 +882,18 @@ and Hostel does not use another mise that the room has.
 - **Sync.** `hostel sync` without `--setup` runs `mise install` again only when a
   mise configuration file changed.
 - **Opt-out.** `mise = false` in `hostel.toml` skips the repository-level steps.
+- **agent-device.** Each room gets [agent-device](https://github.com/callstack/agent-device)
+  (owner decision, 2026-10-23): agents use it to tap, type, and read the UI of
+  devices on the room. Hostel pins its version and the Node version that runs it
+  (`internal/config/agentdevice.go`; T3 Code pins the same version). At
+  provisioning, `mise-install` installs both and writes `hostel/bin/agent-device`
+  (`agent-device.cmd` on Windows), which runs `mise exec node@<pin>
+  npm:agent-device@<pin> -- agent-device`. The job `PATH` therefore gets no Node, and
+  a repository's Node pin does not change it. Jobs and shells get
+  `AGENT_DEVICE_STATE_DIR=slots/<slot>/agent-device`: each slot has its own daemon
+  and sessions, and cleanup deletes them with the slot. The iOS runner build stays
+  in `~/.agent-device/apple-runner` and is reused by later leases. The server
+  option `mise.agent_device = false` turns it off.
 
 ### Guest (`~/.config/hostel/config.toml`)
 
@@ -940,8 +952,9 @@ source overrides an earlier one):
 5. `lease.env`: the repository platform `env` after placeholder substitution by
    the guest, plus `HOSTEL_TUNNEL_<NAME>_PORT` for each tunnel;
 6. `HOSTEL_LEASE`, `HOSTEL_PLATFORM`, `HOSTEL_DEVICES`, `HOSTEL_SLOT`,
-   `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_ROOM_OS`, `HOSTEL_ROOM_ARCH`. The
-   helper reads the lease data from `slots/<slot>/lease.json`.
+   `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_ROOM_OS`, `HOSTEL_ROOM_ARCH`, and
+   `AGENT_DEVICE_STATE_DIR` (section 9, "mise on rooms"). The helper reads the lease
+   data from `slots/<slot>/lease.json`.
 
 `{tunnels.<name>.port}` is the room port of the tunnel (section 14). Tunnels without
 a fixed `room_port` get ports from the slot's pool in name order.
@@ -1357,9 +1370,14 @@ failed; the result lists each step.
    each job supervisor has its own session (`supervisor.json`). A process started
    with `&` or `nohup` stays in that session. A session ID is not reused while a
    process is in the session; when the leader runs with another start time, the
-   number belongs to a new session, and cleanup ignores it. Only a process that
-   starts a new session (`setsid`) and hides its environment escapes both checks.
-   Send SIGTERM, wait 10 seconds, then SIGKILL.
+   number belongs to a new session, and cleanup ignores it. Each scan also takes
+   all descendants of these processes (by parent PID), also in other sessions, and
+   records their sessions in `slots/<slot>/sessions`: on macOS 26.6 the iOS runner
+   of `agent-device` is an `xcodebuild` in a new session, without a visible
+   environment; after its parent ends, its parent is PID 1, and later scans find it
+   only by its session (found in M2, 2026-10-23). Only a process that starts a new
+   session and hides its environment, and whose parent ended before cleanup,
+   escapes. Send SIGTERM, wait 10 seconds, then SIGKILL.
 2. Run the `reset` script of the lease's platform. If `slots/<slot>/` does not exist
    (a repeated cleanup after step 5), the helper creates it empty first; `reset` must
    then do nothing.

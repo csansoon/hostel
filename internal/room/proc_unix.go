@@ -54,17 +54,42 @@ func sessionProcesses(sids map[int]bool) ([]int, error) {
 	if len(sids) == 0 {
 		return nil, nil
 	}
-	pids, err := userPIDs()
+	parents, err := userParents()
 	if err != nil {
 		return nil, err
 	}
 	var out []int
-	for _, pid := range pids {
+	for pid := range parents {
 		if pid == os.Getpid() {
 			continue
 		}
 		if sid, err := processSession(pid); err == nil && sids[sid] {
 			out = append(out, pid)
+		}
+	}
+	return out, nil
+}
+
+// descendants returns the room user's processes below one of pids, also in
+// other sessions.
+func descendants(pids []int) ([]int, error) {
+	parents, err := userParents()
+	if err != nil {
+		return nil, err
+	}
+	in := map[int]bool{}
+	for _, p := range pids {
+		in[p] = true
+	}
+	var out []int
+	for changed := true; changed; {
+		changed = false
+		for pid, ppid := range parents {
+			if in[ppid] && !in[pid] && pid != os.Getpid() {
+				in[pid] = true
+				out = append(out, pid)
+				changed = true
+			}
 		}
 	}
 	return out, nil

@@ -63,6 +63,7 @@ type Intervals struct {
 type Mise struct {
 	IdiomaticTools []string `toml:"idiomatic_tools"`
 	GithubToken    string   `toml:"github_token,omitempty"`
+	AgentDevice    *bool    `toml:"agent_device,omitempty"`
 }
 
 type Provider struct {

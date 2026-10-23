@@ -183,3 +183,34 @@ the MacBook are manual; their results go into this file (section 8).
 - 2026-10-22, simulator window (check 5): `simctl boot` does not open the
   Simulator app. `open -a Simulator` from a lease job shows the booted lease
   device on the desktop. The device screenshot (`simctl io`) works without it.
+- 2026-10-22, ExampleApp on the room (check 3): `tuist install` and `tuist generate`
+  work in `work/` without `.git` (71 s, the first time). The setup first failed
+  with `tuist: command not found`: the job `PATH` comes from `mise env` at the
+  job start, before the setup's `mise install`. Fix: the setup adds
+  `mise bin-paths` to `PATH` after `mise install` (design, section 10);
+  `TestMise` has a setup that uses a tool from the same setup. The first
+  `xcodebuild` (Debug, simulator) took 2 min 45 s; the build in the next lease
+  took 47 s (DerivedData reused, the same `work` path). The app is signed ad hoc
+  with the simulator entitlements (`keychain-access-groups` included), without
+  an Apple account. The first `mise install` of ExampleApp's tools took 225 s on the
+  room's network (Java, 200 MB, at about 50 kB/s); they are cached for later
+  leases.
+- 2026-10-22, acceptance item 2: a second lease was ready in 47 s, and ExampleApp was
+  not installed on its simulator.
+- 2026-10-22, tunnel: from the room, `localhost:7500` reaches the owner's local
+  ExampleApp API; `POST /auth/magic-link` returns 200. ExampleApp's debug build signs in by
+  itself as `user@dev.local` against a localhost API, and that account was then
+  in the worktree's own database (only reachable through the tunnel).
+- 2026-10-23, UI input: T3 Code drives simulators with `agent-device`
+  (Callstack, npm, 0.21.25). Owner decision: each room gets it by default
+  (design, section 9, "mise on rooms"). Over SSH on the room it works: the first
+  `open` built its XCTest runner and took 39 s; later leases took 17–19 s
+  (runner cache). `click` and `fill` work (ExampleApp's notification sheet, the
+  sidebar, text in the chat field).
+- 2026-10-23, cleanup with agent-device: its iOS runner (`xcodebuild
+  test-without-building`) runs in a new session without a visible environment,
+  and it survived cleanup until its simulator was gone (about 2.5 min). Fix:
+  cleanup also takes the descendants of lease processes and records their
+  sessions (design, section 17). `TestCleanup` has a daemon that starts a child
+  in a new session; it fails on the old code (1 process stays) and passes now.
+  On the room, two leases with `agent-device` left 0 processes.

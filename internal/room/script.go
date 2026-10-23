@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -222,11 +223,12 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) String() string { return string(t.b) }
 
-// miseInstall installs the machine-level tools of hostel/mise/config.toml
-// (server only): mise-install, with {"timeout_seconds"} on stdin.
+// miseInstall installs the machine-level tools of hostel/mise/config.toml and,
+// with agent_device, agent-device and its Node (server only): mise-install, with
+// a MiseInstallRequest on stdin.
 func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error) {
 	var resp protocol.RunScriptResponse
-	var req protocol.RunScriptRequest
+	var req protocol.MiseInstallRequest
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
 	}
@@ -240,20 +242,55 @@ func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, h.misePath(), "install")
-	cmd.Dir, cmd.Env = h.root, env
-	var out tailBuffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	err = cmd.Run()
-	resp.OutputTail = out.String()
-	var exitErr *exec.ExitError
-	switch {
-	case ctx.Err() != nil:
-		resp.TimedOut, resp.ExitCode = true, -1
-	case errors.As(err, &exitErr):
-		resp.ExitCode = exitErr.ExitCode()
-	case err != nil:
-		return resp, fmt.Errorf("run mise install: %w", err)
+	node := "node@" + config.AgentDeviceNode
+	steps := [][]string{{"install"}}
+	if req.AgentDevice {
+		// The npm backend needs npm on the PATH, so Node comes first.
+		steps = append(steps, []string{"install", node},
+			[]string{"exec", node, "--", h.misePath(), "install", "npm:agent-device@" + config.AgentDeviceVersion})
 	}
-	return resp, nil
+	var out tailBuffer
+	for _, args := range steps {
+		cmd := exec.CommandContext(ctx, h.misePath(), args...)
+		cmd.Dir, cmd.Env = h.root, env
+		cmd.Stdout, cmd.Stderr = &out, &out
+		err = cmd.Run()
+		resp.OutputTail = out.String()
+		var exitErr *exec.ExitError
+		switch {
+		case ctx.Err() != nil:
+			resp.TimedOut, resp.ExitCode = true, -1
+			return resp, nil
+		case errors.As(err, &exitErr):
+			resp.ExitCode = exitErr.ExitCode()
+			return resp, nil
+		case err != nil:
+			return resp, fmt.Errorf("run mise %s: %w", args[0], err)
+		}
+	}
+	return resp, h.writeAgentDevice(req.AgentDevice, node)
+}
+
+// writeAgentDevice writes hostel/bin/agent-device, which runs the pinned
+// agent-device with its pinned Node, or removes it.
+func (h *helper) writeAgentDevice(enabled bool, node string) error {
+	path := filepath.Join(h.root, "bin", "agent-device")
+	mise := "'" + strings.ReplaceAll(h.misePath(), "'", `'\''`) + "'"
+	content := fmt.Sprintf("#!/bin/sh\nexec %s exec %s npm:agent-device@%s -- agent-device \"$@\"\n",
+		mise, node, config.AgentDeviceVersion)
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		content = fmt.Sprintf("@\"%s\" exec %s npm:agent-device@%s -- agent-device %%*\r\n",
+			h.misePath(), node, config.AgentDeviceVersion)
+	}
+	if !enabled {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove the agent-device command: %w", err)
+		}
+		return nil
+	}
+	if err := writeFileAtomic(path, []byte(content), 0o755); err != nil {
+		return fmt.Errorf("write the agent-device command: %w", err)
+	}
+	return nil
 }

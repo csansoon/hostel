@@ -152,9 +152,10 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	}
 	// Machine-level tools, before the platform scripts, so the scripts can use
 	// them. A failure is a room provisioning failure.
-	if len(m.Tools) > 0 {
+	if agentDevice := s.cfg.Mise.AgentDeviceEnabled(); len(m.Tools) > 0 || agentDevice {
 		var resp protocol.RunScriptResponse
-		if err := room.Helper(ctx, []string{"mise-install"}, protocol.RunScriptRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds())}, &resp); err != nil {
+		req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: agentDevice}
+		if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
 			return err
 		}
 		if resp.TimedOut || resp.ExitCode != 0 {

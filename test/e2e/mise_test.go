@@ -32,7 +32,7 @@ func TestMise(t *testing.T) {
 	if got, _ := docker("run", "--rm", "--label", dockerLabel+"="+e.runID, "--entrypoint", "sh", roomImage, "-c", "command -v mise || echo none"); got != "none" {
 		t.Fatalf("the room image has mise: %q", got)
 	}
-	f := newFixtureWithEnv(t, e, &fixtureOpts{machineKeys: machineKeys, files: files,
+	f := newFixtureWithEnv(t, e, &fixtureOpts{machineKeys: machineKeys, files: files, agentDevice: !offline,
 		platforms: map[string]map[string]string{"linux": {"health.linux.sh": "#!/bin/sh\njq --version > \"$HOSTEL_CACHE_DIR/jq-from-health\" 2>&1 || true\n"}}})
 	if got := f.c.sh("/home/hostel/hostel/bin/mise --version | cut -d' ' -f1"); got != "2026.10.17" {
 		t.Fatalf("mise on the room: %q", got)
@@ -53,6 +53,10 @@ func TestMise(t *testing.T) {
 	}
 	if got := f.work("cat setup-rg.txt"); !strings.HasPrefix(got, "ripgrep 14.1.1") {
 		t.Fatalf("tool in the setup: %q", got)
+	}
+	// agent-device is on each room, with its own Node; the job PATH has no Node.
+	if r := f.e.mustHostel("run", "--", "agent-device --version; echo $AGENT_DEVICE_STATE_DIR; command -v node || echo no-node"); r.stdout != "0.21.25\n/home/hostel/hostel/slots/a/agent-device\nno-node\n" {
+		t.Fatalf("agent-device in run: %q", r.stdout)
 	}
 	if r := f.e.mustHostel("run", "--", "rg --version | head -1; jq --version"); !strings.HasPrefix(r.stdout, "ripgrep 14.1.1") || !strings.HasSuffix(r.stdout, "jq-1.7.1\n") {
 		t.Fatalf("tools in run: %q", r.stdout)

@@ -46,23 +46,28 @@ func processSession(pid int) (int, error) {
 	return strconv.Atoi(fields[3])
 }
 
-// userPIDs returns the processes of the room user.
-func userPIDs() ([]int, error) {
+// userParents returns the processes of the room user, with their parent PIDs.
+func userParents() (map[int]int, error) {
 	dirs, err := filepath.Glob("/proc/[0-9]*")
 	if err != nil {
 		return nil, err
 	}
-	var pids []int
+	parents := map[int]int{}
 	for _, d := range dirs {
 		pid, err := strconv.Atoi(filepath.Base(d))
 		if err != nil {
 			continue
 		}
-		if fi, err := os.Stat(d); err == nil && int(fi.Sys().(*syscall.Stat_t).Uid) == os.Getuid() {
-			pids = append(pids, pid)
+		if fi, err := os.Stat(d); err != nil || int(fi.Sys().(*syscall.Stat_t).Uid) != os.Getuid() {
+			continue
+		}
+		if fields, err := statFields(pid); err == nil {
+			if ppid, err := strconv.Atoi(fields[1]); err == nil {
+				parents[pid] = ppid
+			}
 		}
 	}
-	return pids, nil
+	return parents, nil
 }
 
 // envProcesses returns the processes of the room user whose environment has

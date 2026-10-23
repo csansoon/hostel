@@ -15,17 +15,23 @@ import (
 // command that started it, also when its environment is hidden (macOS) or
 // changed. Each guest command and each job supervisor has its own session; the
 // helper records the guest command sessions in slots/<slot>/sessions as
-// "<sid> <start time of the session leader>".
+// "<sid> <start time of the session leader>". A process that starts a new
+// session (for example the iOS runner of agent-device) is found as a
+// descendant while its parent runs; its session is then recorded too, so later
+// scans find it after its parent ended.
 
 func (h *helper) recordSession(slot string) error {
 	sid, err := currentSession()
 	if err != nil {
 		return nil // no sessions on this OS
 	}
-	start, err := processStart(sid)
-	if err != nil {
-		return fmt.Errorf("record the session: %w", err)
-	}
+	return h.addSession(slot, sid)
+}
+
+// addSession records a session. When its leader has ended, the start time is
+// empty: a later process with that PID is a different leader.
+func (h *helper) addSession(slot string, sid int) error {
+	start, _ := processStart(sid)
 	f, err := os.OpenFile(filepath.Join(h.slotDir(slot), "sessions"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("record the session: %w", err)
@@ -74,13 +80,27 @@ func (h *helper) leaseProcesses(slot, leaseID string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	more, err := sessionProcesses(h.leaseSessions(slot))
+	sids := h.leaseSessions(slot)
+	more, err := sessionProcesses(sids)
 	if err != nil {
 		return nil, err
 	}
 	for _, p := range more {
 		if !slices.Contains(pids, p) {
 			pids = append(pids, p)
+		}
+	}
+	below, err := descendants(pids)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range below {
+		pids = append(pids, p)
+		if sid, err := processSession(p); err == nil && !sids[sid] {
+			sids[sid] = true
+			if err := h.addSession(slot, sid); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return pids, nil

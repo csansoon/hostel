@@ -204,12 +204,16 @@ func (e *env) writeFile(path, body string) {
 
 // serverHeader returns the server.toml keys that every test uses: a unique
 // server_id and random free ports on 127.0.0.1.
-func serverHeader() string {
+// serverHeader is the top of a test server.toml. Rooms get no agent-device
+// (a download), except in TestMise.
+func serverHeader() string { return serverHeaderWith(false) }
+
+func serverHeaderWith(agentDevice bool) string {
 	b := make([]byte, 6)
 	rand.Read(b)
 	id := fmt.Sprintf("e2e%x", b)
 	return fmt.Sprintf("server_id = %q\nlisten = \"127.0.0.1:0\"\ngateway_listen = \"127.0.0.1:0\"\nhelper_dir = %q\n"+
-		"intervals = { scheduler = \"1s\", reconcile = \"2s\", tunnel_check = \"1s\" }\n", id, helperDir)
+		"intervals = { scheduler = \"1s\", reconcile = \"2s\", tunnel_check = \"1s\" }\nmise = { agent_device = %t }\n", id, helperDir, agentDevice)
 }
 
 type serverProc struct {

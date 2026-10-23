@@ -16,3 +16,5 @@ func processStart(pid int) (string, error)         { return "", errWindows }
 func envProcesses(string) ([]int, error)           { return nil, errWindows }
 func currentSession() (int, error)                 { return 0, errWindows }
 func sessionProcesses(map[int]bool) ([]int, error) { return nil, nil }
+func processSession(int) (int, error)              { return 0, errWindows }
+func descendants([]int) ([]int, error)             { return nil, nil }

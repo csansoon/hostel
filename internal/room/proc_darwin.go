@@ -33,19 +33,25 @@ func processStart(pid int) (string, error) {
 
 func processSession(pid int) (int, error) { return syscall.Getsid(pid) }
 
-// userPIDs returns the processes of the room user.
-func userPIDs() ([]int, error) {
-	out, err := psOutput("-U", strconv.Itoa(os.Getuid()), "-o", "pid=")
+// userParents returns the processes of the room user, with their parent PIDs.
+func userParents() (map[int]int, error) {
+	out, err := psOutput("-U", strconv.Itoa(os.Getuid()), "-o", "pid=,ppid=")
 	if err != nil {
 		return nil, err
 	}
-	var pids []int
-	for _, f := range strings.Fields(out) {
-		if pid, err := strconv.Atoi(f); err == nil {
-			pids = append(pids, pid)
+	parents := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		ppid, err2 := strconv.Atoi(f[1])
+		if err1 == nil && err2 == nil {
+			parents[pid] = ppid
 		}
 	}
-	return pids, nil
+	return parents, nil
 }
 
 // envProcesses returns the processes of the room user whose environment has
