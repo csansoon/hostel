@@ -238,7 +238,9 @@ func (s *Server) handleGetLease(w http.ResponseWriter, r *http.Request) {
 	}
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	wait, _ := time.ParseDuration(r.URL.Query().Get("wait"))
-	wait = min(wait, maxWait)
+	// last_poll_at is set at the start of the poll, so a poll must end before
+	// poll_timeout; the guest then polls again.
+	wait = min(wait, maxWait, s.cfg.PollTimeout.D()/2)
 	// Only the owner's polls keep a queued lease alive; an admin can look
 	// without that effect.
 	if requestToken(r).ID == l.TokenID {

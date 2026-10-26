@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -30,10 +31,51 @@ func processStart(pid int) (string, error) {
 	return s, nil
 }
 
-// leaseProcesses returns the processes of the room user whose environment has
-// HOSTEL_LEASE=<id>. "ps -E" shows the environment of the user's own processes
-// (verify on each macOS version; design, section 17).
-func leaseProcesses(leaseID string) ([]int, error) {
+// processStarts returns the start times of the running processes. A PID that
+// is not in the map has no process.
+func processStarts([]int) (map[int]string, error) {
+	out, err := psOutput("-A", "-o", "pid=,lstart=")
+	if err != nil {
+		return nil, err
+	}
+	starts := map[int]string{}
+	for _, line := range strings.Split(out, "\n") {
+		pidText, start, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if pid, err := strconv.Atoi(pidText); ok && err == nil {
+			starts[pid] = strings.TrimSpace(start)
+		}
+	}
+	return starts, nil
+}
+
+func processSession(pid int) (int, error) { return syscall.Getsid(pid) }
+
+// userParents returns the processes of the room user, with their parent PIDs.
+func userParents() (map[int]int, error) {
+	out, err := psOutput("-U", strconv.Itoa(os.Getuid()), "-o", "pid=,ppid=")
+	if err != nil {
+		return nil, err
+	}
+	parents := map[int]int{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		ppid, err2 := strconv.Atoi(f[1])
+		if err1 == nil && err2 == nil {
+			parents[pid] = ppid
+		}
+	}
+	return parents, nil
+}
+
+// envProcesses returns the processes of the room user whose environment has
+// HOSTEL_LEASE=<id>. "ps -E" does not show the environment of Apple's own
+// binaries (for example sh and sleep; macOS 27.2), so cleanup also finds
+// processes by their session (design, section 17).
+func envProcesses(leaseID string) ([]int, error) {
 	out, err := psOutput("-E", "-ww", "-U", strconv.Itoa(os.Getuid()), "-o", "pid=,command=")
 	if err != nil {
 		return nil, err

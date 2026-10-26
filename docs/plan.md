@@ -211,7 +211,8 @@ Build:
 - `namespace` provider with `devbox` machines: provision, list (by name prefix),
   access, stop, resume, destroy, limit errors.
 - The `macos` desktop screenshot on a devbox (`screencapture` or
-  `devbox desktop screenshot`).
+  `devbox desktop screenshot`). Desktop UI control and Mac Catalyst builds are
+  future work (owner decision, 2026-10-23).
 - Warm policy, deadlines, reconcile against the real account.
 - Opt-in smoke test (`HOSTEL_SMOKE_NAMESPACE=1`).
 

@@ -33,6 +33,7 @@ type fixtureOpts struct {
 	serverKeys  string
 	machineKeys string
 	files       map[string]string
+	agentDevice bool
 	// platforms are extra platform files: platform → file → content.
 	platforms map[string]map[string]string
 }
@@ -65,7 +66,7 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	for name, files := range opts.platforms {
 		e.writePlatform(name, files)
 	}
-	e.writeConfig(serverHeader() + opts.serverKeys + fmt.Sprintf(`
+	e.writeConfig(serverHeaderWith(opts.agentDevice) + opts.serverKeys + fmt.Sprintf(`
 [providers.home]
 kind = "static"
 

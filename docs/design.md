@@ -640,7 +640,7 @@ can only have scripts for its own OS. Steps:
 | `provision` | once for each room and platform, and again when the platform scripts change | check Xcode; create one golden simulator for each device in `devices` |
 | `prepare` | each lease, before `ready` | clone the golden simulator of each requested device; boot it; write device facts to `device.env` |
 | `screenshot` | `hostel screenshot`; `$1` is the output path, `$2` the device (default: the first) | `xcrun simctl io "$udid" screenshot "$1"` |
-| `reset` | cleanup | shut down and delete the lease's simulator clones |
+| `reset` | cleanup | stop the processes that use the slot's simulator clones (by UDID), then shut down and delete the clones |
 | `health` | after cleanup, at `repair`, and before a warm room takes a lease | Xcode works; enough free disk |
 
 Contract:
@@ -661,7 +661,12 @@ Contract:
   `reset` can shut them down cleanly.
 - **Device facts.** `prepare` writes them to `device.env`. Each platform documents
   its variable names. The `ios` scripts write `SIMULATOR_UDID` (first device) and
-  `SIMULATOR_UDIDS` (all, comma-separated). The `android` scripts write
+  `SIMULATOR_UDIDS` (all, comma-separated). The `ios` scripts (`platforms/ios`)
+  act only on simulators with the name prefix `hostel-`: the golden simulators
+  `hostel-golden-<device>-<iOS version>` (from `provision`) and the lease's
+  simulators `hostel-<slot>-<device>`. The machine `env` value `HOSTEL_IOS_RUNTIME`
+  (for example `26.5`) selects the runtime; the default is the newest iOS runtime.
+  The `android` scripts write
   `ANDROID_SERIAL` and `ANDROID_SERIALS`.
 - Before a platform `provision` script, the server runs `mise install` for the
   machine-level tools (helper `mise-install`, at each room provisioning), so
@@ -738,7 +743,7 @@ Server-level keys and defaults:
 | `idle_timeout`, `aging`, `poll_timeout`, `limit_retry` | `10m`, `10m`, `5m`, `2m` |
 | `port_process_offline` | `10m` (section 14) |
 | `intervals` | `{ scheduler = "10s", reconcile = "5m", tunnel_check = "30s" }` (short values in tests) |
-| `[mise]` | `idiomatic_tools = ["node", "python"]`; `github_token` unset |
+| `[mise]` | `idiomatic_tools = ["node", "python"]` (also when `[mise]` sets only other keys; `[]` turns idiomatic files off); `github_token` unset; `agent_device = true` |
 
 Provider and machine keys. A machine inherits only these provider keys: `tools`,
 `env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`. `max_rooms` is
@@ -809,8 +814,10 @@ env = { EXAMPLEAPP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
   are merged. `--device` replaces `devices`.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
   Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows):
-  the setup job is `mise install && (command 1) && (command 2)`.
-  The first failure stops the job.
+  the setup job is `mise install && PATH="$(mise bin-paths | tr '\n' ':')$PATH" &&
+  (command 1) && (command 2)`. The `PATH` step is necessary because the job
+  environment comes from `mise env` at the job start, before this `mise install`
+  (found in M2). The first failure stops the job.
 - `hostel admin config check --repo hostel.toml` validates a repository file.
 
 **Caches.** mise installs, package stores, DerivedData, and Gradle caches are outside
@@ -875,6 +882,18 @@ and Hostel does not use another mise that the room has.
 - **Sync.** `hostel sync` without `--setup` runs `mise install` again only when a
   mise configuration file changed.
 - **Opt-out.** `mise = false` in `hostel.toml` skips the repository-level steps.
+- **agent-device.** Each room gets [agent-device](https://github.com/callstack/agent-device)
+  (owner decision, 2026-10-23): agents use it to tap, type, and read the UI of
+  devices on the room. Hostel pins its version and the Node version that runs it
+  (`internal/config/agentdevice.go`; T3 Code pins the same version). At
+  provisioning, `mise-install` installs both and writes `hostel/bin/agent-device`
+  (`agent-device.cmd` on Windows), which runs `mise exec node@<pin>
+  npm:agent-device@<pin> -- agent-device`. The job `PATH` therefore gets no Node, and
+  a repository's Node pin does not change it. Jobs and shells get
+  `AGENT_DEVICE_STATE_DIR=slots/<slot>/agent-device`: each slot has its own daemon
+  and sessions, and cleanup deletes them with the slot. The iOS runner build stays
+  in `~/.agent-device/apple-runner` and is reused by later leases. The server
+  option `mise.agent_device = false` turns it off.
 
 ### Guest (`~/.config/hostel/config.toml`)
 
@@ -933,8 +952,9 @@ source overrides an earlier one):
 5. `lease.env`: the repository platform `env` after placeholder substitution by
    the guest, plus `HOSTEL_TUNNEL_<NAME>_PORT` for each tunnel;
 6. `HOSTEL_LEASE`, `HOSTEL_PLATFORM`, `HOSTEL_DEVICES`, `HOSTEL_SLOT`,
-   `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_ROOM_OS`, `HOSTEL_ROOM_ARCH`. The
-   helper reads the lease data from `slots/<slot>/lease.json`.
+   `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_ROOM_OS`, `HOSTEL_ROOM_ARCH`, and
+   `AGENT_DEVICE_STATE_DIR` (section 9, "mise on rooms"). The helper reads the lease
+   data from `slots/<slot>/lease.json`.
 
 `{tunnels.<name>.port}` is the room port of the tunnel (section 14). Tunnels without
 a fixed `room_port` get ports from the slot's pool in name order.
@@ -1016,7 +1036,7 @@ everything. Any token can read `status` and `platforms`.
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
 | `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait. |
 | `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
-| `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait`. Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). |
+| `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait` (at most 60 s and half of `poll_timeout`, so the guest polls again before the timeout). Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). |
 | `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
 | `POST /v1/leases/{id}/release` | Releases or cancels. |
@@ -1340,16 +1360,34 @@ The gateway has already closed the lease's connections (section 13). The helper
 failed; the result lists each step.
 
 1. Stop all processes of the lease: job process groups from `supervisor.json`, and
-   all processes of the room user whose environment contains
-   `HOSTEL_LEASE=<lease id>` (macOS: `ps -E`, Linux: `/proc/<pid>/environ`).
-   Processes that detach from their group (Gradle daemon, `nohup`) still have this
-   variable. Send SIGTERM, wait 10 seconds, then SIGKILL. Verify in M2 that `ps -E`
-   shows the environment of the user's own processes on the room's macOS version.
+   all processes of the room user that either have `HOSTEL_LEASE=<lease id>` in
+   their environment (macOS: `ps -E`, Linux: `/proc/<pid>/environ`) or are in a
+   session of the lease. Processes that detach from their group (Gradle daemon,
+   `nohup`) still have this variable. On macOS 27.2, `ps -E` does not show the
+   environment of Apple's own binaries (for example `sh` and `sleep`; checked on
+   2026-10-22), so the sessions are necessary: `exec` and `shell` record their
+   session ID and the start time of its leader in `slots/<slot>/sessions`, and
+   each job supervisor has its own session (`supervisor.json`). A process started
+   with `&` or `nohup` stays in that session. A session ID is not reused while a
+   process is in the session; when the leader runs with another start time, the
+   number belongs to a new session, and cleanup ignores it. One `ps` call per
+   scan reads the start times; if it fails, the scan fails (it does not guess
+   that a leader ended). Each scan also takes
+   all descendants of these processes (by parent PID), also in other sessions, and
+   records their sessions in `slots/<slot>/sessions`: on macOS 26.6 the iOS runner
+   of `agent-device` is an `xcodebuild` in a new session, without a visible
+   environment; after its parent ends, its parent is PID 1, and later scans find it
+   only by its session (found in M2, 2026-10-23). A scan also runs at the start of
+   each guest command and each job. Only a process that starts a new session and
+   hides its environment, and whose parent ended before the next guest command or
+   cleanup, escapes; the `ios` reset also stops the processes whose command line
+   has the UDID of a slot simulator (the `agent-device` runner has it). Send
+   SIGTERM, wait 10 seconds, then SIGKILL.
 2. Run the `reset` script of the lease's platform. If `slots/<slot>/` does not exist
    (a repeated cleanup after step 5), the helper creates it empty first; `reset` must
    then do nothing.
 3. Restore `authorized_keys` from `authorized_keys.base`.
-4. Check that no process with `HOSTEL_LEASE=<lease id>` remains, and that the slot
+4. Check that no process of the lease (step 1) remains, and that the slot
    ports and the lease's fixed room ports (`ports` in the input) are free: try to
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the room has no IPv6
    loopback address), and retry for up to 10 seconds, because

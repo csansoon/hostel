@@ -33,6 +33,7 @@ mise-linux:
 lint:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) vet -tags e2e ./...
+	shellcheck platforms/*/*.sh test/platforms/*/*.sh
 
 test-unit:
 	$(GO) test ./...

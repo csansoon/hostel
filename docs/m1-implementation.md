@@ -1,6 +1,6 @@
 # M1 implementation plan
 
-Status: implemented, 2026-10-21; in review in PR #1. Milestone M1 in `plan.md`: the full lease flow on
+Status: done; PR #1 merged on 2026-10-22. Milestone M1 in `plan.md`: the full lease flow on
 Linux rooms in Docker, with no cloud. This file gives the build order, the package
 contents, the technical decisions inside the design, and the risks. `design.md`
 stays the contract. When this plan adds a detail to the contract, the same commit
@@ -137,7 +137,7 @@ the hidden `job supervise`. Details:
   process group. `supervisor.json` records the PIDs and the start times (Linux:
   field 22 of `/proc/<pid>/stat`; macOS: `ps -o lstart=`).
 - **Cleanup step 1.** Linux: read `/proc/<pid>/environ` of the processes of the
-  room user. macOS: `ps -E` (verified in M2). SIGTERM, wait up to 10 seconds,
+  room user. macOS: `ps -E` and the lease sessions (M2). SIGTERM, wait up to 10 seconds,
   SIGKILL.
 - **Sync.** `internal/syncfs` has the manifest, the plan, and the path-safe
   writes. Unit tests are allowed for the plan (`AGENTS.md`).

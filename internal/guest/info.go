@@ -91,6 +91,21 @@ Exit codes of run and attach
                                     Do NOT run "hostel run" again: that starts
                                     a second job.
 
+Devices and the local API
+  Commands get the device facts in their environment. iOS: SIMULATOR_UDID (the
+  first device) and SIMULATOR_UDIDS. Each lease gets new, clean simulators:
+    xcodebuild ... -destination "id=$SIMULATOR_UDID" build
+    xcrun simctl install "$SIMULATOR_UDID" <path to the .app>
+    xcrun simctl launch "$SIMULATOR_UDID" <bundle id>
+  To tap, type, and read the screen, use agent-device on the room. Open the
+  app on the lease device once; later commands use that session:
+    hostel run -- 'agent-device open <bundle id> --platform ios --udid "$SIMULATOR_UDID" --foreground'
+    hostel run -- 'agent-device click "label=\"Sign in\"" --settle'
+    hostel run -- 'agent-device fill "role=text-field" "me@example.com" --settle'
+  "hostel run -- agent-device help" lists all commands.
+  Tunnels in hostel.toml make your local servers reachable on the room at
+  localhost:$HOSTEL_TUNNEL_<NAME>_PORT.
+
 End
   hostel release                when you are done. A lease also ends after
                                 10 minutes without a hostel command.

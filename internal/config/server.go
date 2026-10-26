@@ -63,6 +63,7 @@ type Intervals struct {
 type Mise struct {
 	IdiomaticTools []string `toml:"idiomatic_tools"`
 	GithubToken    string   `toml:"github_token,omitempty"`
+	AgentDevice    *bool    `toml:"agent_device,omitempty"`
 }
 
 type Provider struct {
@@ -252,7 +253,11 @@ func (s *Server) resolve() error {
 		}
 	}
 	if s.Mise == nil {
-		s.Mise = &Mise{IdiomaticTools: []string{"node", "python"}}
+		s.Mise = &Mise{}
+	}
+	// Omitted gets the default; an empty list turns idiomatic files off.
+	if s.Mise.IdiomaticTools == nil {
+		s.Mise.IdiomaticTools = []string{"node", "python"}
 	}
 
 	if len(s.Providers) == 0 {

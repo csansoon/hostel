@@ -63,14 +63,14 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	step("stop processes", func() error { return h.stopLeaseProcesses(slot, req.LeaseID) })
 	step("reset", func() error { return h.resetSlot(slot, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
-	step("check", func() error { return h.checkClean(req.LeaseID, req.Ports) })
+	step("check", func() error { return h.checkClean(slot, req.LeaseID, req.Ports) })
 	step("delete slot", func() error { return os.RemoveAll(h.slotDir(slot)) })
 	step("health", h.health)
 	return resp, nil
 }
 
-// stopLeaseProcesses stops the job process groups and all processes with
-// HOSTEL_LEASE=<id>: SIGTERM, wait, then SIGKILL.
+// stopLeaseProcesses stops the job process groups and all processes of the
+// lease (leaseProcesses): SIGTERM, wait, then SIGKILL.
 func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 	var groups []int
 	des, _ := os.ReadDir(h.jobsDir(slot))
@@ -79,7 +79,7 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 			groups = append(groups, sup.PGID)
 		}
 	}
-	pids, err := leaseProcesses(leaseID)
+	pids, err := h.leaseProcesses(slot, leaseID)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 	}
 	deadline := time.Now().Add(stopWait)
 	for time.Now().Before(deadline) {
-		if left, err := leaseProcesses(leaseID); err == nil && len(left) == 0 {
+		if left, err := h.leaseProcesses(slot, leaseID); err == nil && len(left) == 0 {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -102,7 +102,7 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 	for _, g := range groups {
 		signalGroup(g, true)
 	}
-	left, err := leaseProcesses(leaseID)
+	left, err := h.leaseProcesses(slot, leaseID)
 	if err != nil {
 		return err
 	}
@@ -166,8 +166,8 @@ func (h *helper) restoreAuthorizedKeys() error {
 // checkClean checks that no lease process remains and that the ports are free.
 // The room's SSH server removes its listeners after the connections close, so
 // the port check retries for up to 10 seconds.
-func (h *helper) checkClean(leaseID string, ports []int) error {
-	left, err := leaseProcesses(leaseID)
+func (h *helper) checkClean(slot, leaseID string, ports []int) error {
+	left, err := h.leaseProcesses(slot, leaseID)
 	if err != nil {
 		return err
 	}

@@ -54,6 +54,10 @@ platforms = ["fakedevice"]
 	if r := e.hostel("acquire", "fakedevice", "--task", "moves", "--wait", "3s"); r.code != 75 || !strings.Contains(r.stderr, "preparing on home/second") {
 		t.Fatalf("acquire: %s", r)
 	}
+	// The lease began (the server sets began_at before prepare runs), so the
+	// slot becomes dirty when the room is gone.
+	prepare := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 20 $' || true"
+	f.e.waitFor("the slow prepare", time.Minute, func() bool { return second.sh(prepare) == "1" })
 	second.stop()
 	f.e.waitFor("dirty slot", time.Minute, func() bool { return s.room("home/second").Slots[0].State == protocol.SlotDirty })
 	// The holder releases; the lease moves to the first room.

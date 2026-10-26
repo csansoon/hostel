@@ -38,6 +38,12 @@ type RunScriptRequest struct {
 	TimeoutSeconds int               `json:"timeout_seconds"`
 }
 
+// MiseInstallRequest is the input of "hostel room mise-install".
+type MiseInstallRequest struct {
+	TimeoutSeconds int  `json:"timeout_seconds"`
+	AgentDevice    bool `json:"agent_device"`
+}
+
 // RunScriptResponse is the output of "hostel room run-script".
 type RunScriptResponse struct {
 	ExitCode   int    `json:"exit_code"`

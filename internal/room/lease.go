@@ -194,6 +194,10 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	env["HOSTEL_SLOT"] = slot
 	env["HOSTEL_WORK_DIR"] = h.workDir(slot)
 	env["HOSTEL_CACHE_DIR"] = filepath.Join(h.root, "cache")
+	// agent-device keeps sessions and its daemon here, so each slot has its own
+	// and cleanup deletes them with the slot. Its iOS runner build stays in
+	// ~/.agent-device and is reused.
+	env["AGENT_DEVICE_STATE_DIR"] = filepath.Join(h.slotDir(slot), "agent-device")
 	env["HOSTEL_ROOM_OS"] = h.os
 	env["HOSTEL_ROOM_ARCH"] = runtime.GOARCH
 	return envList(env), nil
@@ -242,6 +246,10 @@ func (h *helper) execCommand(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := h.recordSession(*slot); err != nil {
+		return err
+	}
+	h.trackSessions(*slot, envMap(env)["HOSTEL_LEASE"], stderr)
 	if err := os.Chdir(h.workDir(*slot)); err != nil {
 		return err
 	}
@@ -258,6 +266,10 @@ func (h *helper) shell(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := h.recordSession(slot); err != nil {
+		return err
+	}
+	h.trackSessions(slot, envMap(env)["HOSTEL_LEASE"], stderr)
 	if err := os.Chdir(h.workDir(slot)); err != nil {
 		return err
 	}
