@@ -1,6 +1,6 @@
 # M3 implementation plan
 
-Status: in progress (started 2026-10-26). Milestone M3 in `plan.md`: a Namespace
+Status: done, waiting for the owner's approval (2026-10-26); the local macOS run of the gate is open (see section 5). Milestone M3 in `plan.md`: a Namespace
 devbox as a macOS room. This file gives the build order, the checks with real
 devboxes, and the risks. `design.md` stays the contract. When this plan adds a
 detail to the contract, the same commit updates `design.md`.
@@ -147,4 +147,12 @@ detail to the contract, the same commit updates `design.md`.
     the server deleted the devbox when `warm_running` ended; `devbox list` was
     empty, and the key files were gone.
   - Cost of the session: the devbox ran about 14 minutes (about $0.85).
+- 2026-10-26, stability gate in CI (owner decision: the workflow "E2E gate", 10
+  parallel jobs): 10 of 10 passed on d7bf59f (612–747 s each) and 10 of 10 on
+  90363d3 (after a test fix). The local macOS runs failed only on timeouts under
+  a load average of 100–465 from other projects: first `TestNamespaceLimit` (a
+  fixed 6 s window; fixed: it waits for the limit message with a deadline), then
+  `TestForwards` (an SSH request ended with EOF), `TestNamespaceKill`, and
+  `TestWarmDestroy` (`acquire` waits ended). A local run with a normal load is
+  still to do.
 
