@@ -2,9 +2,10 @@
 
 Build Hostel in this order. Finish each milestone, show the evidence to the owner,
 and wait for approval before the next one. From M1, each milestone ends with all E2E
-tests passing in 10 separate, consecutive runs of the whole suite
-(`make test-e2e-10`, which runs `go test -tags e2e -count=1 ./test/e2e/...` 10
-times).
+tests passing in 10 separate runs of the whole suite in CI (the workflow "E2E
+gate", started by the label `e2e-10` on the pull request), and in one local run on
+macOS (`make test-e2e`). Before 2026-10-26 the gate was `make test-e2e-10` on the
+owner's Mac.
 
 ## M0. Repository setup
 

@@ -1541,6 +1541,9 @@ Privilege escalation to root on a room stays out of scope.
 - CI (GitHub Actions, Linux `amd64`): `make lint`, `make test-unit`, builds for all
   six targets, and one `make test-e2e` run. `make test-e2e` fetches only the Linux
   mise binaries; CI caches them.
+- The stability gate (workflow "E2E gate", `.github/workflows/e2e-10.yml`): 10
+  parallel `make test-e2e` jobs, without fail-fast. The label `e2e-10` on a pull
+  request starts it.
 
 ## 21. Decisions in this design
 
