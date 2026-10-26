@@ -389,12 +389,6 @@ func (s *Server) cleanupRequest(ctx context.Context, l store.Lease) protocol.Cle
 	if r, err := s.store.Room(ctx, l.RoomID); err == nil {
 		if m, err := s.machineOf(r); err == nil {
 			req.Ports = append(req.Ports, slotConfig(m, l.SlotName).Ports...)
-			ready, _ := s.readyPlatforms(ctx, r.ID)
-			for _, name := range s.roomPlatformNames(m) {
-				if up := s.uploads[name][m.OS]; up.Hash != "" && ready[name] == up.Hash {
-					req.Health = append(req.Health, name)
-				}
-			}
 		}
 	}
 	if fixed, err := s.store.LeaseTunnels(ctx, l.ID); err == nil {
@@ -416,10 +410,18 @@ func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
 		return err
 	}
 	defer room.Conn.Close()
-	return s.runCleanup(ctx, room, l.SlotName, s.cleanupRequest(ctx, l))
+	return s.runCleanup(ctx, room, l.RoomID, l.SlotName, s.cleanupRequest(ctx, l))
 }
 
-func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, slot string, req protocol.CleanupRequest) error {
+// runCleanup sets the platforms for health at the time of the cleanup: a
+// stored request (of a dirty slot) can be older than the room's last
+// provision.
+func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int64, slot string, req protocol.CleanupRequest) error {
+	health, err := s.healthPlatforms(ctx, roomID)
+	if err != nil {
+		return fmt.Errorf("find the platforms for health: %w", err)
+	}
+	req.Health = health
 	var resp protocol.CleanupResponse
 	if err := room.Helper(ctx, []string{"cleanup", "--slot", slot}, req, &resp); err != nil {
 		return err
