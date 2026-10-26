@@ -50,6 +50,10 @@ func TestMise(t *testing.T) {
 	if r.stdout != "from-mise\n" {
 		t.Fatalf("mise [env] in run: %q", r.stdout)
 	}
+	// [mise] in server.toml sets only agent_device; idiomatic_tools keeps its default.
+	if r := f.e.mustHostel("run", "--", "echo $MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS"); r.stdout != "node,python\n" {
+		t.Fatalf("idiomatic tools in run: %q", r.stdout)
+	}
 	if offline {
 		return
 	}

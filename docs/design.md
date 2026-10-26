@@ -743,7 +743,7 @@ Server-level keys and defaults:
 | `idle_timeout`, `aging`, `poll_timeout`, `limit_retry` | `10m`, `10m`, `5m`, `2m` |
 | `port_process_offline` | `10m` (section 14) |
 | `intervals` | `{ scheduler = "10s", reconcile = "5m", tunnel_check = "30s" }` (short values in tests) |
-| `[mise]` | `idiomatic_tools = ["node", "python"]`; `github_token` unset; `agent_device = true` |
+| `[mise]` | `idiomatic_tools = ["node", "python"]` (also when `[mise]` sets only other keys; `[]` turns idiomatic files off); `github_token` unset; `agent_device = true` |
 
 Provider and machine keys. A machine inherits only these provider keys: `tools`,
 `env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`. `max_rooms` is

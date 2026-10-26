@@ -253,7 +253,11 @@ func (s *Server) resolve() error {
 		}
 	}
 	if s.Mise == nil {
-		s.Mise = &Mise{IdiomaticTools: []string{"node", "python"}}
+		s.Mise = &Mise{}
+	}
+	// Omitted gets the default; an empty list turns idiomatic files off.
+	if s.Mise.IdiomaticTools == nil {
+		s.Mise.IdiomaticTools = []string{"node", "python"}
 	}
 
 	if len(s.Providers) == 0 {
