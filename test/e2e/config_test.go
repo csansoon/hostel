@@ -85,6 +85,15 @@ func TestConfigErrors(t *testing.T) {
 			want: []string{"{dir}/server.toml: providers.cloud.machines.small.os: required for external machines"},
 		},
 		{
+			name: "devbox without max_lifetime and size",
+			config: "[providers.ns]\nkind = \"namespace\"\n" +
+				"[providers.ns.machines.mac]\nspec = { product = \"devbox\", platform = \"macos\", image = \"tahoe-slim\" }\n",
+			want: []string{
+				"{dir}/server.toml: providers.ns.machines.mac.spec.size: required for a devbox",
+				"{dir}/server.toml: providers.ns.machines.mac.max_lifetime: required for a devbox",
+			},
+		},
+		{
 			name:      "OS platform directory with devices",
 			config:    staticMachine,
 			platforms: map[string]string{"linux/platform.toml": "description = \"Linux\"\ndevices = [\"x\"]\n"},

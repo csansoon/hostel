@@ -64,7 +64,18 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	step("reset", func() error { return h.resetSlot(slot, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
 	step("check", func() error { return h.checkClean(slot, req.LeaseID, req.Ports) })
-	step("delete slot", func() error { return os.RemoveAll(h.slotDir(slot)) })
+	step("delete slot", func() error {
+		// Markers of jobs whose supervisor was killed.
+		if marker := devboxTaskMarker(slot, "*"); marker != "" {
+			left, _ := filepath.Glob(marker)
+			for _, f := range left {
+				if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("remove a devbox task marker: %w", err)
+				}
+			}
+		}
+		return os.RemoveAll(h.slotDir(slot))
+	})
 	step("health", h.health)
 	return resp, nil
 }

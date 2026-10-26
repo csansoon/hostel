@@ -398,6 +398,9 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 	if m.MaxLease.D() <= 0 {
 		el.add(key+".max_lease", "must be longer than 0")
 	}
+	if product, _ := m.Spec["product"].(string); p.Kind == ProviderNamespace && product == "devbox" && m.MaxLifetime.D() <= 0 {
+		el.add(key+".max_lifetime", "required for a devbox: the maximum duration of the Namespace plan, for example \"3h\"")
+	}
 	if lt := m.MaxLifetime.D(); lt > 0 && m.MaxLease.D()+5*time.Minute > lt {
 		el.add(key+".max_lifetime", "%s is shorter than max_lease (%s) + 5m; lower max_lease or raise max_lifetime", lt, m.MaxLease.D())
 	}
@@ -448,6 +451,11 @@ func namespaceOS(el *errList, key string, spec map[string]any) string {
 	product, _ := spec["product"].(string)
 	switch product {
 	case "devbox":
+		for _, k := range []string{"size", "image"} {
+			if v, _ := spec[k].(string); v == "" {
+				el.add(key+".spec."+k, "required for a devbox, for example size = \"m\" and image = \"tahoe-slim\"")
+			}
+		}
 		platform, _ := spec["platform"].(string)
 		if platform != OSLinux && platform != OSMacOS {
 			el.add(key+".spec.platform", "a devbox needs platform \"linux\" or \"macos\"")

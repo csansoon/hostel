@@ -12,6 +12,9 @@
 //	FAKE_CAN_STOP   "1": machines can stop and resume
 //	FAKE_PROXY      "1": access goes through a proxy command (nc) instead of host and port
 //
+// Under the name "devbox" (a link), it is a fake Namespace devbox CLI instead
+// (devbox.go).
+//
 // It runs on Unix test hosts only (it uses flock).
 package main
 
@@ -47,6 +50,10 @@ type failure struct {
 var errNotFound = errors.New("not found")
 
 func main() {
+	if filepath.Base(os.Args[0]) == "devbox" {
+		devboxMain(os.Args[1:])
+		return
+	}
 	if len(os.Args) != 2 {
 		fail("other", "usage: fakeprovider <operation>")
 	}

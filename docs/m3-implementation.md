@@ -31,7 +31,8 @@ detail to the contract, the same commit updates `design.md`.
   home directory (with `~/hostel`), the simulators, and DerivedData are lost at
   each stop.
 - **Ephemeral.** `--ephemeral`: a stop deletes the devbox (it is gone from the
-  list).
+  list). An idle ephemeral devbox (`--auto_stop_idle_timeout 5m`) was deleted after
+  972 s.
 - **Idle stop.** With `--auto_stop_idle_timeout 5m`, the devbox stopped after
   894 s. An open SSH connection, a session in the last 15 minutes, or a file in
   `$NAMESPACE_DEVBOX_TASKS_DIR` keeps it active (Namespace docs).
@@ -51,14 +52,17 @@ detail to the contract, the same commit updates `design.md`.
   needs, so a stop has no value. The provider creates each devbox with
   `--ephemeral`, and its capabilities say "cannot stop": an idle room is destroyed
   after `warm_running`. Provider-side bounds: the idle stop (it deletes an
-  ephemeral devbox) and the plan's maximum duration. A devbox that a dead server
-  leaks costs at most about 15 minutes of idle time.
+  ephemeral devbox: measured 972 s after the last activity) and the plan's
+  maximum duration. A devbox that a dead server leaks costs about 16 minutes of
+  idle time after its last job.
 - **The devbox key is the room key.** `RoomAccess.Signers` is the key file from the
   `devbox` CLI, not the server key. If the file is missing, the provider runs
   `devbox configure-ssh <name>`. Destroy deletes the two files.
-- **No idle stop during a lease.** The helper writes
-  `$NAMESPACE_DEVBOX_TASKS_DIR/hostel-<slot>` at `begin` and deletes it in cleanup,
-  so a long job without an SSH connection is not stopped.
+- **No idle stop during a job.** The job supervisor writes
+  `$NAMESPACE_DEVBOX_TASKS_DIR/hostel-<slot>.<job>` and deletes it when the job
+  ends; cleanup deletes the markers of killed supervisors. A marker for the whole
+  lease would keep a leaked devbox up to the plan maximum (3 hours, about $11), so
+  only jobs have one (review, 2026-10-26).
 - **Xcode selection by machine env.** For example
   `env = { DEVELOPER_DIR = "/Applications/Xcode_26.5.app/Contents/Developer",
   HOSTEL_IOS_RUNTIME = "26.5" }` with the label `xcode-26.5`.
@@ -82,7 +86,7 @@ detail to the contract, the same commit updates `design.md`.
      devbox key.
    - Deadlines: create 10 minutes, other calls 1 minute.
    - At server start: `devbox auth check-login`; a failure stops the start.
-2. The task marker in the helper (`begin` and cleanup).
+2. The task marker in the job supervisor, and its removal in cleanup.
 3. `test/fakedevbox`: a fake `devbox` command for the E2E tests. It makes Docker
    rooms, like `test/fakeprovider`, and copies the real output formats (the list
    JSON, the text line of an empty list, the error lines). The E2E tests put it on
@@ -104,6 +108,7 @@ detail to the contract, the same commit updates `design.md`.
 | The CLI asks a question when a flag is missing. | Every call has all flags, stdin from `/dev/null`, and a deadline. |
 | A leaked devbox costs money. | Ephemeral devboxes; reconcile deletes devboxes with the server's prefix and no room; the smoke test checks `devbox list` at the end. |
 | The 1-devbox limit of the plan. | `max_rooms = 1` for the machine; the limit error is `ErrLimit`. |
+| After a restart during `devbox create`, the new server finds the devbox by name while it still boots; the first connection fails. | The server destroys the room and creates another one (one lost attempt, no leak). `TestNamespaceKill` checks that the usual case keeps the same room. |
 | An idle devbox is deleted between leases. | `warm_running` (default 5 minutes) is shorter than the idle stop (about 15 minutes); reconcile marks a deleted room as lost. |
 
 ## 5. Results
