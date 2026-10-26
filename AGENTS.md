@@ -24,6 +24,10 @@ owner decision in `requirements.md`, section 3, with the date.
 - Use short, direct sentences. State evidence, uncertainty, and blockers clearly.
 - At the end of each milestone, stop, show the evidence (test output, screenshots),
   and wait for approval.
+- For each pull request that you create, follow `.claude/skills/pr-ready/SKILL.md`
+  (owner instruction, 2026-10-26): a local review by a subagent, fixes pushed
+  without approval, every review comment resolved or answered, and a report to
+  the owner when the pull request is ready to merge. Do not merge.
 - Make local git commits at logical steps, and at least one at the end of each
   milestone. Do not create the GitHub repository, push, or open a pull request unless
   the owner asks for it in the conversation.
