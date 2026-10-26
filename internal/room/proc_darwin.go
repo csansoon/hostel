@@ -31,6 +31,23 @@ func processStart(pid int) (string, error) {
 	return s, nil
 }
 
+// processStarts returns the start times of the running processes. A PID that
+// is not in the map has no process.
+func processStarts([]int) (map[int]string, error) {
+	out, err := psOutput("-A", "-o", "pid=,lstart=")
+	if err != nil {
+		return nil, err
+	}
+	starts := map[int]string{}
+	for _, line := range strings.Split(out, "\n") {
+		pidText, start, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if pid, err := strconv.Atoi(pidText); ok && err == nil {
+			starts[pid] = strings.TrimSpace(start)
+		}
+	}
+	return starts, nil
+}
+
 func processSession(pid int) (int, error) { return syscall.Getsid(pid) }
 
 // userParents returns the processes of the room user, with their parent PIDs.

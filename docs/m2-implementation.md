@@ -231,3 +231,25 @@ the MacBook are manual; their results go into this file (section 8).
   the guest was polling. Fixes: tests wait for lease states with a deadline;
   the server limits a long poll to half of `poll_timeout`. Then `make
   test-e2e-10` passed 10 of 10 runs (157–327 s each), on commit aed8c6c.
+- 2026-10-26, review of PR #2 (a subagent) found seven problems. Fixes:
+  - The `ios` reset matched the simulators of a slot whose name starts with this
+    slot's name (`ios` and `ios-2`). It now deletes only
+    `hostel-<slot>-<device>` for each platform device.
+  - A child in a new session was lost when its parent ended before cleanup.
+    Each guest command and job now records the sessions of the lease's
+    descendants at its start, and the `ios` reset stops the processes that have
+    the UDID of a slot simulator in their command line (on the MacBook, the
+    `agent-device` runner `xcodebuild` has `id=<UDID>`). `TestCleanup` has a
+    daemon that ends before cleanup; it fails without the fix.
+  - Cleanup ran one `ps` for each recorded session on macOS. One `ps` call per
+    scan now reads all start times.
+  - A failed `ps` counted as "the leader has ended" and skipped the start-time
+    check. Now the scan fails. No E2E test: a failing `ps` cannot be made in a
+    room container without a mock.
+  - With `agent_device = false` and no machine tools, an old `agent-device`
+    command stayed. Provisioning now always runs `mise-install`. `TestMise`
+    checks the removal; it fails on the old code.
+  - New `TestCleanupKeepsOtherSlot`: the cleanup of one slot does not stop the
+    processes of the other slot.
+  - `provision.macos.sh` now takes one runtime line also when
+    `HOSTEL_IOS_RUNTIME` matches several.

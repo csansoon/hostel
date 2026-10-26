@@ -2,7 +2,9 @@ package room
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,6 +38,23 @@ func processStart(pid int) (string, error) {
 		return "", err
 	}
 	return fields[19], nil
+}
+
+// processStarts returns the start times of the processes in pids that run. A
+// PID that is not in the map has no process.
+func processStarts(pids []int) (map[int]string, error) {
+	starts := map[int]string{}
+	for _, pid := range pids {
+		start, err := processStart(pid)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		starts[pid] = start
+	}
+	return starts, nil
 }
 
 func processSession(pid int) (int, error) {

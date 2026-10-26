@@ -203,9 +203,8 @@ func (e *env) writeFile(path, body string) {
 }
 
 // serverHeader returns the server.toml keys that every test uses: a unique
-// server_id and random free ports on 127.0.0.1.
-// serverHeader is the top of a test server.toml. Rooms get no agent-device
-// (a download), except in TestMise.
+// server_id and random free ports on 127.0.0.1. Rooms get no agent-device (a
+// download), except in TestMise.
 func serverHeader() string { return serverHeaderWith(false) }
 
 func serverHeaderWith(agentDevice bool) string {

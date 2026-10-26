@@ -640,7 +640,7 @@ can only have scripts for its own OS. Steps:
 | `provision` | once for each room and platform, and again when the platform scripts change | check Xcode; create one golden simulator for each device in `devices` |
 | `prepare` | each lease, before `ready` | clone the golden simulator of each requested device; boot it; write device facts to `device.env` |
 | `screenshot` | `hostel screenshot`; `$1` is the output path, `$2` the device (default: the first) | `xcrun simctl io "$udid" screenshot "$1"` |
-| `reset` | cleanup | shut down and delete the lease's simulator clones |
+| `reset` | cleanup | stop the processes that use the slot's simulator clones (by UDID), then shut down and delete the clones |
 | `health` | after cleanup, at `repair`, and before a warm room takes a lease | Xcode works; enough free disk |
 
 Contract:
@@ -1370,14 +1370,19 @@ failed; the result lists each step.
    each job supervisor has its own session (`supervisor.json`). A process started
    with `&` or `nohup` stays in that session. A session ID is not reused while a
    process is in the session; when the leader runs with another start time, the
-   number belongs to a new session, and cleanup ignores it. Each scan also takes
+   number belongs to a new session, and cleanup ignores it. One `ps` call per
+   scan reads the start times; if it fails, the scan fails (it does not guess
+   that a leader ended). Each scan also takes
    all descendants of these processes (by parent PID), also in other sessions, and
    records their sessions in `slots/<slot>/sessions`: on macOS 26.6 the iOS runner
    of `agent-device` is an `xcodebuild` in a new session, without a visible
    environment; after its parent ends, its parent is PID 1, and later scans find it
-   only by its session (found in M2, 2026-10-23). Only a process that starts a new
-   session and hides its environment, and whose parent ended before cleanup,
-   escapes. Send SIGTERM, wait 10 seconds, then SIGKILL.
+   only by its session (found in M2, 2026-10-23). A scan also runs at the start of
+   each guest command and each job. Only a process that starts a new session and
+   hides its environment, and whose parent ended before the next guest command or
+   cleanup, escapes; the `ios` reset also stops the processes whose command line
+   has the UDID of a slot simulator (the `agent-device` runner has it). Send
+   SIGTERM, wait 10 seconds, then SIGKILL.
 2. Run the `reset` script of the lease's platform. If `slots/<slot>/` does not exist
    (a repeated cleanup after step 5), the helper creates it empty first; `reset` must
    then do nothing.

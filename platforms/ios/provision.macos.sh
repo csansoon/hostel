@@ -10,7 +10,7 @@ xcodebuild -version
 
 runtime_line() {
 	xcrun simctl list runtimes | grep '^iOS ' | grep -v unavailable |
-		if [ -n "${HOSTEL_IOS_RUNTIME:-}" ]; then grep "^iOS $HOSTEL_IOS_RUNTIME "; else tail -n 1; fi
+		if [ -n "${HOSTEL_IOS_RUNTIME:-}" ]; then grep "^iOS $HOSTEL_IOS_RUNTIME " | tail -n 1; else tail -n 1; fi
 }
 
 # device_type prints the first simulator device type that Xcode has for a

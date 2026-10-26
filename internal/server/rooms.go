@@ -151,17 +151,17 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		return err
 	}
 	// Machine-level tools, before the platform scripts, so the scripts can use
-	// them. A failure is a room provisioning failure.
-	if agentDevice := s.cfg.Mise.AgentDeviceEnabled(); len(m.Tools) > 0 || agentDevice {
-		var resp protocol.RunScriptResponse
-		req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: agentDevice}
-		if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
-			return err
-		}
-		if resp.TimedOut || resp.ExitCode != 0 {
-			s.store.AddEvent(ctx, time.Now(), "", r.ID, "mise", fmt.Sprintf("mise install exited with code %d\n%s", resp.ExitCode, resp.OutputTail))
-			return fmt.Errorf("machine-level tools: mise install failed (exit code %d); see the events", resp.ExitCode)
-		}
+	// them. A failure is a room provisioning failure. It also runs without
+	// tools and without agent-device, because it removes an agent-device
+	// command that an earlier configuration installed.
+	var resp protocol.RunScriptResponse
+	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.cfg.Mise.AgentDeviceEnabled()}
+	if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
+		return err
+	}
+	if resp.TimedOut || resp.ExitCode != 0 {
+		s.store.AddEvent(ctx, time.Now(), "", r.ID, "mise", fmt.Sprintf("mise install exited with code %d\n%s", resp.ExitCode, resp.OutputTail))
+		return fmt.Errorf("machine-level tools: mise install failed (exit code %d); see the events", resp.ExitCode)
 	}
 	ready, err := s.readyPlatforms(ctx, r.ID)
 	if err != nil {

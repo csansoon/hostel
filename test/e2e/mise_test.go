@@ -4,8 +4,10 @@ package e2e
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMise is scenario 28: a room without mise gets the Hostel mise binary;
@@ -75,4 +77,18 @@ func TestMise(t *testing.T) {
 	if r := f.e.mustHostel("run", "--", "rg --version | head -1"); !strings.HasPrefix(r.stdout, "ripgrep 14.1.1") {
 		t.Fatalf("tool in the second lease: %q", r.stdout)
 	}
+	// With agent_device = false and no machine-level tools, the next
+	// provisioning removes the command.
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+	cfg, err := os.ReadFile(filepath.Join(f.e.configDir(), "server.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := strings.Replace(string(cfg), "agent_device = true", "agent_device = false", 1)
+	f.e.writeConfig(strings.Replace(off, machineKeys, "", 1))
+	f.s = f.s.restart()
+	f.e.waitFor("agent-device removed", time.Minute, func() bool {
+		return f.c.sh("test -e /home/hostel/hostel/bin/agent-device && echo found || echo removed") == "removed"
+	})
 }

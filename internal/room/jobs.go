@@ -132,6 +132,7 @@ func (h *helper) jobSupervise(args []string) error {
 		fmt.Fprintf(out, "hostel: %v\n", err)
 		return writeExit(127)
 	}
+	h.trackSessions(slot, envMap(env)["HOSTEL_LEASE"], out)
 	argv := meta.Command
 	if meta.Shell {
 		argv = []string{"/bin/sh", "-c", meta.Command[0]}
