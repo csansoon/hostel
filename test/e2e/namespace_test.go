@@ -158,10 +158,15 @@ func TestNamespaceLimit(t *testing.T) {
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
 	f := &fixture{e: e, s: s}
-	r := e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "6s")
-	if r.code != 75 || !strings.Contains(r.stderr, "provider limit reached") {
-		t.Fatalf("acquire at the devbox limit: %s", r)
-	}
+	// The same command continues the same lease until the limit shows.
+	var r result
+	e.waitFor("the provider limit", 2*time.Minute, func() bool {
+		r = e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "5s")
+		if r.code != 75 {
+			t.Fatalf("acquire at the devbox limit: %s", r)
+		}
+		return strings.Contains(r.stderr, "provider limit reached")
+	})
 	if !slices.Contains(e.fakeRooms(), foreign) {
 		t.Fatal("reconcile removed a devbox without the prefix")
 	}
