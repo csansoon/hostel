@@ -113,4 +113,15 @@ detail to the contract, the same commit updates `design.md`.
 
 ## 5. Results
 
-(Filled in during M3.)
+- 2026-10-26, review of the provider (a subagent): a task marker for the whole
+  lease would keep a devbox that a dead server leaked up to the plan maximum.
+  Fix: one marker for each running job. Also fixed: text after the list JSON,
+  a key file race, `ResourceExhausted` only from a create is the limit, and tests
+  that did not check their claims (the same room after `kill -9`, the foreign
+  devbox stays, the marker after cleanup).
+- 2026-10-26, smoke test (`make test-smoke-namespace`) against the real account:
+  passed. A new macOS devbox (`tahoe-slim`, M): the `macos` lease was ready after
+  66 s; `run` as `runner` on macOS 26.6.2; the job's task marker; a desktop
+  screenshot (2560×1600); `kill -9` of the server and a restart during the lease;
+  release; the devbox was deleted. Total 2 min 26 s. `devbox list` was empty
+  before and after.

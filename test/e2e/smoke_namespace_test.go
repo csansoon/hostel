@@ -98,7 +98,8 @@ max_lifetime = "3h"
 	}
 	t.Logf("lease ready after %s", time.Since(start).Round(time.Second))
 	r := e.mustHostel("run", "--", "sw_vers -productVersion; id -un; ls $NAMESPACE_DEVBOX_TASKS_DIR")
-	if lines := strings.Split(strings.TrimSpace(r.stdout), "\n"); len(lines) != 3 || lines[1] != "runner" || lines[2] != "hostel-a" {
+	// The job's own task marker.
+	if lines := strings.Split(strings.TrimSpace(r.stdout), "\n"); len(lines) != 3 || lines[1] != "runner" || !strings.HasPrefix(lines[2], "hostel-a.j-") {
 		t.Fatalf("run on the devbox: %q", r.stdout)
 	}
 	shot := filepath.Join(t.TempDir(), "desktop.png")
