@@ -154,10 +154,9 @@ func TestNamespaceLimit(t *testing.T) {
 	e.usePlatform("fakedevice")
 	e.useFakeDevbox(map[string]string{"FAKE_LIMIT": "1"})
 	e.writeConfig(serverHeader() + "limit_retry = \"3s\"\n[providers.ns]\nkind = \"namespace\"\n" + devboxMachine)
-	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
-	f := &fixture{e: e, s: s}
 	// The same command continues the same lease until the limit shows.
 	var r result
 	e.waitFor("the provider limit", 2*time.Minute, func() bool {
@@ -173,7 +172,15 @@ func TestNamespaceLimit(t *testing.T) {
 	if _, err := docker("rm", "-f", foreign); err != nil {
 		t.Fatal(err)
 	}
-	f.acquire()
+	// After limit_retry the lease gets a new devbox; as a guest does, run the
+	// same command again until it is ready.
+	e.waitFor("the lease ready after the limit", 3*time.Minute, func() bool {
+		r = e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "20s")
+		if r.code != 0 && r.code != 75 {
+			t.Fatalf("acquire after the limit: %s", r)
+		}
+		return r.code == 0
+	})
 }
 
 // TestNamespaceKill: after kill -9 of the server during "devbox create", the
