@@ -253,3 +253,7 @@ the MacBook are manual; their results go into this file (section 8).
     processes of the other slot.
   - `provision.macos.sh` now takes one runtime line also when
     `HOSTEL_IOS_RUNTIME` matches several.
+  - After these fixes, `make test-e2e-10` passed 10 of 10 runs (243–423 s
+    each), on commit 6237d9d. On the MacBook, a lease whose `agent-device`
+    daemon was stopped outside the lease left 0 runner processes and 0 slot
+    simulators; the golden simulators stayed.
