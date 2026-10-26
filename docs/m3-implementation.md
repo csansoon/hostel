@@ -75,7 +75,8 @@ detail to the contract, the same commit updates `design.md`.
 
 1. `internal/provider/namespace.go`: the `namespace` provider for `spec.product =
    "devbox"`, through the `devbox` CLI on the server's `PATH`:
-   - `Provision`: if `devbox list` has the name, return it; else `devbox create
+   - `Provision`: if `devbox list` has the name, wait until it accepts SSH and
+     return it; else `devbox create
      --name <name> --platform <p> --size <s> --image <i> --ephemeral
      --auto_stop_idle_timeout 15m --no_checkout --purpose "hostel room <name>"`. On
      an error, list again: a devbox with the name counts as success.
@@ -108,7 +109,7 @@ detail to the contract, the same commit updates `design.md`.
 | The CLI asks a question when a flag is missing. | Every call has all flags, stdin from `/dev/null`, and a deadline. |
 | A leaked devbox costs money. | Ephemeral devboxes; reconcile deletes devboxes with the server's prefix and no room; the smoke test checks `devbox list` at the end. |
 | The 1-devbox limit of the plan. | `max_rooms = 1` for the machine; the limit error is `ErrLimit`. |
-| After a restart during `devbox create`, the new server finds the devbox by name while it still boots; the first connection fails. | The server destroys the room and creates another one (one lost attempt, no leak). `TestNamespaceKill` checks that the usual case keeps the same room. |
+| After a restart during `devbox create`, the new server finds the devbox by name while it still boots; the first connection fails. | `Provision` waits until an SSH handshake works when its own create did not make the devbox (seen in `TestNamespaceKill` under load, 2026-10-26). `TestNamespaceKill` checks that the room stays the same. |
 | An idle devbox is deleted between leases. | `warm_running` (default 5 minutes) is shorter than the idle stop (about 15 minutes); reconcile marks a deleted room as lost. |
 
 ## 5. Results
@@ -125,3 +126,25 @@ detail to the contract, the same commit updates `design.md`.
   screenshot (2560×1600); `kill -9` of the server and a restart during the lease;
   release; the devbox was deleted. Total 2 min 26 s. `devbox list` was empty
   before and after.
+- 2026-10-26, the M2 ExampleApp flow on a devbox (server on the owner's Mac; machine
+  `namespace/mac` with `DEVELOPER_DIR` for Xcode 26.5 and the label `devbox`):
+  - The first three tries failed: the server ran the `ios` health script at room
+    provisioning, before the `ios` provision script, which an on-demand room runs
+    only at the first lease. Fix: `health` runs only for platforms that the room is
+    ready for, at provisioning and at cleanup (the server sends the list in the
+    cleanup request). The `fakedevice` health script now needs the result of its
+    provision script, so the E2E tests of on-demand rooms show this case.
+  - Lease timeline: create 18 s, room provisioning (helper, mise, agent-device)
+    41 s, `ios` provision (two golden simulators, Xcode 26.5, iOS 26.5) 74 s,
+    prepare 14 s: ready 2 min 27 s after the request. With the ExampleApp setup job
+    (`tuist install`, `tuist generate`), `acquire` returned after 240 s.
+  - Cold ExampleApp build (`xcodebuild ... build`): 57 s (MacBook: 2 min 45 s).
+  - Install and launch; the tunnel from the devbox to the local API (HTTP 200);
+    the app signed in as `user@dev.local`, an account that exists only in this
+    worktree's database (agent-device read it in the sidebar);
+    `hostel screenshot`.
+  - Release, then `kill -9` of the server while the room was warm, and a restart:
+    the server deleted the devbox when `warm_running` ended; `devbox list` was
+    empty, and the key files were gone.
+  - Cost of the session: the devbox ran about 14 minutes (about $0.85).
+

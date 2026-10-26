@@ -70,13 +70,23 @@ func (f *fixture) nsRooms() []protocol.RoomStatus {
 	return out
 }
 
-// TestNamespaceDevbox: a lease on an ephemeral devbox through the devbox SSH
-// proxy and the devbox key; a task marker only while a job runs, and cleanup
+// TestNamespaceDevbox: leases on an ephemeral devbox through the devbox SSH
+// proxy and the devbox key; health only for platforms that the room is ready
+// for; a task marker only while a job runs, and cleanup
 // removes the marker of a killed job supervisor; access after the key file is
 // lost; a destroyed room takes its key files with it.
 func TestNamespaceDevbox(t *testing.T) {
 	t.Parallel()
 	f, state := newDevboxFixture(t, "warm_running = \"10m\"\n", nil)
+	// A first lease of the OS platform: the room is not ready for fakedevice yet,
+	// so cleanup does not run the fakedevice health script (it needs the result
+	// of the fakedevice provision script).
+	f.e.mustHostel("acquire", "linux", "--task", "plain linux")
+	f.e.mustHostel("release")
+	f.e.waitFor("slot free after the linux lease", time.Minute, func() bool {
+		rs := f.nsRooms()
+		return len(rs) == 1 && rs[0].State == protocol.RoomRunning && rs[0].Slots[0].State == protocol.SlotFree && rs[0].Slots[0].LeaseID == ""
+	})
 	f.acquire()
 	rooms := f.nsRooms()
 	if len(rooms) != 1 {

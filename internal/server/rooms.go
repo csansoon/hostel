@@ -187,11 +187,19 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	return s.runHealth(ctx, room, r.ID, m)
 }
 
-// runHealth runs the health script of each platform of the room.
+// runHealth runs the health script of each platform that the room is ready
+// for. An on-demand room is ready for a device platform only after the first
+// lease of the platform ran its provision script (design, section 7), and a
+// health script can need the result (for example the ios golden simulators).
 func (s *Server) runHealth(ctx context.Context, room *roomops.Room, roomID int64, m *config.Machine) error {
+	ready, err := s.readyPlatforms(ctx, roomID)
+	if err != nil {
+		return err
+	}
 	for _, name := range s.roomPlatformNames(m) {
 		p := s.cfg.Platforms[name]
-		if s.uploads[name][m.OS].Hash == "" || p.Script(m.OS, config.StepHealth) == "" {
+		up := s.uploads[name][m.OS]
+		if up.Hash == "" || p.Script(m.OS, config.StepHealth) == "" || ready[name] != up.Hash {
 			continue
 		}
 		timeout := p.ScriptTimeout(config.StepHealth)

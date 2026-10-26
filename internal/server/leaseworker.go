@@ -389,6 +389,12 @@ func (s *Server) cleanupRequest(ctx context.Context, l store.Lease) protocol.Cle
 	if r, err := s.store.Room(ctx, l.RoomID); err == nil {
 		if m, err := s.machineOf(r); err == nil {
 			req.Ports = append(req.Ports, slotConfig(m, l.SlotName).Ports...)
+			ready, _ := s.readyPlatforms(ctx, r.ID)
+			for _, name := range s.roomPlatformNames(m) {
+				if up := s.uploads[name][m.OS]; up.Hash != "" && ready[name] == up.Hash {
+					req.Health = append(req.Health, name)
+				}
+			}
 		}
 	}
 	if fixed, err := s.store.LeaseTunnels(ctx, l.ID); err == nil {

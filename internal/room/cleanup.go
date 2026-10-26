@@ -76,7 +76,7 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		}
 		return os.RemoveAll(h.slotDir(slot))
 	})
-	step("health", h.health)
+	step("health", func() error { return h.health(req.Health) })
 	return resp, nil
 }
 
@@ -214,30 +214,27 @@ func (h *helper) checkClean(slot, leaseID string, ports []int) error {
 	}
 }
 
-// health runs the health script of each installed platform.
-func (h *helper) health() error {
-	des, err := os.ReadDir(h.platformsDir())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
+// health runs the health script of each platform in names.
+func (h *helper) health(names []string) error {
 	var failed []string
-	for _, de := range des {
-		if !de.IsDir() || strings.HasPrefix(de.Name(), ".") {
+	for _, name := range names {
+		if !config.ValidName(name) {
+			failed = append(failed, fmt.Sprintf("invalid platform name %q", name))
 			continue
 		}
-		p, err := h.platformInfo(de.Name())
+		p, err := h.platformInfo(name)
 		if err != nil {
-			failed = append(failed, de.Name()+": "+err.Error())
+			failed = append(failed, name+": "+err.Error())
 			continue
 		}
-		resp, err := h.script(de.Name(), config.StepHealth, "", nil, map[string]string{
-			"HOSTEL_PLATFORM": de.Name(), "HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
+		resp, err := h.script(name, config.StepHealth, "", nil, map[string]string{
+			"HOSTEL_PLATFORM": name, "HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
 		}, p.ScriptTimeout(config.StepHealth))
 		if err == nil {
 			err = scriptError(resp)
 		}
 		if err != nil {
-			failed = append(failed, de.Name()+": "+err.Error())
+			failed = append(failed, name+": "+err.Error())
 		}
 	}
 	if len(failed) > 0 {

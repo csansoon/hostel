@@ -169,13 +169,26 @@ func (n *Namespace) lock(name string) func() {
 
 // Provision creates an ephemeral devbox. It is idempotent by name: a devbox
 // with the name counts as created, also when the create call failed (for
-// example because a killed server's call made it).
+// example because a killed server's call made it). Such a devbox can still
+// boot, so Provision then waits until it accepts SSH.
 func (n *Namespace) Provision(ctx context.Context, req ProvisionRequest) (RoomRef, error) {
+	ref, created, err := n.create(ctx, req)
+	if err != nil || created {
+		return ref, err
+	}
+	return ref, n.waitReady(ctx, ref)
+}
+
+// create reports created = true when its own create call made the devbox; the
+// CLI returns only when the devbox is ready.
+func (n *Namespace) create(ctx context.Context, req ProvisionRequest) (ref RoomRef, created bool, err error) {
 	defer n.lock(req.Name)()
+	ref = RoomRef{Name: req.Name, Machine: req.Machine}
 	if d, err := n.find(ctx, req.Name); err == nil {
-		return RoomRef{Name: req.Name, Machine: req.Machine, ID: d.ID}, nil
+		ref.ID = d.ID
+		return ref, false, nil
 	} else if !errors.Is(err, ErrNotFound) {
-		return RoomRef{}, err
+		return RoomRef{}, false, err
 	}
 	str := func(k string) string { s, _ := req.Spec[k].(string); return s }
 	_, cerr := n.devbox(ctx, devboxCreateTimeout, "create", "--name", req.Name,
@@ -185,12 +198,59 @@ func (n *Namespace) Provision(ctx context.Context, req ProvisionRequest) (RoomRe
 	d, err := n.find(ctx, req.Name)
 	switch {
 	case err == nil:
-		return RoomRef{Name: req.Name, Machine: req.Machine, ID: d.ID}, nil
+		ref.ID = d.ID
+		return ref, cerr == nil, nil
 	case cerr != nil:
-		return RoomRef{}, cerr
+		return RoomRef{}, false, cerr
 	default:
-		return RoomRef{}, fmt.Errorf("devbox create %s: the devbox is not in the list: %w", req.Name, err)
+		return RoomRef{}, false, fmt.Errorf("devbox create %s: the devbox is not in the list: %w", req.Name, err)
 	}
+}
+
+// waitReady waits until an SSH handshake with the devbox works, for at most
+// the create timeout.
+func (n *Namespace) waitReady(ctx context.Context, ref RoomRef) error {
+	ctx, cancel := context.WithTimeout(ctx, devboxCreateTimeout)
+	defer cancel()
+	for {
+		err := n.handshake(ctx, ref)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("devbox %s is not ready after %s: %w", ref.Name, devboxCreateTimeout, err)
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func (n *Namespace) handshake(ctx context.Context, ref RoomRef) error {
+	a, err := n.Access(ctx, ref)
+	if err != nil {
+		return err
+	}
+	conn, err := a.Dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	timer := time.AfterFunc(30*time.Second, func() { conn.Close() })
+	defer timer.Stop()
+	// Only a check that the devbox accepts the key; the server pins the host
+	// key at its first real connection.
+	c, chans, reqs, err := ssh.NewClientConn(conn, "devbox", &ssh.ClientConfig{User: a.User,
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(a.Signers...)}, HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+	if err != nil {
+		return err
+	}
+	go ssh.DiscardRequests(reqs)
+	go func() {
+		for ch := range chans {
+			ch.Reject(ssh.Prohibited, "")
+		}
+	}()
+	return c.Close()
 }
 
 // Destroy deletes the devbox by name and the SSH files that the CLI wrote for

@@ -331,7 +331,8 @@ plus the median creation time when a new room is necessary. Show it as an estima
 Broken on-demand rooms are destroyed. Broken static rooms stay until the owner runs
 `hostel admin room repair <room> [--accept-host-key]`. Repair runs the full cleanup
 (section 17) of each `broken` or `dirty` slot again (this also restores
-`authorized_keys`), then the `health` scripts, and sets the room to `running` if all
+`authorized_keys`), then the `health` scripts of the platforms that the room is
+ready for, and sets the room to `running` if all
 pass. It does this through the probe: a broken slot (with its `cleanup_data`)
 becomes `dirty`, and the room goes to `provisioning`; the probe cleans each dirty
 slot before the room is `running`.
@@ -393,7 +394,7 @@ type RoomAccess struct {
 | Kind | Machines | Provision | Access | Stop | Deadline |
 |---|---|---|---|---|---|
 | `static` | real hosts (`address`) | Not called. Each machine is a room from server start. | TCP to the host with the server key, or the `room connect` tunnel | no | none |
-| `namespace`, `spec.product = "devbox"` | templates | `devbox create --name <Name> --ephemeral ...` | proxy command `devbox ssh-proxy <Name>`, user `main_user` | no (ephemeral: a stop deletes it) | idle stop (it deletes the devbox); plan maximum duration (3 h on the Developer plan) |
+| `namespace`, `spec.product = "devbox"` | templates | `devbox create --name <Name> --ephemeral ...`; a devbox with the name that another call made (for example before a restart) is taken when it accepts SSH | proxy command `devbox ssh-proxy <Name>`, user `main_user` | no (ephemeral: a stop deletes it) | idle stop (it deletes the devbox); plan maximum duration (3 h on the Developer plan) |
 | `namespace`, `spec.product = "instance"` | templates | `nsc create --duration ... --label hostel=<Name> --ssh_key ...` | verify in M4 | no | `--duration`; `nsc extend` |
 | `external` | templates | the configured command | from the command's response | if the command declares it | the command must apply it |
 
@@ -587,7 +588,7 @@ success; else stdout has `{"error": "..."}`.
 | `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
 | `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
 | `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
-| `cleanup` | server | `{"lease_id", "platform", "devices", "ports"}` (from the database, so a repeated cleanup does not need `lease.json`) | `{"steps": [...]}` (section 17) |
+| `cleanup` | server | `{"lease_id", "platform", "devices", "ports", "health"}` (from the database, so a repeated cleanup does not need `lease.json`; `health` lists the platforms that the room is ready for) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
 | `sync-apply <plan-id>` | guest | a `tar` stream (not JSON) | `{"written", "deleted"}` |
@@ -652,7 +653,7 @@ can only have scripts for its own OS. Steps:
 | `prepare` | each lease, before `ready` | clone the golden simulator of each requested device; boot it; write device facts to `device.env` |
 | `screenshot` | `hostel screenshot`; `$1` is the output path, `$2` the device (default: the first) | `xcrun simctl io "$udid" screenshot "$1"` |
 | `reset` | cleanup | stop the processes that use the slot's simulator clones (by UDID), then shut down and delete the clones |
-| `health` | after cleanup, at `repair`, and before a warm room takes a lease | Xcode works; enough free disk |
+| `health` | after cleanup, at `repair`, and before a warm room takes a lease; only for a platform that the room is ready for (on an on-demand room, after its first `provision`) | Xcode works; enough free disk |
 
 Contract:
 
