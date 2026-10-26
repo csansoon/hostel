@@ -1,6 +1,6 @@
 # M2 implementation plan
 
-Status: done, waiting for the owner's approval (2026-10-23). Milestone M2 in `plan.md`: the spare MacBook as a
+Status: done; the owner approved it on 2026-10-26. Milestone M2 in `plan.md`: the spare MacBook as a
 static iOS room. This file gives the build order, the checks on the real machine,
 and the risks. `design.md` stays the contract. When this plan adds a detail to the
 contract, the same commit updates `design.md`.
