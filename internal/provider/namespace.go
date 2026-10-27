@@ -90,9 +90,9 @@ func (n *Namespace) devbox(ctx context.Context, timeout time.Duration, args ...s
 	if err != nil {
 		msg := cliMessage(stderr.String() + "\n" + stdout.String())
 		switch {
-		// Only a create can reach the devbox limit; on other calls
-		// ResourceExhausted is for example a rate limit.
-		case args[0] == "create" && strings.Contains(msg, "code = ResourceExhausted"):
+		// ResourceExhausted is also a rate limit; only the limit text means
+		// that the account has no space for another devbox.
+		case args[0] == "create" && strings.Contains(msg, "code = ResourceExhausted") && strings.Contains(msg, "devbox limit reached"):
 			return nil, fmt.Errorf("devbox %s: %w: %s", args[0], ErrLimit, msg)
 		case strings.Contains(msg, "code = NotFound"):
 			return nil, fmt.Errorf("devbox %s: %w: %s", args[0], ErrNotFound, msg)
@@ -214,8 +214,8 @@ func (n *Namespace) waitReady(ctx context.Context, ref RoomRef) error {
 	defer cancel()
 	for {
 		err := n.handshake(ctx, ref)
-		if err == nil {
-			return nil
+		if err == nil || errors.Is(err, ErrNotFound) {
+			return err
 		}
 		select {
 		case <-ctx.Done():
@@ -282,9 +282,10 @@ func (n *Namespace) List(ctx context.Context, prefix string) ([]RoomRef, error) 
 	return out, nil
 }
 
-// configureSSH writes the key file again: Namespace stores the key. The lock
-// keeps another connection from reading a half-written file.
-func (n *Namespace) configureSSH(ctx context.Context, name string) ([]byte, error) {
+// key reads the devbox key, and writes the key file again when it is missing:
+// Namespace stores the key. The lock keeps a connection from reading a
+// half-written file.
+func (n *Namespace) key(ctx context.Context, name string) ([]byte, error) {
 	defer n.lock(name)()
 	if key, err := os.ReadFile(n.sshFile(name) + ".key"); err == nil {
 		return key, nil
@@ -318,10 +319,7 @@ func (n *Namespace) Access(ctx context.Context, room RoomRef) (RoomAccess, error
 		n.users[room.Name] = user
 		n.mu.Unlock()
 	}
-	key, err := os.ReadFile(n.sshFile(room.Name) + ".key")
-	if errors.Is(err, os.ErrNotExist) {
-		key, err = n.configureSSH(ctx, room.Name)
-	}
+	key, err := n.key(ctx, room.Name)
 	if err != nil {
 		return RoomAccess{}, fmt.Errorf("read the devbox key: %w", err)
 	}

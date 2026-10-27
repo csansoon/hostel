@@ -24,11 +24,17 @@ import (
 // rooms from test/roomimage and copies the output formats of the real CLI
 // (devbox 0.0.204, docs/namespace.md): the list JSON, the text line of an
 // empty list, and the error lines. Environment: FAKE_RUN_ID, FAKE_STATE_DIR,
-// FAKE_IMAGE, FAKE_DELAY, and FAKE_LIMIT as for the provider mode, and
+// FAKE_IMAGE, and FAKE_LIMIT as for the provider mode, FAKE_DELAY (the boot
+// time of a devbox), FAKE_CREATE_ERROR (a create fails with this text), and
 // FAKE_LOGGED_OUT ("1": "auth check-login" fails).
 //
-// FAKE_STATE_DIR keeps what Namespace stores: the key of each devbox, and the
-// arguments of each create (create-<name>.args) for the tests.
+// As at Namespace, a devbox exists (in the list) from the start of its create
+// and boots on its own, also when the create call is killed; until the boot
+// ends, ssh-proxy fails.
+//
+// FAKE_STATE_DIR keeps what Namespace stores: the key and the boot end of each
+// devbox, and the arguments of the create calls (create-<name>.args, one line
+// for each call) for the tests.
 func devboxMain(args []string) {
 	if len(args) == 0 {
 		devboxFail("usage: devbox <command>")
@@ -101,8 +107,19 @@ func devboxCreate(args []string) {
 		devboxFail("create: bad flags")
 	}
 	state := os.Getenv("FAKE_STATE_DIR")
-	if err := os.WriteFile(filepath.Join(state, "create-"+*name+".args"), []byte(strings.Join(args, " ")+"\n"), 0o644); err != nil {
+	f, err := os.OpenFile(filepath.Join(state, "create-"+*name+".args"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
 		devboxFail(err.Error())
+	}
+	_, err = fmt.Fprintln(f, strings.Join(args, " "))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		devboxFail(err.Error())
+	}
+	if msg := os.Getenv("FAKE_CREATE_ERROR"); msg != "" {
+		devboxFail(msg)
 	}
 	cs, err := containers()
 	if err != nil {
@@ -113,9 +130,6 @@ func devboxCreate(args []string) {
 	}
 	if _, ok := cs[*name]; ok {
 		devboxFail(fmt.Sprintf("rpc error: code = AlreadyExists desc = devbox %q already exists (rid=fake)", *name))
-	}
-	if d, err := time.ParseDuration(os.Getenv("FAKE_DELAY")); err == nil {
-		time.Sleep(d)
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -144,10 +158,15 @@ func devboxCreate(args []string) {
 		"-e", "NAMESPACE_DEVBOX_TASKS_DIR=/var/run/devbox/tasks", image); err != nil {
 		devboxFail(err.Error())
 	}
-	// Only the call that made the container stores its key.
+	// Only the call that made the container stores its key and boot end.
 	if err := os.WriteFile(filepath.Join(state, *name+".key"), key, 0o600); err != nil {
 		devboxFail(err.Error())
 	}
+	boot, _ := time.ParseDuration(os.Getenv("FAKE_DELAY"))
+	if err := os.WriteFile(filepath.Join(state, *name+".boot"), []byte(time.Now().Add(boot).Format(time.RFC3339Nano)), 0o644); err != nil {
+		devboxFail(err.Error())
+	}
+	time.Sleep(boot)
 	if err := waitSSH(*name); err != nil {
 		devboxFail(err.Error())
 	}
@@ -202,6 +221,11 @@ func devboxList() {
 func devboxProxy(name string) {
 	if err := exists(name); err != nil {
 		devboxFail(fmt.Sprintf("rpc error: code = NotFound desc = no such devbox with id or name %q (rid=fake)", name))
+	}
+	if data, err := os.ReadFile(filepath.Join(os.Getenv("FAKE_STATE_DIR"), name+".boot")); err == nil {
+		if end, err := time.Parse(time.RFC3339Nano, string(data)); err == nil && time.Now().Before(end) {
+			devboxFail(fmt.Sprintf("devbox %s is starting", name))
+		}
 	}
 	port, err := hostPort(name)
 	if err != nil {

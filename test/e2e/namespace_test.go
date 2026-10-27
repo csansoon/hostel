@@ -184,16 +184,17 @@ func TestNamespaceLimit(t *testing.T) {
 }
 
 // TestNamespaceKill: after kill -9 of the server during "devbox create", the
-// restarted server takes the same devbox (create is idempotent by name), and
-// no devbox remains after the lease.
+// restarted server finds the devbox in the list, does not create another one,
+// and waits until it accepts SSH. No devbox remains after the lease.
 func TestNamespaceKill(t *testing.T) {
 	t.Parallel()
-	// The create takes 20 s, a wide window for the kill also on a slow machine.
+	// The devbox boots for 20 s, a wide window for the kill also on a slow
+	// machine.
 	f, state := newDevboxFixture(t, "warm_running = \"3s\"\n", map[string]string{"FAKE_DELAY": "20s"})
 	f.acquireUntil(protocol.LeaseProvisioning)
 	f.e.waitFor("devbox create started", time.Minute, func() bool {
-		args, _ := filepath.Glob(filepath.Join(state, "create-*.args"))
-		return len(args) == 1
+		boots, _ := filepath.Glob(filepath.Join(state, "*.boot"))
+		return len(boots) == 1
 	})
 	before := f.nsRooms()
 	f.s = f.s.restartAfterKill()
@@ -206,11 +207,30 @@ func TestNamespaceKill(t *testing.T) {
 	if rooms := f.e.fakeRooms(); len(rooms) != 1 {
 		t.Fatalf("devboxes during the lease: %v, want 1", rooms)
 	}
+	calls, err := os.ReadFile(filepath.Join(state, "create-"+before[0].Name+".args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(calls), "\n"); n != 1 {
+		t.Fatalf("%d devbox create calls, want 1", n)
+	}
 	if r := f.e.mustHostel("run", "--", "echo ok"); r.stdout != "ok\n" {
 		t.Fatalf("run: %q", r.stdout)
 	}
 	f.e.mustHostel("release")
 	f.e.waitFor("no devbox left", 2*time.Minute, func() bool { return len(f.nsRooms()) == 0 && len(f.e.fakeRooms()) == 0 })
+}
+
+// TestNamespaceCreateError: a ResourceExhausted error without the devbox limit
+// text (for example a rate limit) is a failed create, not a provider limit.
+func TestNamespaceCreateError(t *testing.T) {
+	t.Parallel()
+	f, _ := newDevboxFixture(t, "", map[string]string{
+		"FAKE_CREATE_ERROR": "rpc error: code = ResourceExhausted desc = rate limit exceeded (rid=fake)"})
+	r := f.e.hostel("acquire", "fakedevice", "--task", "rate limited", "--wait", "60s")
+	if r.code != 1 || !strings.Contains(r.stderr, "the provider failed to create a room") || !strings.Contains(r.stderr, "rate limit exceeded") {
+		t.Fatalf("acquire with a rate limit on create: %s", r)
+	}
 }
 
 // TestNamespaceLogin: the server does not start when the devbox CLI is not

@@ -109,7 +109,7 @@ detail to the contract, the same commit updates `design.md`.
 | The CLI asks a question when a flag is missing. | Every call has all flags, stdin from `/dev/null`, and a deadline. |
 | A leaked devbox costs money. | Ephemeral devboxes; reconcile deletes devboxes with the server's prefix and no room; the smoke test checks `devbox list` at the end. |
 | The 1-devbox limit of the plan. | `max_rooms = 1` for the machine; the limit error is `ErrLimit`. |
-| After a restart during `devbox create`, the new server finds the devbox by name while it still boots; the first connection fails. | `Provision` waits until an SSH handshake works when its own create did not make the devbox (seen in `TestNamespaceKill` under load, 2026-10-26). `TestNamespaceKill` checks that the room stays the same. |
+| After a restart during `devbox create`, the new server finds the devbox by name while it still boots; the first connection fails. | `Provision` waits until an SSH handshake works when its own create did not make the devbox (seen in `TestNamespaceKill` under load, 2026-10-26). `TestNamespaceKill` checks that the room stays the same and that the new server makes no second create call. |
 | An idle devbox is deleted between leases. | `warm_running` (default 5 minutes) is shorter than the idle stop (about 15 minutes); reconcile marks a deleted room as lost. |
 
 ## 5. Results
@@ -155,4 +155,21 @@ detail to the contract, the same commit updates `design.md`.
   `TestForwards` (an SSH request ended with EOF), `TestNamespaceKill`, and
   `TestWarmDestroy` (`acquire` waits ended). A local run with a normal load is
   still to do.
+- 2026-10-27, review of the pull request (a subagent). Fixed:
+  - Only `ResourceExhausted` with the text "devbox limit reached" is the limit.
+    A rate limit on create was a limit too, so the server evicted an idle room
+    for nothing (`TestNamespaceCreateError`).
+  - `TestNamespaceKill` did not prove that the restarted server finds the
+    devbox: the fake made the container only after its delay. Now the fake
+    devbox exists from the start and boots on its own, and the test checks for
+    one create call.
+  - The key is always read under the name lock (no half-written file).
+  - `Provision` stops waiting for SSH when the devbox is not in the list.
+  - The gate workflow has a concurrency group: a new start with the label stops
+    the old run.
 
+  Not changed:
+  - A running job keeps its devbox up to the plan maximum when the server is
+    gone for good (design: one marker for each job only).
+  - A failed login check stops the server start (as for `external`).
+  - `max_lifetime` has no upper limit: plans differ.

@@ -1535,7 +1535,11 @@ Privilege escalation to root on a room stays out of scope.
   fake Namespace devbox CLI. It makes Docker rooms and copies the output formats of
   the real CLI (the list JSON, the text line of an empty list, the error lines), so
   the E2E tests cover the `namespace` provider. Its rooms set
-  `NAMESPACE_DEVBOX_TASKS_DIR` for SSH sessions, as a real devbox does.
+  `NAMESPACE_DEVBOX_TASKS_DIR` for SSH sessions, as a real devbox does. As at
+  Namespace, a devbox is in the list from the start of its create and boots on
+  its own (`FAKE_DELAY`), also when the create call is killed; `ssh-proxy` fails
+  until the boot ends. `FAKE_CREATE_ERROR` makes a create fail with a given
+  text.
 - Real providers: opt-in smoke tests (`HOSTEL_SMOKE_NAMESPACE=1`) and manual tests
   on the spare MacBook.
 - CI (GitHub Actions, Linux `amd64`): `make lint`, `make test-unit`, builds for all

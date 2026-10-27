@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# A new start with the label stops the old run of the same pull request. The
+# label name is in the group, so that another label does not stop the gate.
+concurrency:
+  group: e2e-gate-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'e2e-10'
