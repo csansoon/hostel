@@ -84,8 +84,12 @@ device_type() {
 	return 1
 }
 
-# The console port of the golden AVD's one boot; prepare uses 5554 to 5616.
-port=5680
+# The console port of the golden AVD's one boot, the last port of the emulator
+# range; slots use HOSTEL_ANDROID_PORT (default 5554).
+port=5682
+pattern="qemu-system-.* -port $port "
+# A provision that was stopped can leave its emulator running.
+pkill -KILL -u "$(id -u)" -f "$pattern" || true
 for d in $(echo "$HOSTEL_PLATFORM_DEVICES" | tr ',' ' '); do
 	name="hostel-golden-$d-$api-$tag"
 	for old in "$avd_home"/hostel-golden-"$d"-*.avd; do
@@ -105,6 +109,7 @@ for d in $(echo "$HOSTEL_PLATFORM_DEVICES" | tr ',' ' '); do
 	"$ANDROID_HOME/emulator/emulator" -avd "$name" -port "$port" -no-snapshot-load -no-snapshot-save -no-window -no-audio \
 		-no-boot-anim -gpu swiftshader_indirect >"$HOSTEL_CACHE_DIR/android-provision.log" 2>&1 &
 	pid=$!
+	trap 'kill "$pid" 2>/dev/null || true' EXIT
 	serial="emulator-$port"
 	i=0
 	until [ "$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; do
@@ -120,5 +125,6 @@ for d in $(echo "$HOSTEL_PLATFORM_DEVICES" | tr ',' ' '); do
 	"$adb" -s "$serial" emu avd snapshot save clean >/dev/null
 	"$adb" -s "$serial" emu kill >/dev/null
 	wait "$pid" || true
+	trap - EXIT
 	echo "created $name ($type)"
 done

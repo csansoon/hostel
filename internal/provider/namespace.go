@@ -126,6 +126,7 @@ func (n *Namespace) devbox(ctx context.Context, timeout time.Duration, args ...s
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "devbox", args...)
+	cmd.WaitDelay = cliWaitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -261,8 +262,8 @@ func (n *Namespace) create(ctx context.Context, req ProvisionRequest) (ref RoomR
 	}
 }
 
-// waitReady waits until an SSH handshake with the devbox works, for at most
-// the create timeout.
+// waitReady waits until an SSH handshake with the room (a devbox or the room
+// container of an instance) works, for at most the devbox create timeout.
 func (n *Namespace) waitReady(ctx context.Context, ref RoomRef) error {
 	ctx, cancel := context.WithTimeout(ctx, devboxCreateTimeout)
 	defer cancel()
@@ -273,7 +274,7 @@ func (n *Namespace) waitReady(ctx context.Context, ref RoomRef) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("devbox %s is not ready after %s: %w", ref.Name, devboxCreateTimeout, err)
+			return fmt.Errorf("room %s does not accept SSH after %s: %w", ref.Name, devboxCreateTimeout, err)
 		case <-time.After(2 * time.Second):
 		}
 	}

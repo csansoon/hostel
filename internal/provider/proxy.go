@@ -14,6 +14,7 @@ import (
 func proxyDial(argv []string) func(ctx context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) {
 		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.WaitDelay = cliWaitDelay
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return nil, err

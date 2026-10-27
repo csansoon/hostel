@@ -698,8 +698,9 @@ Contract:
   (with `sudo`), and one golden AVD `hostel-golden-<device>-<API>-<tag>` for each
   device with a `clean` snapshot. `prepare` starts each lease device from that
   snapshot with `-read-only` (the AVD does not change, so each lease gets a clean
-  device) on the console port 5554 + 2 × (4 × slot index + device index); `reset`
-  stops the emulators on the slot's ports. The machine `env` values
+  device) on the console port `HOSTEL_ANDROID_PORT` (slot or machine `env`,
+  default 5554) + 2 × device index; a machine with several slots sets it for each
+  slot. `reset` stops the emulators on the slot's ports. The machine `env` values
   `HOSTEL_ANDROID_API` (default 36) and `HOSTEL_ANDROID_TAG` (default
   `google_apis`) select the system image. Linux rooms need `/dev/kvm`.
 - Before a platform `provision` script, the server runs `mise install` for the

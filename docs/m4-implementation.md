@@ -110,8 +110,10 @@ adds a detail to the contract, the same commit updates `design.md`.
    through Hostel.
 2. The `instance` product in `internal/provider/namespace.go`, with the config
    check and `design.md`.
-3. The fake `nsc` CLI and E2E tests: lease, restart during the create, extend,
-   destroy, reconcile of a leaked instance, the tunnel.
+3. The fake `nsc` CLI and E2E tests: lease, restart during the create, destroy,
+   reconcile of a leaked instance, the tunnel. (No short E2E test reaches
+   `Extend`: the creation deadline covers the first leases. The real
+   `extend-duration` call is checked by hand.)
 4. A smoke test against the real account (`HOSTEL_SMOKE_NAMESPACE=1`).
 5. Done-when check: the ExampleApp Android app on a Namespace instance against the local
    API, with a screenshot.
@@ -181,3 +183,28 @@ adds a detail to the contract, the same commit updates `design.md`.
   `provision` installs `libpng16-16t64` and fails when `emulator -version` fails.
   Checked on a new instance: lease ready after 264 s; cleanup with `health`
   passed.
+- 2026-10-27, review of the pull request (a subagent). Fixed:
+  - The android scripts took the slot index from the first letter of the slot
+    name, so two slots could get the same console port. Now the port is
+    `HOSTEL_ANDROID_PORT` (slot or machine env, default 5554) + 2 × device index.
+  - A create was "limit reached" when its error text contained "timed out";
+    now only Hostel's deadline (a sentinel error) is.
+  - The room container start had 1 minute, with the image pull; now 10 minutes.
+  - After a create, other instances with the room's name (from a killed
+    server's call) are destroyed.
+  - CLI processes have a `WaitDelay`, so a child process that keeps a pipe open
+    cannot block `Wait`.
+  - A provision that fails during the golden boot stops its emulator; the next
+    provision first stops an emulator that an earlier one left on its port.
+  - The "not ready" message names the room, not a devbox.
+
+  Not changed:
+  - `Destroy` and `List` choose the product from the machine in the current
+    configuration. A room of a machine that leaves the configuration is not
+    destroyed by the server (as for all providers); `--duration` bounds the
+    cost of an instance.
+  - No E2E test calls `Extend` (above).
+- 2026-10-27, `Extend` checked by hand on a real instance (2×4, `--duration
+  10m`): `nsc instance extend-duration <id> --ensure_minimum 30m`, the command of
+  the provider, exited with 0 and printed the new deadline 30 minutes ahead; an
+  unknown ID exits with 1. The instance was destroyed at once.

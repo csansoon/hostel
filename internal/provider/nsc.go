@@ -26,9 +26,18 @@ import (
 const (
 	nscCreateTimeout = 2 * time.Minute
 	nscCallTimeout   = time.Minute
+	// nscRunTimeout bounds the start of the room container, with the image
+	// pull.
+	nscRunTimeout = 10 * time.Minute
 	// portForwardTimeout bounds the start of "nsc instance port-forward".
 	portForwardTimeout = 30 * time.Second
+	// cliWaitDelay bounds the wait for the output pipes after a CLI process
+	// ends or is killed: a child process can keep them open.
+	cliWaitDelay = 5 * time.Second
 )
+
+// errNscTimeout: an nsc call reached its deadline.
+var errNscTimeout = errors.New("timed out")
 
 // The room of an instance is a container with OpenSSH on this port: the
 // instance's own SSH server (the Namespace agent) refuses remote forwards,
@@ -75,6 +84,7 @@ func (n *Namespace) nsc(ctx context.Context, timeout time.Duration, args ...stri
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "nsc", args...)
+	cmd.WaitDelay = cliWaitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -82,7 +92,7 @@ func (n *Namespace) nsc(ctx context.Context, timeout time.Duration, args ...stri
 		n.log.Debug("nsc stderr", "provider", n.cfg.Name, "command", args[0], "stderr", stderr.String())
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("nsc %s: timed out after %s", args[0], timeout)
+		return nil, fmt.Errorf("nsc %s: %w after %s", args[0], errNscTimeout, timeout)
 	}
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("nsc %s: %w", args[0], ctx.Err())
@@ -153,7 +163,7 @@ func (n *Namespace) provisionInstance(ctx context.Context, req ProvisionRequest)
 	if image == "" {
 		image = defaultInstanceImage
 	}
-	if _, err := n.nsc(ctx, nscCallTimeout, "ssh", id, "-T", "--", instanceRunCommand(image, req.ServerKey)); err != nil &&
+	if _, err := n.nsc(ctx, nscRunTimeout, "ssh", id, "-T", "--", instanceRunCommand(image, req.ServerKey)); err != nil &&
 		!strings.Contains(err.Error(), "is already in use") {
 		return RoomRef{}, fmt.Errorf("start the room container: %w", err)
 	}
@@ -192,6 +202,7 @@ func (n *Namespace) createInstance(ctx context.Context, req ProvisionRequest) (s
 			ID string `json:"instance_id"`
 		}
 		if err := json.Unmarshal(out, &created); err == nil && created.ID != "" {
+			n.destroyOthers(ctx, req.Name, created.ID)
 			return created.ID, nil
 		}
 	}
@@ -200,13 +211,29 @@ func (n *Namespace) createInstance(ctx context.Context, req ProvisionRequest) (s
 	if i, err := n.findInstance(ctx, req.Name); err == nil {
 		return i.ID, nil
 	}
-	if cerr != nil && strings.Contains(cerr.Error(), "timed out") {
+	if errors.Is(cerr, errNscTimeout) {
 		return "", fmt.Errorf("%w: nsc create did not return in %s; the plan's concurrency limit is probably reached", ErrLimit, nscCreateTimeout)
 	}
 	if cerr != nil {
 		return "", cerr
 	}
 	return "", fmt.Errorf("nsc create %s: no instance_id in the output and the instance is not in the list", req.Name)
+}
+
+// destroyOthers destroys other instances with the room's name: a create call
+// of a killed server can still have made one that the list did not show yet.
+// Reconcile destroys one that appears later, when the room is destroyed.
+func (n *Namespace) destroyOthers(ctx context.Context, name, keep string) {
+	list, err := n.instances(ctx)
+	if err != nil {
+		return
+	}
+	for _, i := range list {
+		if i.Labels["hostel.name"] == name && i.ID != keep {
+			n.log.Warn("destroy a second instance of a room", "provider", n.cfg.Name, "room", name, "instance", i.ID)
+			n.nsc(ctx, nscCallTimeout, "destroy", i.ID, "--force")
+		}
+	}
 }
 
 // instanceRunCommand is the shell command on the instance that starts the room
@@ -262,6 +289,7 @@ func (n *Namespace) instanceAccess(room RoomRef) RoomAccess {
 func (n *Namespace) portForwardDial(id string) func(ctx context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) {
 		cmd := exec.Command("nsc", "instance", "port-forward", id, "--target_port", fmt.Sprint(instanceSSHPort))
+		cmd.WaitDelay = cliWaitDelay
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, err
