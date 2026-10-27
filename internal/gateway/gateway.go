@@ -42,12 +42,16 @@ type Backend interface {
 	Activity(leaseID string)
 	// AllowForward reports whether the lease registered a room port as a tunnel.
 	AllowForward(ctx context.Context, leaseID string, port int) bool
+	// AuthorizeRoom accepts a room token of a machine with connect = true and
+	// returns the machine ("<provider>/<machine>").
+	AuthorizeRoom(ctx context.Context, token string) (string, error)
 }
 
 type Gateway struct {
 	be     Backend
 	log    *slog.Logger
 	config *ssh.ServerConfig
+	rooms  *RoomConns
 
 	mu       sync.Mutex
 	conns    map[string]map[*ssh.ServerConn]string // lease → connection → purpose
@@ -57,8 +61,8 @@ type Gateway struct {
 // handshakeTimeout bounds the guest handshake and the upstream dial.
 const handshakeTimeout = 30 * time.Second
 
-func New(hostKey ssh.Signer, be Backend, log *slog.Logger) *Gateway {
-	g := &Gateway{be: be, log: log, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
+func New(hostKey ssh.Signer, be Backend, rooms *RoomConns, log *slog.Logger) *Gateway {
+	g := &Gateway{be: be, log: log, rooms: rooms, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
 	g.config = &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			leaseID, purpose, ok := strings.Cut(meta.User(), ".")
@@ -73,6 +77,20 @@ func New(hostKey ssh.Signer, be Backend, log *slog.Logger) *Gateway {
 			}
 			return &ssh.Permissions{Extensions: map[string]string{
 				"lease": leaseID, "purpose": purpose, "helper": t.HelperPath, "slot": t.Slot}}, nil
+		},
+		// Rooms behind NAT ("hostel room connect"): user "room", a room token
+		// as the password.
+		PasswordCallback: func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+			if meta.User() != "room" {
+				return nil, fmt.Errorf("password authentication is only for the user room")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+			defer cancel()
+			machine, err := be.AuthorizeRoom(ctx, string(password))
+			if err != nil {
+				return nil, err
+			}
+			return &ssh.Permissions{Extensions: map[string]string{"room": machine}}, nil
 		},
 		ServerVersion: "SSH-2.0-hostel-gateway",
 	}
@@ -145,6 +163,10 @@ func (g *Gateway) handle(nc net.Conn) {
 	}
 	nc.SetDeadline(time.Time{})
 	defer conn.Close()
+	if machine := conn.Permissions.Extensions["room"]; machine != "" {
+		g.serveRoom(conn, chans, reqs, machine)
+		return
+	}
 	leaseID := conn.Permissions.Extensions["lease"]
 	purpose := conn.Permissions.Extensions["purpose"]
 	target := Target{HelperPath: conn.Permissions.Extensions["helper"], Slot: conn.Permissions.Extensions["slot"]}

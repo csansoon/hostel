@@ -16,6 +16,7 @@ import (
 
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/syncfs"
 )
@@ -353,7 +354,7 @@ func GatewayProxy(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: hostel gateway-proxy <wss://...>")
 		return 2
 	}
-	nc, err := dialGateway(context.Background(), args[0])
+	nc, err := gateway.Dial(context.Background(), args[0], dialTimeout)
 	if err != nil {
 		fmt.Fprintf(stderr, "hostel: connect to the Hostel gateway at %s: %v\n", args[0], err)
 		return 1

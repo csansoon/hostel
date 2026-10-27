@@ -7,14 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
@@ -45,7 +43,7 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse the gateway host key: %w", err)
 	}
-	nc, err := dialGateway(ctx, st.Access.GatewayAddress)
+	nc, err := gateway.Dial(ctx, st.Access.GatewayAddress, dialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("%w: connect to the Hostel gateway at %s: %v", ErrConnLost, st.Access.GatewayAddress, err)
 	}
@@ -62,23 +60,6 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 	}
 	nc.SetDeadline(time.Time{})
 	return &Conn{client: ssh.NewClient(c, chans, reqs), access: st.Access}, nil
-}
-
-// dialGateway connects to the gateway: TCP for host:port, or a WebSocket for a
-// ws:// or wss:// URL (a server that only HTTPS reaches).
-func dialGateway(ctx context.Context, addr string) (net.Conn, error) {
-	if !config.IsWebSocketURL(addr) {
-		d := net.Dialer{Timeout: dialTimeout}
-		return d.DialContext(ctx, "tcp", addr)
-	}
-	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-	c, _, err := websocket.Dial(dctx, addr, nil)
-	if err != nil {
-		return nil, err
-	}
-	// The connection outlives the dial; closing the net.Conn closes it.
-	return websocket.NetConn(context.Background(), c, websocket.MessageBinary), nil
 }
 
 func (c *Conn) Close() error { return c.client.Close() }

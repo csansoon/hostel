@@ -48,18 +48,13 @@ type Server struct {
 	lastReconcile time.Time
 }
 
-func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, log *slog.Logger) (map[string]provider.Provider, error) {
+func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, dialRoom provider.RoomDialer, log *slog.Logger) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for _, name := range cfg.ProviderOrder {
 		p := cfg.Providers[name]
 		switch p.Kind {
 		case config.ProviderStatic:
-			for _, mn := range p.MachineOrder {
-				if p.Machines[mn].Connect {
-					return nil, fmt.Errorf("providers.%s.machines.%s: connect = true is not supported yet (milestone M5)", name, mn)
-				}
-			}
-			out[name] = provider.NewStatic(p, serverKey)
+			out[name] = provider.NewStatic(p, serverKey, dialRoom)
 		case config.ProviderNamespace:
 			for _, mn := range p.MachineOrder {
 				m := p.Machines[mn]
@@ -95,7 +90,8 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	providers, err := newProviders(ctx, cfg, serverKey, log)
+	rooms := gateway.NewRoomConns()
+	providers, err := newProviders(ctx, cfg, serverKey, rooms.Dial, log)
 	if err != nil {
 		return err
 	}
@@ -127,7 +123,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		return fmt.Errorf("listen on %s: %w", cfg.GatewayListen, err)
 	}
 	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr(), ln.Addr())
-	s.gateway = gateway.New(gatewayKey, gwBackend{s}, log)
+	s.gateway = gateway.New(gatewayKey, gwBackend{s}, rooms, log)
 	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 2)
 	go func() { errc <- httpServer.Serve(ln) }()
@@ -167,7 +163,8 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/info", s.auth(s.handleInfo))
+	// "hostel room connect" reads the gateway address with a room token.
+	mux.HandleFunc("GET /v1/info", s.authRoom(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /v1/platforms", s.auth(s.handlePlatforms))
 	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
@@ -188,8 +185,14 @@ func (s *Server) routes() http.Handler {
 
 type tokenKey struct{}
 
-// auth checks the bearer token and passes it in the request context.
-func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+// auth checks the bearer token and passes it in the request context. Room
+// tokens are refused.
+func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, false) }
+
+// authRoom is auth that also accepts room tokens.
+func (s *Server) authRoom(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, true) }
+
+func (s *Server) authWith(next http.HandlerFunc, allowRoom bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || secret == "" {
@@ -197,7 +200,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		tok, err := s.store.TokenBySecret(r.Context(), secret)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && tok.Role == protocol.RoleRoom) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && tok.Role == protocol.RoleRoom && !allowRoom) {
 			writeError(w, http.StatusUnauthorized, "", "invalid or revoked token")
 			return
 		}

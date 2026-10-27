@@ -1233,14 +1233,22 @@ is defense in depth.
 - Static machines: the owner adds the server public key once (`hostel admin pubkey`).
 - External machines: the provider installs `server_key`.
 - Namespace: `RoomAccess` from the provider.
-- **Rooms behind NAT.** `hostel room connect --gateway <address> --token <token>`
-  keeps an outbound SSH connection to the gateway (user
-  `room.<provider>.<machine>`, a token with the role `room` as the password). A
-  `room` token is bound to one machine when it is created
-  (`hostel admin token create --role room --machine home/macbook`); the gateway
-  refuses it for another machine. The gateway uses that connection to
-  open streams to the room's local SSH server. The `static` provider's `Dial` uses
-  it for machines with `connect = true`.
+- **Rooms behind NAT** (M5). `hostel room connect --server <url> --token-file
+  <file>` (or `HOSTEL_ROOM_TOKEN`; never a token in the arguments, which other
+  users can read) runs on the room as a service. It reads the gateway address and
+  host key from `GET /v1/info` (the only API call that accepts a `room` token),
+  connects to the gateway (TCP or WebSocket), and authenticates as user `room`
+  with the token as the password. A `room` token is bound to one machine when it
+  is created (`hostel admin token create --role room --machine home/macbook`); the
+  gateway accepts it only for a static machine with `connect = true`. The gateway
+  keeps one connection for each machine (a new one replaces the old one) and opens
+  a channel `hostel-room-ssh` on it for each server connection; the room connects
+  the channel to its own SSH server (`--ssh`, default `127.0.0.1:22`). The room
+  cannot open channels. The static provider's `Dial` uses this for machines with
+  `connect = true`; the user comes from `address` (its host is not used). The room
+  sends a keepalive every 30 s and connects again after a loss (backoff 1 s to
+  30 s). Without the connection, the room is unreachable: a probe fails, and guest
+  commands of a ready lease fail until the connection comes back.
 
 ## 14. Port forwarding
 

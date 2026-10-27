@@ -22,6 +22,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel room: missing command")
 		return 2
 	}
+	// A service that the owner installs; it needs no room layout.
+	if args[0] == "connect" {
+		return Connect(args[1:], stderr)
+	}
 	h, err := newHelper()
 	if err != nil {
 		return fail(stdout, err)

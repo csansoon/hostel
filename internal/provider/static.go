@@ -12,14 +12,19 @@ import (
 	"github.com/csansoon/hostel/internal/config"
 )
 
+// RoomDialer opens a stream to the SSH server of a static room behind NAT
+// through its "hostel room connect" connection ("<provider>/<machine>").
+type RoomDialer func(ctx context.Context, machine string) (net.Conn, error)
+
 // Static gives access to real hosts. Each machine is one room from server start.
 type Static struct {
 	cfg       *config.Provider
 	serverKey ssh.Signer
+	dialRoom  RoomDialer
 }
 
-func NewStatic(cfg *config.Provider, serverKey ssh.Signer) *Static {
-	return &Static{cfg: cfg, serverKey: serverKey}
+func NewStatic(cfg *config.Provider, serverKey ssh.Signer, dialRoom RoomDialer) *Static {
+	return &Static{cfg: cfg, serverKey: serverKey, dialRoom: dialRoom}
 }
 
 func (s *Static) Kind() string                          { return config.ProviderStatic }
@@ -43,6 +48,15 @@ func (s *Static) Access(ctx context.Context, room RoomRef) (RoomAccess, error) {
 	user, host, port, err := config.ParseAddress(m.Address)
 	if err != nil {
 		return RoomAccess{}, err
+	}
+	if m.Connect {
+		// The room connects out; only the user of the address applies.
+		key := s.cfg.Name + "/" + room.Machine
+		return RoomAccess{
+			User:    user,
+			Dial:    func(ctx context.Context) (net.Conn, error) { return s.dialRoom(ctx, key) },
+			Signers: []ssh.Signer{s.serverKey},
+		}, nil
 	}
 	return RoomAccess{
 		User:    user,
