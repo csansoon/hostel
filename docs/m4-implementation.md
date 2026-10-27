@@ -1,6 +1,6 @@
 # M4 implementation plan
 
-Status: in progress (2026-10-27). Milestone M4 in `plan.md`: Linux rooms on
+Status: done, waiting for the owner's approval (2026-10-27). Milestone M4 in `plan.md`: Linux rooms on
 Namespace and the `android` platform. This file gives the facts, the decisions,
 the build order, and the risks. `design.md` stays the contract. When this plan
 adds a detail to the contract, the same commit updates `design.md`.
@@ -208,3 +208,9 @@ adds a detail to the contract, the same commit updates `design.md`.
   10m`): `nsc instance extend-duration <id> --ensure_minimum 30m`, the command of
   the provider, exited with 0 and printed the new deadline 30 minutes ahead; an
   unknown ID exits with 1. The instance was destroyed at once.
+- 2026-10-27, stability gate in CI on 6cdcd4d: `check` and `e2e` passed, and
+  10 of 10 gate runs passed (9 min 39 s to 12 min 48 s each). Local macOS run of
+  the whole suite (`make test-e2e`) on 6cdcd4d, load average about 3 at the
+  start: passed in 534 s. (An earlier local run on 6cdcd4d gave a log that was
+  byte-identical to the run on 95244b0, also the time 491.412 s; it is not
+  counted.)
