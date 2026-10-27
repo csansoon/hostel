@@ -450,6 +450,10 @@ can mix devbox and instance machines.
   `^hostel-([a-z0-9]+)-([0-9]+)$` and ignores names that do not match or that have
   another `server_id`. Then:
   - A listed room with no database row, or with a `destroyed` row: destroy it.
+  - A listed room with the name of an active database room but another provider
+    ID (not in `creating`): destroy it. A Namespace instance has no unique name,
+    so a create call of a killed server can make a second instance late
+    (provider IDs are set only at creation).
   - A database room in `creating`: skip it (its worker owns it).
   - Another database room that is not listed: mark it `destroyed` (room lost).
 - A provider never acts on machines without the prefix. The owner uses Namespace for

@@ -50,13 +50,18 @@ const (
 )
 
 // instanceRoomScript runs as root in the room container at each start. It
-// installs OpenSSH and sudo when the image does not have them (an image with
-// apt-get), creates the room user with the server key, and runs sshd.
+// installs the programs that the image does not have (an image with apt-get),
+// creates the room user, writes the server key, and runs sshd.
 const instanceRoomScript = `set -e
-if ! [ -x /usr/sbin/sshd ]; then
+missing=""
+[ -x /usr/sbin/sshd ] || missing="$missing openssh-server"
+command -v sudo >/dev/null || missing="$missing sudo"
+command -v git >/dev/null || missing="$missing git"
+command -v curl >/dev/null || missing="$missing curl ca-certificates"
+if [ -n "$missing" ]; then
 	export DEBIAN_FRONTEND=noninteractive
 	apt-get update -qq
-	apt-get install -y -qq --no-install-recommends openssh-server sudo ca-certificates curl git >/dev/null
+	apt-get install -y -qq --no-install-recommends $missing >/dev/null
 fi
 if ! id hostel >/dev/null 2>&1; then
 	useradd --create-home --shell /bin/bash hostel
@@ -65,12 +70,11 @@ fi
 if [ -d /etc/sudoers.d ]; then
 	echo 'hostel ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/hostel
 fi
-if ! [ -f /home/hostel/.ssh/authorized_keys ]; then
-	install -d -m 700 -o hostel -g hostel /home/hostel/.ssh
-	printf '%s\n' "$HOSTEL_AUTHORIZED_KEY" > /home/hostel/.ssh/authorized_keys
-	chown hostel:hostel /home/hostel/.ssh/authorized_keys
-	chmod 600 /home/hostel/.ssh/authorized_keys
-fi
+# Only the server key: an image can contain other keys.
+install -d -m 700 -o hostel -g hostel /home/hostel/.ssh
+printf '%s\n' "$HOSTEL_AUTHORIZED_KEY" > /home/hostel/.ssh/authorized_keys
+chown hostel:hostel /home/hostel/.ssh/authorized_keys
+chmod 600 /home/hostel/.ssh/authorized_keys
 if [ -e /dev/kvm ]; then
 	chmod 666 /dev/kvm
 fi

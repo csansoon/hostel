@@ -214,3 +214,14 @@ adds a detail to the contract, the same commit updates `design.md`.
   start: passed in 534 s. (An earlier local run on 6cdcd4d gave a log that was
   byte-identical to the run on 95244b0, also the time 491.412 s; it is not
   counted.)
+- 2026-10-27, review by Codex on the pull request. Fixed:
+  - A late second instance with a room's name stayed while the room was active
+    (reconcile accepted every listed room with the name). Reconcile now destroys
+    a listed room whose provider ID is not the recorded one
+    (`TestNamespaceInstance`; it fails on the old code). The fake gives each
+    instance its own container.
+  - The room start script installed nothing when the image had OpenSSH; now it
+    installs each missing program (OpenSSH, sudo, git, curl). The test room image
+    has sudo and curl.
+  - The room start script kept an `authorized_keys` from the image; now it
+    always writes only the server key.

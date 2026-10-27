@@ -29,7 +29,7 @@ import (
 //
 // An instance is a state file. "nsc ssh" runs the command with a shell and a
 // "docker" shim (this binary under the name docker), whose "run" starts the
-// room container from FAKE_IMAGE with the instance's room name. So the tests
+// room container from FAKE_IMAGE. So the tests
 // run the provider's real start script.
 //
 // FAKE_STATE_DIR also gets the arguments of the calls for the tests:
@@ -133,8 +133,12 @@ func instancesNow() ([]fakeInstance, error) {
 	return out, nil
 }
 
+// containerName is the room container of an instance: each instance has its
+// own, also two instances with the same room name.
+func containerName(i fakeInstance) string { return i.Labels["hostel.name"] + "-" + i.ID }
+
 func removeInstance(i fakeInstance) {
-	if name := i.Labels["hostel.name"]; name != "" && exists(name) == nil {
+	if name := containerName(i); exists(name) == nil {
 		docker("rm", "-f", "-v", name)
 	}
 	os.Remove(filepath.Join(nscDir(), i.ID+".json"))
@@ -280,7 +284,7 @@ func nscSSH(args []string) {
 	}
 	cmd := exec.Command("/bin/sh", "-c", strings.Join(command, " "))
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"FAKE_DOCKER="+realDocker, "FAKE_NSC_ROOM="+i.Labels["hostel.name"])
+		"FAKE_DOCKER="+realDocker, "FAKE_NSC_ROOM="+i.Labels["hostel.name"], "FAKE_NSC_CONTAINER="+containerName(i))
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		nscFail("Process exited with status 1")
@@ -288,16 +292,16 @@ func nscSSH(args []string) {
 }
 
 // dockerShimMain handles "docker run" on a fake instance: it starts the room
-// container from FAKE_IMAGE with the instance's room name and publishes the
-// room's SSH port. Host networking and devices do not apply.
+// container from FAKE_IMAGE (named after the room and the instance) and
+// publishes the room's SSH port. Host networking and devices do not apply.
 func dockerShimMain(args []string) {
-	room := os.Getenv("FAKE_NSC_ROOM")
-	if len(args) == 0 || args[0] != "run" || room == "" {
+	room, container := os.Getenv("FAKE_NSC_ROOM"), os.Getenv("FAKE_NSC_CONTAINER")
+	if len(args) == 0 || args[0] != "run" || container == "" {
 		fmt.Fprintln(os.Stderr, "fake docker: only \"docker run\" on a fake instance")
 		os.Exit(1)
 	}
 	appendArgs("docker-"+room+".args", strings.Join(args, " "))
-	run := []string{"run", "-d", "--name", room, "--label", "hostel-e2e=" + runID(), "--label", "hostel-fake=1"}
+	run := []string{"run", "-d", "--name", container, "--label", "hostel-e2e=" + runID(), "--label", "hostel-fake=1"}
 	rest := args[1:]
 	for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
 		switch rest[0] {
@@ -346,7 +350,7 @@ func nscPortForward(args []string) {
 		nscFail(err.Error())
 	}
 	fmt.Printf("Listening on %s\n", ln.Addr())
-	name := i.Labels["hostel.name"]
+	name := containerName(i)
 	for {
 		c, err := ln.Accept()
 		if err != nil {

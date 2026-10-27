@@ -94,7 +94,8 @@ func newInstanceFixture(t *testing.T, serverKeys, providerKeys string, vars map[
 // TestNamespaceInstance: a lease on a Namespace instance. The server creates a
 // bare instance with a duration and its labels, starts the room container
 // with the server key, and reaches its SSH server through "nsc instance
-// port-forward" (also a tunnel and after a restart). A leaked instance with the server's prefix is
+// port-forward" (also a tunnel and after a restart). A second instance with
+// the room's name is destroyed, and a leaked instance with the server's prefix is
 // destroyed, and so is the room's instance at the end.
 func TestNamespaceInstance(t *testing.T) {
 	t.Parallel()
@@ -148,6 +149,14 @@ func TestNamespaceInstance(t *testing.T) {
 		names := f.e.instances()
 		return len(names) == 1 && names[0] == room
 	})
+	// A second instance with the room's name, as a create call of a killed
+	// server can make late: reconcile keeps only the recorded one.
+	f.e.fakeNsc("create", "--bare", "--machine_type", "linux/amd64:2x4", "--duration", "10m", "--ssh_key", key,
+		"--label", "hostel.name="+room, "--label", "hostel.machine=box", "-o", "json")
+	f.e.waitFor("the second instance destroyed", time.Minute, func() bool { return len(f.e.instances()) == 1 })
+	if r := f.e.mustHostel("run", "--", "echo still-here"); r.stdout != "still-here\n" {
+		t.Fatalf("run after the second instance was destroyed: %q", r.stdout)
+	}
 
 	f.s = f.s.restart()
 	if r := f.e.mustHostel("run", "--", "echo after-restart"); r.stdout != "after-restart\n" {
