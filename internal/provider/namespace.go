@@ -35,11 +35,15 @@ const devboxIdleStop = "15m"
 // only its workspace volume (design, section 7).
 var errDevboxStop = errors.New("namespace devboxes are ephemeral; they cannot stop, resume, or extend")
 
-// Namespace creates Namespace devboxes with the devbox CLI on the server's
-// PATH. The CLI must be logged in.
+var errInstanceStop = errors.New("namespace instances cannot stop or resume")
+
+// Namespace creates Namespace devboxes with the devbox CLI and instances with
+// the nsc CLI on the server's PATH (spec.product of each machine). The CLIs
+// must be logged in.
 type Namespace struct {
-	cfg *config.Provider
-	log *slog.Logger
+	cfg       *config.Provider
+	log       *slog.Logger
+	serverKey ssh.Signer
 
 	mu    sync.Mutex
 	names map[string]*sync.Mutex
@@ -48,26 +52,73 @@ type Namespace struct {
 	users map[string]string
 }
 
-func NewNamespace(cfg *config.Provider, log *slog.Logger) *Namespace {
-	return &Namespace{cfg: cfg, log: log, names: map[string]*sync.Mutex{}, users: map[string]string{}}
+func NewNamespace(cfg *config.Provider, serverKey ssh.Signer, log *slog.Logger) *Namespace {
+	return &Namespace{cfg: cfg, log: log, serverKey: serverKey, names: map[string]*sync.Mutex{}, users: map[string]string{}}
 }
 
-// CheckLogin fails when the devbox CLI is missing or not logged in. The server
-// calls it at start.
+func (n *Namespace) product(machine string) string {
+	m := n.cfg.Machines[machine]
+	if m == nil {
+		return ""
+	}
+	p, _ := m.Spec["product"].(string)
+	return p
+}
+
+// uses reports whether a machine of the provider is of the product, so the
+// server needs only the CLIs that its machines use.
+func (n *Namespace) uses(product string) bool {
+	for name := range n.cfg.Machines {
+		if n.product(name) == product {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckLogin fails when a CLI that the machines need is missing or not logged
+// in. The server calls it at start.
 func (n *Namespace) CheckLogin(ctx context.Context) error {
-	if _, err := n.devbox(ctx, devboxCallTimeout, "auth", "check-login"); err != nil {
-		return fmt.Errorf("the devbox CLI is not ready (install it and run \"devbox login\" as the server user): %w", err)
+	if n.uses(productDevbox) {
+		if _, err := n.devbox(ctx, devboxCallTimeout, "auth", "check-login"); err != nil {
+			return fmt.Errorf("the devbox CLI is not ready (install it and run \"devbox login\" as the server user): %w", err)
+		}
+	}
+	if n.uses(productInstance) {
+		if _, err := n.nsc(ctx, nscCallTimeout, "auth", "check-login"); err != nil {
+			return fmt.Errorf("the nsc CLI is not ready (install it and run \"nsc login\" as the server user): %w", err)
+		}
 	}
 	return nil
 }
 
 func (n *Namespace) Kind() string { return config.ProviderNamespace }
 
-func (n *Namespace) Capabilities(string) Capabilities { return Capabilities{OnDemand: true} }
+const (
+	productDevbox   = "devbox"
+	productInstance = "instance"
+)
 
-func (n *Namespace) Resume(context.Context, RoomRef) error            { return errDevboxStop }
-func (n *Namespace) Stop(context.Context, RoomRef) error              { return errDevboxStop }
-func (n *Namespace) Extend(context.Context, RoomRef, time.Time) error { return errDevboxStop }
+func (n *Namespace) Capabilities(machine string) Capabilities {
+	return Capabilities{OnDemand: true, CanExtend: n.product(machine) == productInstance}
+}
+
+func (n *Namespace) Resume(_ context.Context, room RoomRef) error { return n.stopError(room) }
+func (n *Namespace) Stop(_ context.Context, room RoomRef) error   { return n.stopError(room) }
+
+func (n *Namespace) stopError(room RoomRef) error {
+	if n.product(room.Machine) == productInstance {
+		return errInstanceStop
+	}
+	return errDevboxStop
+}
+
+func (n *Namespace) Extend(ctx context.Context, room RoomRef, deadline time.Time) error {
+	if n.product(room.Machine) == productInstance {
+		return n.extendInstance(ctx, room, deadline)
+	}
+	return errDevboxStop
+}
 
 // devbox runs the CLI with stdin from /dev/null, so it never waits for an
 // answer. Its output is not secret; stderr goes to the debug log.
@@ -75,6 +126,7 @@ func (n *Namespace) devbox(ctx context.Context, timeout time.Duration, args ...s
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "devbox", args...)
+	cmd.WaitDelay = cliWaitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -172,6 +224,9 @@ func (n *Namespace) lock(name string) func() {
 // example because a killed server's call made it). Such a devbox can still
 // boot, so Provision then waits until it accepts SSH.
 func (n *Namespace) Provision(ctx context.Context, req ProvisionRequest) (RoomRef, error) {
+	if n.product(req.Machine) == productInstance {
+		return n.provisionInstance(ctx, req)
+	}
 	ref, created, err := n.create(ctx, req)
 	if err != nil || created {
 		return ref, err
@@ -207,8 +262,8 @@ func (n *Namespace) create(ctx context.Context, req ProvisionRequest) (ref RoomR
 	}
 }
 
-// waitReady waits until an SSH handshake with the devbox works, for at most
-// the create timeout.
+// waitReady waits until an SSH handshake with the room (a devbox or the room
+// container of an instance) works, for at most the devbox create timeout.
 func (n *Namespace) waitReady(ctx context.Context, ref RoomRef) error {
 	ctx, cancel := context.WithTimeout(ctx, devboxCreateTimeout)
 	defer cancel()
@@ -219,7 +274,7 @@ func (n *Namespace) waitReady(ctx context.Context, ref RoomRef) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("devbox %s is not ready after %s: %w", ref.Name, devboxCreateTimeout, err)
+			return fmt.Errorf("room %s does not accept SSH after %s: %w", ref.Name, devboxCreateTimeout, err)
 		case <-time.After(2 * time.Second):
 		}
 	}
@@ -253,9 +308,12 @@ func (n *Namespace) handshake(ctx context.Context, ref RoomRef) error {
 	return c.Close()
 }
 
-// Destroy deletes the devbox by name and the SSH files that the CLI wrote for
-// it.
+// Destroy deletes an instance, or a devbox by name and the SSH files that the
+// CLI wrote for it.
 func (n *Namespace) Destroy(ctx context.Context, room RoomRef) error {
+	if n.product(room.Machine) == productInstance {
+		return n.destroyInstance(ctx, room)
+	}
 	n.mu.Lock()
 	delete(n.users, room.Name)
 	n.mu.Unlock()
@@ -268,16 +326,27 @@ func (n *Namespace) Destroy(ctx context.Context, room RoomRef) error {
 	return err
 }
 
+// List lists devboxes and instances. A listed instance has its machine (from
+// its label), so Destroy knows the product.
 func (n *Namespace) List(ctx context.Context, prefix string) ([]RoomRef, error) {
-	list, err := n.list(ctx)
-	if err != nil {
-		return nil, err
-	}
 	var out []RoomRef
-	for _, d := range list {
-		if strings.HasPrefix(d.Name, prefix) {
-			out = append(out, RoomRef{Name: d.Name, ID: d.ID})
+	if n.uses(productDevbox) {
+		list, err := n.list(ctx)
+		if err != nil {
+			return nil, err
 		}
+		for _, d := range list {
+			if strings.HasPrefix(d.Name, prefix) {
+				out = append(out, RoomRef{Name: d.Name, ID: d.ID})
+			}
+		}
+	}
+	if n.uses(productInstance) {
+		refs, err := n.listInstances(ctx, prefix)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, refs...)
 	}
 	return out, nil
 }
@@ -306,6 +375,9 @@ func (n *Namespace) sshFile(name string) string {
 // Access goes through the CLI's SSH proxy with the devbox key: the devbox SSH
 // server accepts only that key, not the server key.
 func (n *Namespace) Access(ctx context.Context, room RoomRef) (RoomAccess, error) {
+	if n.product(room.Machine) == productInstance {
+		return n.instanceAccess(room), nil
+	}
 	n.mu.Lock()
 	user := n.users[room.Name]
 	n.mu.Unlock()

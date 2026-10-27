@@ -61,11 +61,12 @@ func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer,
 			out[name] = provider.NewStatic(p, serverKey)
 		case config.ProviderNamespace:
 			for _, mn := range p.MachineOrder {
-				if product, _ := p.Machines[mn].Spec["product"].(string); product != "devbox" {
-					return nil, fmt.Errorf("providers.%s.machines.%s: product %q is not supported yet (milestone M4); use \"devbox\"", name, mn, product)
+				m := p.Machines[mn]
+				if product, _ := m.Spec["product"].(string); product == "instance" && m.OS != config.OSLinux {
+					return nil, fmt.Errorf("providers.%s.machines.%s: %s instances are not supported yet; use a linux machine_type", name, mn, m.OS)
 				}
 			}
-			ns := provider.NewNamespace(p, log)
+			ns := provider.NewNamespace(p, serverKey, log)
 			if err := ns.CheckLogin(ctx); err != nil {
 				return nil, fmt.Errorf("providers.%s: %w", name, err)
 			}

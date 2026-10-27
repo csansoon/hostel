@@ -234,9 +234,9 @@ Build:
 - `instance` machines in the `namespace` provider (or a Linux `devbox` machine, if
   KVM works there and it is simpler).
 - `platforms/android/` with `.linux.sh` and `.macos.sh` scripts and a clean emulator
-  for each lease. Test it on a Linux machine and on the MacBook. Check whether the
-  emulator runs in a Namespace macOS devbox (virtualization inside a virtual machine).
-  If it does not, do not list `android` on that machine.
+  for each lease. Test it on a Linux machine and on the MacBook
+  (`mac-mini`). Namespace macOS devboxes do not get `android` (owner
+  decision, 2026-10-27).
 - A Linux Docker image or provision step with the Android SDK, if the boot time
   needs it.
 

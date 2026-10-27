@@ -158,9 +158,16 @@ func (s *Server) reconcile(ctx context.Context) error {
 			seen[id] = true
 			r, err := s.store.Room(ctx, id)
 			if err == nil && r.State != protocol.RoomDestroyed && r.Provider == name {
-				continue
+				// A second provider room with the name, for example from a
+				// create call of a killed server that ended late. Provider IDs
+				// are set only at creation.
+				if r.State == protocol.RoomCreating || ref.ID == "" || r.ProviderRef == "" || ref.ID == r.ProviderRef {
+					continue
+				}
+				s.log.Warn("reconcile: destroy a second provider room of a room", "provider", name, "room", ref.Name, "id", ref.ID)
+			} else {
+				s.log.Warn("reconcile: destroy a room that the database does not track", "provider", name, "room", ref.Name)
 			}
-			s.log.Warn("reconcile: destroy a room that the database does not track", "provider", name, "room", ref.Name)
 			dctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
 			if err := p.Destroy(dctx, ref); err != nil && !errors.Is(err, provider.ErrNotFound) {
 				s.log.Warn("reconcile: destroy", "room", ref.Name, "err", err)

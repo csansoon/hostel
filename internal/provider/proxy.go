@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,7 @@ import (
 func proxyDial(argv []string) func(ctx context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) {
 		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.WaitDelay = cliWaitDelay
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return nil, err
@@ -29,18 +31,24 @@ func proxyDial(argv []string) func(ctx context.Context) (net.Conn, error) {
 }
 
 type cmdConn struct {
-	cmd *exec.Cmd
-	r   io.ReadCloser
-	w   io.WriteCloser
+	cmd   *exec.Cmd
+	r     io.ReadCloser
+	w     io.WriteCloser
+	close sync.Once
 }
 
 func (c *cmdConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
 func (c *cmdConn) Write(p []byte) (int, error) { return c.w.Write(p) }
+
+// Close can come from several goroutines of the SSH client; a second Wait on
+// the same process blocks forever.
 func (c *cmdConn) Close() error {
-	c.w.Close()
-	c.r.Close()
-	c.cmd.Process.Kill()
-	c.cmd.Wait()
+	c.close.Do(func() {
+		c.w.Close()
+		c.r.Close()
+		c.cmd.Process.Kill()
+		c.cmd.Wait()
+	})
 	return nil
 }
 func (c *cmdConn) LocalAddr() net.Addr              { return proxyAddr{} }

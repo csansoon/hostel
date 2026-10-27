@@ -386,7 +386,8 @@ type RoomAccess struct {
   machine's configured `os` selects the platform scripts; the server writes it to
   `room-env.json` (`"os"`), and the helper uses it for script names and
   `HOSTEL_ROOM_OS`. For static machines both must be the same.
-- `Signers` is the server key for `static` and `external` rooms. For a Namespace
+- `Signers` is the server key for `static`, `external`, and Namespace instance
+  rooms. For a Namespace
   devbox it is the key that the `devbox` CLI manages
   (`~/.namespace/ssh/<name>.devbox.namespace.key`): the devbox SSH server accepts
   only that key (M3, 2026-10-26).
@@ -395,8 +396,20 @@ type RoomAccess struct {
 |---|---|---|---|---|---|
 | `static` | real hosts (`address`) | Not called. Each machine is a room from server start. | TCP to the host with the server key, or the `room connect` tunnel | no | none |
 | `namespace`, `spec.product = "devbox"` | templates | `devbox create --name <Name> --ephemeral ...`; a devbox with the name that another call made (for example before a restart) is taken when it accepts SSH | proxy command `devbox ssh-proxy <Name>`, user `main_user` | no (ephemeral: a stop deletes it) | idle stop (it deletes the devbox); plan maximum duration (3 h on the Developer plan) |
-| `namespace`, `spec.product = "instance"` | templates | `nsc create --duration ... --label hostel=<Name> --ssh_key ...` | verify in M4 | no | `--duration`; `nsc extend` |
+| `namespace`, `spec.product = "instance"` (Linux) | templates | `nsc create --bare --machine_type ... --duration ... --ssh_key <file> --label hostel.name=<Name> --label hostel.machine=<machine>`, then `nsc ssh <id> -- docker run ... <spec.image>`: the room container (below). Idempotent: an instance with the label and an existing container are taken; the room is ready when its SSH server accepts the server key | `nsc instance port-forward <id> --target_port 2222` for each connection; user `hostel`, server key | no | `--duration`; `nsc instance extend-duration --ensure_minimum` |
 | `external` | templates | the configured command | from the command's response | if the command declares it | the command must apply it |
+
+**Namespace instances** (M4, 2026-10-27). The SSH server of an instance (the
+Namespace agent) refuses remote forwards, which tunnels need. So the room is a
+container on the instance: `docker run -d --name hostel-room --restart
+unless-stopped --network host --device /dev/kvm` with `spec.image` (default
+`ubuntu:24.04`; an image with `apt-get`, or with OpenSSH already). Its start
+script installs OpenSSH and `sudo` if they are missing, creates the user `hostel`
+with the server key (and `sudo` without a password), lets it use `/dev/kvm`, and
+runs `sshd` on port 2222. At the plan's concurrency limit, `nsc create` does not
+fail: it blocks without output. So the create call has a 2 minute deadline, and a
+timeout is "limit reached" (an instance that the call still makes later has the
+prefix, and reconcile destroys it). Only `linux` machine types are supported.
 
 Version 1 calls the `devbox` and `nsc` CLIs on the server. They must be installed
 and logged in on the server machine. One `namespace` provider uses one login and
@@ -437,6 +450,10 @@ can mix devbox and instance machines.
   `^hostel-([a-z0-9]+)-([0-9]+)$` and ignores names that do not match or that have
   another `server_id`. Then:
   - A listed room with no database row, or with a `destroyed` row: destroy it.
+  - A listed room with the name of an active database room but another provider
+    ID (not in `creating`): destroy it. A Namespace instance has no unique name,
+    so a create call of a killed server can make a second instance late
+    (provider IDs are set only at creation).
   - A database room in `creating`: skip it (its worker owns it).
   - Another database room that is not listed: mark it `destroyed` (room lost).
 - A provider never acts on machines without the prefix. The owner uses Namespace for
@@ -678,8 +695,18 @@ Contract:
   `hostel-golden-<device>-<iOS version>` (from `provision`) and the lease's
   simulators `hostel-<slot>-<device>`. The machine `env` value `HOSTEL_IOS_RUNTIME`
   (for example `26.5`) selects the runtime; the default is the newest iOS runtime.
-  The `android` scripts write
-  `ANDROID_SERIAL` and `ANDROID_SERIALS`.
+  The `android` scripts (`platforms/android`) write `ANDROID_SERIAL` (first
+  device), `ANDROID_SERIALS` (all, comma-separated), and `ANDROID_HOME` (the SDK
+  in `$HOSTEL_CACHE_DIR/android-sdk`). `provision` installs the SDK (Java from the
+  machine-level tools), on Linux the Ubuntu packages that the emulator needs
+  (with `sudo`), and one golden AVD `hostel-golden-<device>-<API>-<tag>` for each
+  device with a `clean` snapshot. `prepare` starts each lease device from that
+  snapshot with `-read-only` (the AVD does not change, so each lease gets a clean
+  device) on the console port `HOSTEL_ANDROID_PORT` (slot or machine `env`,
+  default 5554) + 2 × device index; a machine with several slots sets it for each
+  slot. `reset` stops the emulators on the slot's ports. The machine `env` values
+  `HOSTEL_ANDROID_API` (default 36) and `HOSTEL_ANDROID_TAG` (default
+  `google_apis`) select the system image. Linux rooms need `/dev/kvm`.
 - Before a platform `provision` script, the server runs `mise install` for the
   machine-level tools (helper `mise-install`, at each room provisioning), so
   scripts can use them: the helper adds `hostel/bin` and the output of
@@ -739,9 +766,11 @@ max_rooms = 1
 max_lifetime = "3h"                 # required for a devbox: the plan's maximum duration
 
 [providers.namespace.machines.linux]
+# image: the room container (default ubuntu:24.04)
 spec = { product = "instance", machine_type = "linux/amd64:8x16" }
 platforms = ["android"]
 labels = ["kvm"]
+tools = { java = "21" }             # the android provision script needs Java
 max_rooms = 2
 ```
 
@@ -1540,6 +1569,13 @@ Privilege escalation to root on a room stays out of scope.
   its own (`FAKE_DELAY`), also when the create call is killed; `ssh-proxy` fails
   until the boot ends. `FAKE_CREATE_ERROR` makes a create fail with a given
   text.
+- Under the name `nsc`, it is a fake `nsc` CLI: an instance is a state file
+  (destroyed when its `--duration` ends), `list` prints `null` when empty, a
+  create blocks at `FAKE_LIMIT`, and `instance port-forward` prints `Listening on
+  127.0.0.1:<port>`. Its `nsc ssh` runs the command with a shell and a `docker`
+  shim (the same binary under the name `docker`), whose `run` starts the room
+  container from the test room image. So the E2E tests run the provider's real
+  start script.
 - Real providers: opt-in smoke tests (`HOSTEL_SMOKE_NAMESPACE=1`) and manual tests
   on the spare MacBook.
 - CI (GitHub Actions, Linux `amd64`): `make lint`, `make test-unit`, builds for all
