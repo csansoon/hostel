@@ -1,6 +1,6 @@
 # M3 implementation plan
 
-Status: done, waiting for the owner's approval (2026-10-26); the local macOS run of the gate is open (see section 5). Milestone M3 in `plan.md`: a Namespace
+Status: done, waiting for the owner's approval (2026-10-27). Milestone M3 in `plan.md`: a Namespace
 devbox as a macOS room. This file gives the build order, the checks with real
 devboxes, and the risks. `design.md` stays the contract. When this plan adds a
 detail to the contract, the same commit updates `design.md`.
@@ -173,3 +173,5 @@ detail to the contract, the same commit updates `design.md`.
     gone for good (design: one marker for each job only).
   - A failed login check stops the server start (as for `external`).
   - `max_lifetime` has no upper limit: plans differ.
+- 2026-10-27, local macOS run of the whole suite (`make test-e2e`) on 97e974c,
+  load average about 5 at the start: passed in 229 s.
