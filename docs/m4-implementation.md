@@ -225,3 +225,7 @@ adds a detail to the contract, the same commit updates `design.md`.
     has sudo and curl.
   - The room start script kept an `authorized_keys` from the image; now it
     always writes only the server key.
+- 2026-10-27, after the Codex fixes, on 98de7bd: CI and 10 of 10 gate runs passed
+  (9 min 27 s to 13 min 56 s). Local macOS run: passed in 390 s (load average
+  about 6 at the start). Two earlier local runs on 98de7bd failed only on
+  timeouts while other projects raised the load to 214; they are not counted.
