@@ -159,3 +159,142 @@ func realDevboxes(t *testing.T) []string {
 	}
 	return names
 }
+
+// TestSmokeNamespaceInstance runs against the real Namespace account and costs
+// money (a small Linux instance for a few minutes). It runs only with
+// HOSTEL_SMOKE_NAMESPACE=1 ("make test-smoke-namespace"). The nsc CLI must be
+// installed and logged in.
+//
+// A lease on a new instance in the default room container: a command as the
+// room user, a tunnel to a guest server, kill -9 of the server and a restart
+// during the lease, release. At the end no instance of the test remains, also
+// when the test fails.
+func TestSmokeNamespaceInstance(t *testing.T) {
+	if os.Getenv("HOSTEL_SMOKE_NAMESPACE") != "1" {
+		t.Skip("set HOSTEL_SMOKE_NAMESPACE=1 to run it against the real Namespace account (it costs money)")
+	}
+	// Instances that Hostel did not create mean: stop and ask the owner.
+	if names := realInstances(t); len(names) > 0 {
+		t.Fatalf("instances exist (%s); the test needs an account without instances", strings.Join(names, ", "))
+	}
+	dist, err := filepath.Abs("../../dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t)
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := filepath.Join("Library", "Application Support", "ns")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(e.home, login)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(realHome, login), filepath.Join(e.home, login)); err != nil {
+		t.Fatal(err)
+	}
+	e.init()
+	id := fmt.Sprintf("smoke%x", time.Now().UnixNano()&0xffffff)
+	prefix := "hostel-" + id + "-"
+	t.Cleanup(func() {
+		for _, i := range realInstanceList(t) {
+			if strings.HasPrefix(i.Labels["hostel.name"], prefix) {
+				t.Logf("destroy the instance %s that the test left", i.ID)
+				nscCLI(t, "destroy", i.ID, "--force")
+			}
+		}
+	})
+	e.writeConfig(fmt.Sprintf(`server_id = %q
+listen = "127.0.0.1:0"
+gateway_listen = "127.0.0.1:0"
+helper_dir = %q
+mise = { agent_device = false }
+
+[providers.ns]
+kind = "namespace"
+warm_running = "1m"
+
+[providers.ns.machines.lx]
+spec = { product = "instance", machine_type = "linux/amd64:2x4" }
+`, id, dist))
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	e.useGuestToken()
+	free := freePort(t)
+	e.newRepo(map[string]string{
+		"hostel.toml": "include = [\".env\"]\n\n[tunnels.api]\nlocal_port_env = \"PORT\"\n",
+		".gitignore":  ".env\n",
+		".env":        fmt.Sprintf("PORT=%d\n", free),
+	})
+	localHTTP(t, fmt.Sprintf("127.0.0.1:%d", free), "guest")
+
+	start := time.Now()
+	for {
+		r := e.hostel("acquire", "linux", "--task", "smoke test", "--wait", "1m")
+		if r.code == 0 {
+			break
+		}
+		if r.code != 75 || time.Since(start) > 15*time.Minute {
+			t.Fatalf("acquire: %s", r)
+		}
+	}
+	t.Logf("lease ready after %s", time.Since(start).Round(time.Second))
+	if r := e.mustHostel("run", "--", "id -un; . /etc/os-release; echo $ID"); r.stdout != "hostel\nubuntu\n" {
+		t.Fatalf("run on the instance: %q", r.stdout)
+	}
+	// The default image has no nc; bash has /dev/tcp.
+	tunnel := `exec 3<>/dev/tcp/127.0.0.1/$HOSTEL_TUNNEL_API_PORT; printf "GET /smoke HTTP/1.0\r\n\r\n" >&3; cat <&3`
+	if r := e.mustHostel("run", "--", "bash -c '"+tunnel+"'"); !strings.Contains(r.stdout, "hello from guest /smoke") {
+		t.Fatalf("tunnel from the instance: %q", r.stdout)
+	}
+
+	s = s.restartAfterKill()
+	if r := e.mustHostel("run", "--", "echo after-restart"); r.stdout != "after-restart\n" {
+		t.Fatalf("run after the restart: %q", r.stdout)
+	}
+	e.mustHostel("release")
+	e.waitFor("the instance is destroyed", 10*time.Minute, func() bool {
+		for _, i := range realInstanceList(t) {
+			if strings.HasPrefix(i.Labels["hostel.name"], prefix) {
+				return false
+			}
+		}
+		return true
+	})
+	t.Logf("total %s", time.Since(start).Round(time.Second))
+}
+
+// nscCLI runs the real nsc CLI with the real home directory.
+func nscCLI(t *testing.T, args ...string) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "nsc", args...).Output()
+	if err != nil {
+		t.Errorf("nsc %s: %v", args[0], err)
+	}
+	return out
+}
+
+type realInstance struct {
+	ID     string            `json:"cluster_id"`
+	Labels map[string]string `json:"labels"`
+}
+
+func realInstanceList(t *testing.T) []realInstance {
+	t.Helper()
+	var list []realInstance
+	if err := json.Unmarshal(bytes.TrimSpace(nscCLI(t, "list", "-o", "json")), &list); err != nil {
+		t.Fatalf("nsc list: %v", err)
+	}
+	return list
+}
+
+// realInstances returns the IDs of all instances of the account.
+func realInstances(t *testing.T) []string {
+	t.Helper()
+	var ids []string
+	for _, i := range realInstanceList(t) {
+		ids = append(ids, i.ID)
+	}
+	return ids
+}

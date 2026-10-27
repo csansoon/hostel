@@ -143,3 +143,20 @@ adds a detail to the contract, the same commit updates `design.md`.
   connection, 2 golden AVDs); `prepare` 3 s; Android 16, arm64-v8a; a
   screenshot. Free memory during the lease: about 60 MB of 8 GB. Cleanup 3 s; no
   emulator remained.
+- 2026-10-27, `instance` product: E2E tests with the fake `nsc` CLI pass
+  (`TestNamespaceInstance`, `TestNamespaceInstanceKill`,
+  `TestNamespaceInstanceLimit`, `TestNamespaceInstanceLogin`).
+- 2026-10-27, defect found by `TestNamespaceInstanceKill` (2 failures in 8 to 40
+  runs) and by the first real smoke runs: a room step blocked without an error.
+  A Go stack dump showed two goroutines of the SSH client in `Close` of the same
+  connection; each stopped the `port-forward` process and waited for it, and the
+  second wait on the same process blocks forever. The devbox proxy connection
+  had the same pattern. Fix: `Close` stops the process once. After the fix: 40
+  of 40 runs passed.
+- 2026-10-27, smoke test `TestSmokeNamespaceInstance` against the real account
+  (instance `linux/amd64:2x4`, default image `ubuntu:24.04`): passed. The lease
+  was ready after 93 s (create, room container with OpenSSH from `apt-get`,
+  room provisioning); the room user `hostel` on Ubuntu; a tunnel from the
+  instance to a guest HTTP server; `kill -9` of the server and a restart during
+  the lease; release; the instance was destroyed. Total 1 min 59 s. `nsc list`
+  was empty before and after.

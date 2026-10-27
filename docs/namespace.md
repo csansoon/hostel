@@ -144,6 +144,31 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 - While a devbox runs, `nsc list` shows its instance with the label `devbox.id`; a
   resume makes a new instance.
 
+## M4 measurements (2026-10-27)
+
+`nsc` 0.0.587. `docs/m4-implementation.md`, section 1, has the full list.
+
+- `nsc create --bare --machine_type linux/amd64:2x4 --duration 20m --ssh_key
+  <file> --label K=V -o json`: 3–6 s; `--ssh_key` takes a file path; the JSON has
+  `instance_id`. A bare instance is Wolfi Linux, user root, with Docker and
+  `/dev/kvm` (root only), without Python or `nc`.
+- `nsc list -o json`: `cluster_id`, `labels`, `shape`, `created_at`; `null` with
+  no instance. `nsc destroy <id> --force` of a missing ID exits with 0.
+- The instance's SSH server (port 22, the Namespace agent) accepts the
+  `--ssh_key` key but refuses remote forwards (`-R`).
+- `nsc instance port-forward <id> --target_port <port>` prints `Listening on
+  127.0.0.1:<port>`, is ready at once, and serves several connections.
+- An Ubuntu container with OpenSSH on the instance (`--network host --device
+  /dev/kvm`): 17 s; tunnels work through `port-forward`.
+- `nsc run --image` runs the container in its own network namespace without
+  `/dev/kvm`.
+- Over the plan limit, `nsc create` blocks without output (also with
+  `--wait_timeout`) and creates nothing.
+- `nsc build` starts a builder instance (`nsc.purpose: builder`).
+- Linux devbox (M): Ubuntu 24.04, x86_64, 8 vCPU, 15 GB, `/dev/kvm` for every
+  user, Java 21, Docker, `sudo`. Android 36 emulator: cold boot 38 s, snapshot
+  boot 4–7 s.
+
 ## Facts to verify (with milestone)
 
 | Question | Milestone |
@@ -152,8 +177,8 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 | What `--ephemeral` does at stop. Can an ephemeral devbox stop and resume, or only be deleted? | M3: a stop deletes it (2026-10-26) |
 | The storage cost of a stopped devbox. | M3: $0.20 per GB-month of data (pricing page, 2026-10-26); a stopped macOS devbox keeps only its workspace volume |
 | Can a name prefix or `--purpose` identify Hostel devboxes in `devbox list -o json`? | M3: yes, `name` and `documented_purpose` are in the JSON (2026-10-26) |
-| How the server can `Dial` an `nsc` instance's SSH server (`--ssh_key` with a public address, `nsc proxy`, or a relay through `nsc ssh`). | M4 |
-| KVM on a Linux devbox (it was tested only on an instance). | M4 |
+| How the server can `Dial` an `nsc` instance's SSH server (`--ssh_key` with a public address, `nsc proxy`, or a relay through `nsc ssh`). | M4: `nsc instance port-forward <id> --target_port <port>`; the instance's agent refuses remote forwards, so the room is a container with OpenSSH (2026-10-27) |
+| KVM on a Linux devbox (it was tested only on an instance). | M4: yes, `/dev/kvm` for every user; the Android emulator runs (2026-10-27) |
 | Does the Android emulator run inside a macOS devbox (virtualization inside a virtual machine)? | Not needed: Android on Namespace uses Linux only (owner decision, 2026-10-27). |
 | Headless login for `devbox` and `nsc` on a Linux VPS. | M5 |
 | SSH server on a Windows instance (after a plan change). | M6 |

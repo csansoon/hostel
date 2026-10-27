@@ -13,7 +13,8 @@
 //	FAKE_PROXY      "1": access goes through a proxy command (nc) instead of host and port
 //
 // Under the name "devbox" (a link), it is a fake Namespace devbox CLI instead
-// (devbox.go).
+// (devbox.go); under the name "nsc", a fake nsc CLI, and under the name
+// "docker", the docker shim of a fake instance (nsc.go).
 //
 // It runs on Unix test hosts only (it uses flock).
 package main
@@ -50,8 +51,15 @@ type failure struct {
 var errNotFound = errors.New("not found")
 
 func main() {
-	if filepath.Base(os.Args[0]) == "devbox" {
+	switch filepath.Base(os.Args[0]) {
+	case "devbox":
 		devboxMain(os.Args[1:])
+		return
+	case "nsc":
+		nscMain(os.Args[1:])
+		return
+	case "docker":
+		dockerShimMain(os.Args[1:])
 		return
 	}
 	if len(os.Args) != 2 {
