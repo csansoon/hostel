@@ -1,0 +1,145 @@
+# M4 implementation plan
+
+Status: in progress (2026-10-27). Milestone M4 in `plan.md`: Linux rooms on
+Namespace and the `android` platform. This file gives the facts, the decisions,
+the build order, and the risks. `design.md` stays the contract. When this plan
+adds a detail to the contract, the same commit updates `design.md`.
+
+## 1. Facts from the experiments (2026-10-27)
+
+`devbox` 0.0.204 and `nsc` 0.0.587 on the owner's Mac, Developer plan.
+
+- **Linux devbox and KVM.** A Linux devbox (size M, `builtin:default`) is Ubuntu
+  24.04 on x86_64 with 8 vCPU and 15 GB. `/dev/kvm` exists and every user can read
+  and write it. Java 21, Docker, and `sudo` without a password are present.
+- **Android emulator on a Linux devbox.** The SDK (`cmdline-tools`,
+  `platform-tools`, `emulator`, `system-images;android-36;google_apis;x86_64`,
+  5.4 GB) downloads in about 30 s. The emulator needs Ubuntu packages that the
+  image does not have (for example `libpulse0`). Cold boot of a Pixel 7 AVD:
+  38 s. Boot from a saved snapshot: 7 s; with `-read-only`: 4 s.
+  `adb exec-out screencap -p` works (565 KB PNG). `sdkmanager` prints that it is
+  deprecated and that the "Android CLI" (`android sdk`) replaces it; it still
+  works.
+- **One devbox.** The Developer plan allows one devbox (running or stopped) for
+  all Hostel rooms. A Linux devbox for Android blocks the macOS devbox for iOS.
+  Instances do not count against this limit, only against the concurrency limits
+  (32 vCPU and 64 GB for Linux).
+- **`nsc` instances.**
+  - `nsc create --bare --machine_type linux/amd64:2x4 --duration 20m --ssh_key
+    <file> --label K=V --purpose TEXT --cidfile F -o json`: 3–6 s. `--ssh_key`
+    takes a file path. `-o json` gives `instance_id`.
+  - A bare instance is Wolfi Linux, user root, with Docker and `/dev/kvm`
+    (root only). It has no Python, `nc`, or `wget`.
+  - `nsc list -o json` has `cluster_id`, `labels`, `shape`, and `created_at`, but
+    no deadline. With no instance it prints `null`.
+  - `nsc destroy <id> --force`: under 1 s; a second destroy of the same ID also
+    exits with 0 and prints nothing.
+  - `nsc ssh <id> -T -- <command>` runs the command string with a shell on the
+    instance, as root.
+  - The instance's SSH server on port 22 is the Namespace agent. It accepts the
+    `--ssh_key` key, but it refuses remote forwards (`-R`), which Hostel tunnels
+    need.
+  - `nsc instance port-forward <id> --target_port <port>` prints `Listening on
+    127.0.0.1:<port>` and forwards each local connection to that port on the
+    instance. It is ready at once and serves several connections.
+  - OpenSSH in an Ubuntu container on the instance (`docker run --network host
+    --device /dev/kvm ubuntu:24.04`, then `apt-get install openssh-server sudo`):
+    ready in 17 s. Through `port-forward`, it accepts our key and remote forwards;
+    the tunnel test (an HTTP server on the Mac, reached from the instance)
+    worked. `/dev/kvm` in the container is root only by default.
+  - `nsc run --image` starts a container on a new instance in 3 s, but in its own
+    network namespace (port 22 is not published to the instance), and it has no
+    option for `/dev/kvm`. Not used.
+  - Over the plan limit (for example `linux/amd64:32x128`), `nsc create` does not
+    fail: the call blocks with no output, also with `--wait_timeout 20s`, until the
+    caller stops it. Nothing is created.
+  - `nsc build` starts a builder instance (label `nsc.purpose: builder`); destroy
+    it after use.
+- **The MacBook** (`mac-mini`, static room of M2): macOS 26.6.2, arm64,
+  8 CPU, 8 GB memory, 157 GB free. No Android SDK, no Java, no Homebrew.
+
+## 2. Decisions from the facts
+
+- **Android on Namespace: `instance` machines** (`spec.product = "instance"`). A
+  Linux devbox works too (KVM, the same scripts), but it uses the plan's only
+  devbox. Owner decision 2026-10-27: no Android on macOS devboxes.
+- **Room in a container on the instance.** The provider creates a bare instance
+  with `--duration` (the provider-side bound) and the label `hostel.name=<name>`,
+  then runs one command with `nsc ssh`: `docker run -d --name hostel-room
+  --restart unless-stopped --network host --device /dev/kvm` with the image from
+  `spec.image` (default `ubuntu:24.04`, any image with `apt-get`). A start script
+  in the container installs OpenSSH and `sudo` if they are missing, creates the
+  user `hostel` with the server key, lets it use `/dev/kvm` and `sudo`, and runs
+  `sshd` on port 2222. The room is then an ordinary Linux room: the server key,
+  the user `hostel`, and remote forwards work.
+- **Access.** `Dial` starts `nsc instance port-forward <id> --target_port 2222`,
+  reads the local port, connects, and stops the process when the connection
+  closes.
+- **Idempotent create.** Find the instance by the label first. A `docker run` that
+  finds `hostel-room` already there counts as done. `Provision` waits until an SSH
+  handshake works (as for a devbox).
+- **Deadlines.** `--duration` = the creation deadline from the server. `Extend`
+  runs `nsc instance extend-duration <id> --ensure_minimum <deadline - now>`
+  (`CanExtend`). Instances cannot stop.
+- **Limits.** `nsc create` blocks at the plan limit, so the create call has a
+  deadline (2 minutes), and `max_rooms` must keep Hostel under the plan's
+  concurrency. A timed-out create is a failed attempt; reconcile destroys an
+  instance with the prefix and no room.
+- **The `android` platform** (`platforms/android/`), `.linux.sh` and `.macos.sh`:
+  - `provision` installs the SDK in `$HOSTEL_CACHE_DIR/android-sdk` (Java from the
+    machine-level mise tools), the Linux packages for the emulator (with `sudo`,
+    when they are missing), and one golden AVD for each device with a "clean"
+    snapshot.
+  - `prepare` starts one emulator for each lease device from the clean snapshot
+    with `-read-only` (each lease gets a clean device; reset does not have to
+    delete data), on a console port for the slot and the device, and writes
+    `ANDROID_SERIAL`, `ANDROID_SERIALS`, and `ANDROID_HOME` to `device.env`.
+  - `reset` stops the slot's emulators. `screenshot` uses `adb exec-out
+    screencap`. `health` checks the SDK, the golden AVDs, KVM (Linux), and disk.
+  - Machine env: `HOSTEL_ANDROID_API` (default 36) and `HOSTEL_ANDROID_TAG`
+    (default `google_apis`).
+- **Tests.** A fake `nsc` CLI (the fake provider under the name `nsc`) at the
+  adapter boundary. Its `nsc ssh` runs the real command string with a `docker`
+  shim, so the E2E tests run the real start script in the test room image. The
+  emulator scripts run only on real machines (like the `ios` scripts); the E2E
+  tests use `fakedevice`.
+
+## 3. Build order
+
+1. `platforms/android/` scripts; check them on a Linux devbox and on the MacBook
+   through Hostel.
+2. The `instance` product in `internal/provider/namespace.go`, with the config
+   check and `design.md`.
+3. The fake `nsc` CLI and E2E tests: lease, restart during the create, extend,
+   destroy, reconcile of a leaked instance, the tunnel.
+4. A smoke test against the real account (`HOSTEL_SMOKE_NAMESPACE=1`).
+5. Done-when check: the ExampleApp Android app on a Namespace instance against the local
+   API, with a screenshot.
+6. Gate: `e2e-10` in CI and one local macOS run; `pr-ready`.
+
+## 4. Risks
+
+| Risk | Plan |
+|---|---|
+| A create at the plan limit blocks. | A 2 minute deadline on the create call; `max_rooms`; reconcile destroys leaks; `--duration` bounds every instance. |
+| `apt-get` in the room container is slow or fails. | Measured 17 s; the image can already have OpenSSH (then nothing is installed). |
+| 8 GB of memory on the MacBook is small for an emulator and a Gradle build. | Measure; give the AVD 2 GB; document the limit. |
+| `sdkmanager` is deprecated. | It still works; move to the Android CLI when it stops working. |
+
+## 5. Results
+
+- 2026-10-27, `android` scripts on a Linux devbox (size M, through a temporary
+  Hostel server, machine `spec.product = "devbox"`, `platforms = ["android"]`):
+  - `devbox create` 9 s; room provisioning 22 s; `android` provision 166 s (2
+    Ubuntu packages, the SDK, 2 golden AVDs); `prepare` 6 s. `acquire` returned
+    after 212 s.
+  - `adb devices` in a job shows `emulator-5554` (Android 16, x86_64);
+    `hostel screenshot` gave a 1080×2424 PNG.
+  - A setting changed in the first lease was gone in the next lease on the warm
+    room (cleanup and `prepare`: 10 s). The devbox was deleted after
+    `warm_running`; the key files were gone.
+- 2026-10-27, `android` scripts on the MacBook (static room, `tools = { java =
+  "21" }`): the first provision took 12 minutes (Java, about 6 GB over the home
+  connection, 2 golden AVDs); `prepare` 3 s; Android 16, arm64-v8a; a
+  screenshot. Free memory during the lease: about 60 MB of 8 GB. Cleanup 3 s; no
+  emulator remained.

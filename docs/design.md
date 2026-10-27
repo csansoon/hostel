@@ -678,8 +678,17 @@ Contract:
   `hostel-golden-<device>-<iOS version>` (from `provision`) and the lease's
   simulators `hostel-<slot>-<device>`. The machine `env` value `HOSTEL_IOS_RUNTIME`
   (for example `26.5`) selects the runtime; the default is the newest iOS runtime.
-  The `android` scripts write
-  `ANDROID_SERIAL` and `ANDROID_SERIALS`.
+  The `android` scripts (`platforms/android`) write `ANDROID_SERIAL` (first
+  device), `ANDROID_SERIALS` (all, comma-separated), and `ANDROID_HOME` (the SDK
+  in `$HOSTEL_CACHE_DIR/android-sdk`). `provision` installs the SDK (Java from the
+  machine-level tools), on Linux the Ubuntu packages that the emulator needs
+  (with `sudo`), and one golden AVD `hostel-golden-<device>-<API>-<tag>` for each
+  device with a `clean` snapshot. `prepare` starts each lease device from that
+  snapshot with `-read-only` (the AVD does not change, so each lease gets a clean
+  device) on the console port 5554 + 2 × (4 × slot index + device index); `reset`
+  stops the emulators on the slot's ports. The machine `env` values
+  `HOSTEL_ANDROID_API` (default 36) and `HOSTEL_ANDROID_TAG` (default
+  `google_apis`) select the system image. Linux rooms need `/dev/kvm`.
 - Before a platform `provision` script, the server runs `mise install` for the
   machine-level tools (helper `mise-install`, at each room provisioning), so
   scripts can use them: the helper adds `hostel/bin` and the output of
