@@ -39,6 +39,7 @@ All other terms are plain technical words.
 | Date | Decision |
 |---|---|
 | 2026-10-26 | The 10-run E2E stability gate runs in CI (10 parallel jobs, the workflow "E2E gate"), not on the owner's shared Mac, whose load from other projects makes the result depend on the machine. Before a milestone ends, the suite also passes once locally on macOS, so the macOS host is covered. |
+| 2026-10-27 | Android emulators do not run on Namespace macOS devboxes, also if they can. Android rooms on Namespace are Linux machines. The test of the emulator on a macOS host uses the owner's physical Mac `mac-mini` (the static room of M2). |
 | 2026-10-23 | Hostel focuses on iOS (simulators) for now. macOS desktop apps (UI control with Automation Mode, Mac Catalyst builds with team signing) are future work. The `macos` platform keeps its desktop screenshot. |
 | 2026-10-23 | Each room gets `agent-device` (Callstack) by default, so that agents can tap, type, and read the screen of simulators, emulators, and desktops on the room. Hostel pins its version (the same as T3 Code). The server option `mise.agent_device = false` turns it off. |
 | 2026-10-22 | The spare MacBook has FileVault off and logs in the `hostel` user automatically, so that it has a desktop session (label `desktop`). It holds no personal data. |

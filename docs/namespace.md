@@ -154,7 +154,7 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 | Can a name prefix or `--purpose` identify Hostel devboxes in `devbox list -o json`? | M3: yes, `name` and `documented_purpose` are in the JSON (2026-10-26) |
 | How the server can `Dial` an `nsc` instance's SSH server (`--ssh_key` with a public address, `nsc proxy`, or a relay through `nsc ssh`). | M4 |
 | KVM on a Linux devbox (it was tested only on an instance). | M4 |
-| Does the Android emulator run inside a macOS devbox (virtualization inside a virtual machine)? | M4 |
+| Does the Android emulator run inside a macOS devbox (virtualization inside a virtual machine)? | Not needed: Android on Namespace uses Linux only (owner decision, 2026-10-27). |
 | Headless login for `devbox` and `nsc` on a Linux VPS. | M5 |
 | SSH server on a Windows instance (after a plan change). | M6 |
 
