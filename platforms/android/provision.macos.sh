@@ -34,7 +34,8 @@ if ! [ -x "$sdkmanager" ]; then
 fi
 yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
 "$sdkmanager" platform-tools emulator "$image" >/dev/null
-echo "$("$ANDROID_HOME/emulator/emulator" -version | head -n 1); $image"
+version=$("$ANDROID_HOME/emulator/emulator" -version)
+echo "$(echo "$version" | head -n 1); $image"
 
 avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 adb="$ANDROID_HOME/platform-tools/adb"

@@ -160,3 +160,24 @@ adds a detail to the contract, the same commit updates `design.md`.
   instance to a guest HTTP server; `kill -9` of the server and a restart during
   the lease; release; the instance was destroyed. Total 1 min 59 s. `nsc list`
   was empty before and after.
+- 2026-10-27, done-when check: the ExampleApp Android app on a Namespace instance
+  (owner's server, machine `namespace/android`, `linux/amd64:8x16`, default image,
+  `tools = { java = "21" }`), against the API of the ExampleApp worktree on the Mac
+  through the tunnel:
+  - `acquire android --require kvm` returned after 351 s: `nsc create` and the
+    room container 43 s, room provisioning 43 s, `android` provision 3 min 45 s
+    (packages, SDK, 2 golden AVDs), `prepare` 7 s, then the sync (3,347 files)
+    and `mise install` (Java, pnpm, tuist for Linux).
+  - Cold `./gradlew installDebug -Pexampleapp.apiBaseUrl=http://10.0.2.2:$HOSTEL_TUNNEL_API_PORT`:
+    2 min 31 s.
+  - The app started; the sign-in with a `@dev.local` account went through the
+    tunnel to the local API (its log shows the dev magic link); the app showed
+    "New chat". Screenshots: `/tmp/hostel-m4/exampleapp-android-1.png` and
+    `exampleapp-android-2.png`.
+- 2026-10-27, defect found in that check: after the release, `health` failed
+  with exit code 127: `emulator -version` starts QEMU, which needs
+  `libpng16.so.16`, and `ubuntu:24.04` does not have it (the emulator itself ran;
+  the devbox image has the library). The room was destroyed as broken. Fix:
+  `provision` installs `libpng16-16t64` and fails when `emulator -version` fails.
+  Checked on a new instance: lease ready after 264 s; cleanup with `health`
+  passed.

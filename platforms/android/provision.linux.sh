@@ -22,7 +22,9 @@ missing=""
 for p in curl unzip libpulse0 libnss3 libxcomposite1 libxcursor1 libxdamage1 libxi6 libxtst6 libgl1 libxkbfile1 libxkbcommon0 libxkbcommon-x11-0 libxrandr2 libdbus-1-3 libbsd0; do
 	dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
 done
+# Ubuntu 24.04 and Debian 13 renamed these packages ("t64").
 dpkg -s libasound2t64 >/dev/null 2>&1 || dpkg -s libasound2 >/dev/null 2>&1 || missing="$missing libasound2t64"
+dpkg -s libpng16-16t64 >/dev/null 2>&1 || dpkg -s libpng16-16 >/dev/null 2>&1 || missing="$missing libpng16-16t64"
 if [ -n "$missing" ]; then
 	if ! sudo -n true 2>/dev/null; then
 		echo "missing packages:$missing; install them, or give the room user sudo without a password" >&2
@@ -55,7 +57,9 @@ if ! [ -x "$sdkmanager" ]; then
 fi
 yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
 "$sdkmanager" platform-tools emulator "$image" >/dev/null
-echo "$("$ANDROID_HOME/emulator/emulator" -version | head -n 1); $image"
+# -version starts QEMU, so it fails when a library is missing.
+version=$("$ANDROID_HOME/emulator/emulator" -version)
+echo "$(echo "$version" | head -n 1); $image"
 
 avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 adb="$ANDROID_HOME/platform-tools/adb"
