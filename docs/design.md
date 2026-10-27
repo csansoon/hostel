@@ -779,7 +779,7 @@ Server-level keys and defaults:
 | Key | Default |
 |---|---|
 | `listen` | `127.0.0.1:7410` (HTTP API) |
-| `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen` |
+| `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen`; `gateway_public` can also be a `wss://<host>/v1/gateway` URL (section 13) |
 | `data_dir` | `~/.local/share/hostel` |
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
 | `platforms_dir` | `~/.config/hostel/platforms` |
@@ -1180,6 +1180,14 @@ guest ──SSH (lease key)──► gateway ──SSH (server key)──► roo
 
 ### Gateway behavior
 
+- **Transport.** The gateway listens on TCP (`gateway_listen`). It also accepts
+  the same SSH inside a WebSocket (binary messages) on the API listener at
+  `GET /v1/gateway`, for a server that only HTTPS reaches (an exe.dev VM, M5).
+  `gateway_public` tells guests which one to use: a `host:port`, or a `ws://` or
+  `wss://` URL (port 0 means the real port). For the system `ssh` (`hostel ssh`,
+  `hostel shell`), the ssh_config of a WebSocket gateway has a `ProxyCommand`
+  with `hostel gateway-proxy <url>`, which connects stdin and stdout to the
+  WebSocket.
 - **Gateway host key.** `hostel server init` generates it. Guests get it from
   `GET /v1/info` over the authenticated API and pin it.
 - **Gateway user.** `<lease-id>.<purpose>`. Purpose is `cmd` (commands, sync,

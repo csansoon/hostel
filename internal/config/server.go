@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -217,8 +218,14 @@ func (s *Server) resolve() error {
 	setStr(&s.GatewayListen, "127.0.0.1:7422")
 	setStr(&s.GatewayPublic, s.GatewayListen)
 	for _, a := range []struct{ key, v string }{{"listen", s.Listen}, {"gateway_listen", s.GatewayListen}, {"gateway_public", s.GatewayPublic}} {
+		if a.key == "gateway_public" && IsWebSocketURL(a.v) {
+			if u, err := url.Parse(a.v); err != nil || u.Host == "" {
+				el.add(a.key, "%q is not a ws:// or wss:// URL", a.v)
+			}
+			continue
+		}
 		if _, _, err := net.SplitHostPort(a.v); err != nil {
-			el.add(a.key, "%q is not a host:port address", a.v)
+			el.add(a.key, "%q is not a host:port address or a wss:// URL", a.v)
 		}
 	}
 	setStr(&s.DataDir, filepath.Join(home, ".local", "share", "hostel"))
@@ -577,4 +584,10 @@ func (m *Machine) HasLabels(labels []string) bool {
 		}
 	}
 	return true
+}
+
+// IsWebSocketURL reports whether a gateway address is a WebSocket URL (the
+// gateway's /v1/gateway on the API) instead of a TCP host:port.
+func IsWebSocketURL(addr string) bool {
+	return strings.HasPrefix(addr, "wss://") || strings.HasPrefix(addr, "ws://")
 }

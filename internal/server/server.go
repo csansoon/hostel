@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -125,7 +126,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		ln.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.GatewayListen, err)
 	}
-	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr())
+	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr(), ln.Addr())
 	s.gateway = gateway.New(gatewayKey, gwBackend{s}, log)
 	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 2)
@@ -180,6 +181,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/rooms/{id}/destroy", s.auth(s.admin(s.handleRoomDestroy)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
+	// The gateway's SSH over a WebSocket; SSH authenticates inside.
+	mux.Handle("GET /v1/gateway", s.gateway)
 	return mux
 }
 
@@ -227,8 +230,17 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 }
 
 // publicAddr returns the gateway address for guests: gateway_public, with the
-// real port when it has port 0.
-func publicAddr(public string, real net.Addr) string {
+// real port when it has port 0 (the API's port for a WebSocket URL).
+func publicAddr(public string, real, api net.Addr) string {
+	// A WebSocket gateway is on the API listener.
+	if config.IsWebSocketURL(public) {
+		u, err := url.Parse(public)
+		if err != nil || u.Port() != "0" {
+			return public
+		}
+		u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(api.(*net.TCPAddr).Port))
+		return u.String()
+	}
 	host, port, err := net.SplitHostPort(public)
 	if err != nil || port != "0" {
 		return public
