@@ -258,7 +258,9 @@ Build:
 - Release builds (for example GoReleaser) and an install method.
 - `docs/deploy-vps.md`.
 
-Done when: a cloud agent uses the home MacBook through a server on a VPS.
+Done when: a guest on the owner's Mac uses the home MacBook through a server on
+an exe.dev VM (owner decision, 2026-10-27; a cloud agent is an optional extra
+check).
 
 ## M6. Windows and several slots
 
