@@ -9,7 +9,7 @@ TARGETS = darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 window
 
 export CGO_ENABLED = 0
 
-.PHONY: build dist mise mise-linux lint test-unit test-e2e test-e2e-10
+.PHONY: build dist mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace
 
 build:
 	$(GO) build $(GOFLAGS_BUILD) -o dist/hostel ./cmd/hostel
@@ -46,3 +46,7 @@ test-e2e-10: mise-linux
 		echo "== E2E run $$i of 10"; \
 		$(GO) test -tags e2e -count=1 -timeout 60m ./test/e2e/...; \
 	done
+
+# Against the real Namespace account: it costs money (docs/m3-implementation.md).
+test-smoke-namespace: dist
+	HOSTEL_SMOKE_NAMESPACE=1 $(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeNamespace$$' -v ./test/e2e/...

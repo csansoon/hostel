@@ -1,0 +1,41 @@
+name: E2E gate
+
+# The milestone stability gate (AGENTS.md): the whole E2E suite in 10 separate
+# runs, on CI runners instead of the shared Mac. Start it with the label
+# "e2e-10" on a pull request (remove and add it again for a new run), or by hand
+# on a branch that has this file on main.
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new start with the label stops the old run of the same pull request. The
+# label name is in the group, so that another label does not stop the gate.
+concurrency:
+  group: e2e-gate-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'e2e-10'
+    name: run ${{ matrix.run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # All 10 runs finish, so one report shows every failure.
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - name: Cache the pinned mise binaries
+        uses: actions/cache@v4
+        with:
+          path: dist/mise-linux-*
+          key: mise-linux-${{ hashFiles('build/mise-checksums.txt') }}
+      - name: E2E tests
+        run: make test-e2e

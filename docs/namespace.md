@@ -105,6 +105,8 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 
 ## Traps
 
+- **SSH server.** The devbox SSH server ignores `~/.ssh/authorized_keys`. Use
+  the key from the `devbox` CLI.
 - **Relative paths.** A devbox SSH session starts in `~/workspaces`. A relative
   remote path lands there. Use absolute paths.
 - **Agent forwarding.** The generated devbox SSH config sets `ForwardAgent yes`.
@@ -119,14 +121,37 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 - **Image versions.** Selectors can give an older macOS without the needed Xcode.
   Check the toolchain in the `provision` script and compare it with the labels.
 
+## M3 measurements (2026-10-26)
+
+`devbox` 0.0.204. `docs/m3-implementation.md`, section 1, has the full list.
+
+| Step | Linux S | macOS M (`tahoe-slim`) |
+|---|---|---|
+| `devbox create` | 7–12 s | 27 s |
+| `devbox stop` | 20 s | 17 s |
+| Resume through `devbox ssh-proxy` | 5 s | 19 s |
+| `devbox delete` | 1 s | 1 s |
+| Idle stop with `--auto_stop_idle_timeout 5m` | 894 s | not measured |
+
+- SSH user (`main_user`): `devbox` on Linux, `runner` on macOS.
+- What persists at a stop: Linux, the whole system; macOS, only `/Volumes/devbox`
+  (`~/workspaces`). The macOS home directory and the simulators are lost.
+- `devbox list -o json` has no running or stopped state. With no devbox, it prints
+  ``No devbox available yet. Try running `devbox create`.`` before `[]`.
+- `tahoe-slim` now has Xcode 26.2 to 27.1 (`/Applications/Xcode_<version>.app`);
+  the default `xcode-select` is 26.4.1, not 26.5.
+- `screencapture -x` over SSH works on a macOS devbox.
+- While a devbox runs, `nsc list` shows its instance with the label `devbox.id`; a
+  resume makes a new instance.
+
 ## Facts to verify (with milestone)
 
 | Question | Milestone |
 |---|---|
-| The exact proxy command in a generated `.ssh` file, and how the server can `Dial` a devbox with it. | M3 |
-| What `--ephemeral` does at stop. Can an ephemeral devbox stop and resume, or only be deleted? | M3 |
-| The storage cost of a stopped devbox. | M3 |
-| Can a name prefix or `--purpose` identify Hostel devboxes in `devbox list -o json`? | M3 |
+| The exact proxy command in a generated `.ssh` file, and how the server can `Dial` a devbox with it. | M3: `devbox ssh-proxy <name>` (stdin and stdout); key `~/.namespace/ssh/<name>.devbox.namespace.key`; the devbox accepts only that key (2026-10-26) |
+| What `--ephemeral` does at stop. Can an ephemeral devbox stop and resume, or only be deleted? | M3: a stop deletes it (2026-10-26) |
+| The storage cost of a stopped devbox. | M3: $0.20 per GB-month of data (pricing page, 2026-10-26); a stopped macOS devbox keeps only its workspace volume |
+| Can a name prefix or `--purpose` identify Hostel devboxes in `devbox list -o json`? | M3: yes, `name` and `documented_purpose` are in the JSON (2026-10-26) |
 | How the server can `Dial` an `nsc` instance's SSH server (`--ssh_key` with a public address, `nsc proxy`, or a relay through `nsc ssh`). | M4 |
 | KVM on a Linux devbox (it was tested only on an instance). | M4 |
 | Does the Android emulator run inside a macOS devbox (virtualization inside a virtual machine)? | M4 |

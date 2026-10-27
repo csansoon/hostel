@@ -24,6 +24,10 @@ owner decision in `requirements.md`, section 3, with the date.
 - Use short, direct sentences. State evidence, uncertainty, and blockers clearly.
 - At the end of each milestone, stop, show the evidence (test output, screenshots),
   and wait for approval.
+- For each pull request that you create, follow `.claude/skills/pr-ready/SKILL.md`
+  (owner instruction, 2026-10-26): a local review by a subagent, fixes pushed
+  without approval, every review comment resolved or answered, and a report to
+  the owner when the pull request is ready to merge. Do not merge.
 - Make local git commits at logical steps, and at least one at the end of each
   milestone. Do not create the GitHub repository, push, or open a pull request unless
   the owner asks for it in the conversation.
@@ -79,7 +83,9 @@ platform scripts, cleanup) in code, CLI text, and docs. Do not add new themed wo
 - **No fixed sleeps as assertions.** Wait for a condition with a deadline. Use short
   configured durations in tests, with wide margins.
 - **Stability.** From M1, a milestone is done only when the whole E2E suite passes
-  in 10 separate, consecutive runs (`make test-e2e-10`).
+  in 10 separate runs in CI (the label `e2e-10` on the pull request starts the
+  workflow "E2E gate"), and in one local run on macOS (`make test-e2e`) when the
+  Mac has a normal load. `make test-e2e-10` runs the 10 runs locally.
 - **Shared machine.** The owner's Mac also runs other projects. Their Docker
   containers (for example `exampleapp-postgres` and `exampleapp-storage`) and local servers must
   not be touched. E2E tests label every container, network, and volume that they

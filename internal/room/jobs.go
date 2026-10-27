@@ -133,6 +133,12 @@ func (h *helper) jobSupervise(args []string) error {
 		return writeExit(127)
 	}
 	h.trackSessions(slot, envMap(env)["HOSTEL_LEASE"], out)
+	if marker := devboxTaskMarker(slot, pos[0]); marker != "" {
+		if err := os.WriteFile(marker, nil, 0o644); err != nil {
+			fmt.Fprintf(out, "hostel: warning: write the devbox task marker: %v; the devbox can stop on idle during this job\n", err)
+		}
+		defer os.Remove(marker)
+	}
 	argv := meta.Command
 	if meta.Shell {
 		argv = []string{"/bin/sh", "-c", meta.Command[0]}
@@ -158,6 +164,20 @@ func (h *helper) jobSupervise(args []string) error {
 	}
 	cmd.Wait()
 	return writeExit(exitCode(cmd.ProcessState))
+}
+
+// devboxTaskMarker is a Namespace task marker for a running job: while it
+// exists, the devbox does not stop on idle, so a long job without an SSH
+// connection keeps running. Only jobs have one, so a devbox that a dead server
+// leaked still stops on idle when its jobs end (design, section 7). "." is not
+// in slot names, so the markers of one slot have their own prefix. It is
+// empty on other rooms.
+func devboxTaskMarker(slot, job string) string {
+	dir := os.Getenv("NAMESPACE_DEVBOX_TASKS_DIR")
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "hostel-"+slot+"."+job)
 }
 
 // lookPath finds a command in the PATH of the job environment (not the helper's).

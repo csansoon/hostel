@@ -184,16 +184,45 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 			return err
 		}
 	}
-	return s.runHealth(ctx, room, r.ID, m)
+	return s.runHealth(ctx, room, r.ID)
 }
 
-// runHealth runs the health script of each platform of the room.
-func (s *Server) runHealth(ctx context.Context, room *roomops.Room, roomID int64, m *config.Machine) error {
+// healthPlatforms returns the platforms of a room that have a health script
+// and that the room is ready for. An on-demand room is ready for a device
+// platform only after the first lease of the platform ran its provision script
+// (design, section 7), and a health script can need the result (for example the
+// ios golden simulators).
+func (s *Server) healthPlatforms(ctx context.Context, roomID int64) ([]string, error) {
+	r, err := s.store.Room(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.machineOf(r)
+	if err != nil {
+		return nil, err
+	}
+	ready, err := s.readyPlatforms(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
 	for _, name := range s.roomPlatformNames(m) {
-		p := s.cfg.Platforms[name]
-		if s.uploads[name][m.OS].Hash == "" || p.Script(m.OS, config.StepHealth) == "" {
-			continue
+		up := s.uploads[name][m.OS]
+		if up.Hash != "" && s.cfg.Platforms[name].Script(m.OS, config.StepHealth) != "" && ready[name] == up.Hash {
+			out = append(out, name)
 		}
+	}
+	return out, nil
+}
+
+// runHealth runs the health scripts of healthPlatforms.
+func (s *Server) runHealth(ctx context.Context, room *roomops.Room, roomID int64) error {
+	names, err := s.healthPlatforms(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		p := s.cfg.Platforms[name]
 		timeout := p.ScriptTimeout(config.StepHealth)
 		resp, err := room.RunScript(ctx, name, config.StepHealth, "", protocol.RunScriptRequest{
 			Env: platformEnv(p), TimeoutSeconds: int(timeout / time.Second)})

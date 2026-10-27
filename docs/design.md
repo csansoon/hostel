@@ -331,7 +331,8 @@ plus the median creation time when a new room is necessary. Show it as an estima
 Broken on-demand rooms are destroyed. Broken static rooms stay until the owner runs
 `hostel admin room repair <room> [--accept-host-key]`. Repair runs the full cleanup
 (section 17) of each `broken` or `dirty` slot again (this also restores
-`authorized_keys`), then the `health` scripts, and sets the room to `running` if all
+`authorized_keys`), then the `health` scripts of the platforms that the room is
+ready for, and sets the room to `running` if all
 pass. It does this through the probe: a broken slot (with its `cleanup_data`)
 becomes `dirty`, and the room goes to `provisioning`; the probe cleans each dirty
 slot before the room is `running`.
@@ -385,13 +386,15 @@ type RoomAccess struct {
   machine's configured `os` selects the platform scripts; the server writes it to
   `room-env.json` (`"os"`), and the helper uses it for script names and
   `HOSTEL_ROOM_OS`. For static machines both must be the same.
-- `Signers` is the server key for `static` and `external` rooms. For Namespace it can
-  be the key that the provider CLI manages (verify in M3).
+- `Signers` is the server key for `static` and `external` rooms. For a Namespace
+  devbox it is the key that the `devbox` CLI manages
+  (`~/.namespace/ssh/<name>.devbox.namespace.key`): the devbox SSH server accepts
+  only that key (M3, 2026-10-26).
 
 | Kind | Machines | Provision | Access | Stop | Deadline |
 |---|---|---|---|---|---|
 | `static` | real hosts (`address`) | Not called. Each machine is a room from server start. | TCP to the host with the server key, or the `room connect` tunnel | no | none |
-| `namespace`, `spec.product = "devbox"` | templates | `devbox create --name <Name> ...` | the devbox SSH proxy (verify in M3) | yes | idle auto-stop; plan maximum duration (verify in M3) |
+| `namespace`, `spec.product = "devbox"` | templates | `devbox create --name <Name> --ephemeral ...`; a devbox with the name that another call made (for example before a restart) is taken when it accepts SSH | proxy command `devbox ssh-proxy <Name>`, user `main_user` | no (ephemeral: a stop deletes it) | idle stop (it deletes the devbox); plan maximum duration (3 h on the Developer plan) |
 | `namespace`, `spec.product = "instance"` | templates | `nsc create --duration ... --label hostel=<Name> --ssh_key ...` | verify in M4 | no | `--duration`; `nsc extend` |
 | `external` | templates | the configured command | from the command's response | if the command declares it | the command must apply it |
 
@@ -461,18 +464,27 @@ can mix devbox and instance machines.
     minutes). The script timeouts are those of the lease's platform.
   - At `ready`, the server extends it to `ready_at + max_lease + warm_running + 10
     minutes` if that is later.
-- Machines that can stop (`devbox`): idle auto-stop at the provider
-  (`--auto_stop_idle_timeout`) is the provider-side bound for compute cost (N2). A
-  stopped devbox costs only storage. The server destroys stopped rooms after `warm_stopped`. If the
-  server is down, stopped rooms stay; reconcile destroys them after the restart if
-  they are too old.
+- Machines that can stop: the server destroys stopped rooms after
+  `warm_stopped`. If the server is down, stopped rooms stay; reconcile destroys them
+  after the restart if they are too old.
+- Namespace devboxes are ephemeral (M3, 2026-10-26: a stopped macOS devbox keeps
+  only its workspace volume, so a stop has no value). The provider-side bounds
+  for compute cost (N2) are the idle stop (`--auto_stop_idle_timeout 15m`; it
+  deletes an ephemeral devbox; measured: about 15 minutes after the last
+  activity; 972 s for an idle ephemeral devbox) and the plan's maximum duration.
+  While a job runs, its supervisor keeps the task marker
+  `$NAMESPACE_DEVBOX_TASKS_DIR/hostel-<slot>.<job>`, so a long job without an SSH
+  connection does not stop the devbox. Only jobs have a marker: a devbox that a dead
+  server leaked still stops on idle when its jobs end. Between commands, a lease
+  without jobs expires (`idle_timeout`, 10 minutes) before the idle stop.
+  `max_lifetime` is required for a devbox machine.
 - A room takes a new lease only if its remaining provider lifetime (if the machine
   has a `max_lifetime`, counted from the room's creation) is at least
   `max_lease + 5 minutes`. Else the server destroys it
   when it has no lease, and a new room is created.
 - At config load, the server rejects a machine whose `max_lease + 5 minutes` is longer
   than its `max_lifetime`. The owner sets `max_lifetime` from the provider's plan (for
-  example 3 hours for a devbox on the Namespace Developer plan; verify in M3).
+  example 3 hours for a devbox on the Namespace Developer plan).
 
 ### External provider contract
 
@@ -576,7 +588,7 @@ success; else stdout has `{"error": "..."}`.
 | `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
 | `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
 | `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
-| `cleanup` | server | `{"lease_id", "platform", "devices", "ports"}` (from the database, so a repeated cleanup does not need `lease.json`) | `{"steps": [...]}` (section 17) |
+| `cleanup` | server | `{"lease_id", "platform", "devices", "ports", "health"}` (from the database, so a repeated cleanup does not need `lease.json`; the server sets `health` at the time of the cleanup: the platforms that the room is ready for) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
 | `sync-apply <plan-id>` | guest | a `tar` stream (not JSON) | `{"written", "deleted"}` |
@@ -641,7 +653,7 @@ can only have scripts for its own OS. Steps:
 | `prepare` | each lease, before `ready` | clone the golden simulator of each requested device; boot it; write device facts to `device.env` |
 | `screenshot` | `hostel screenshot`; `$1` is the output path, `$2` the device (default: the first) | `xcrun simctl io "$udid" screenshot "$1"` |
 | `reset` | cleanup | stop the processes that use the slot's simulator clones (by UDID), then shut down and delete the clones |
-| `health` | after cleanup, at `repair`, and before a warm room takes a lease | Xcode works; enough free disk |
+| `health` | after cleanup, at `repair`, and before a warm room takes a lease; only for a platform that the room is ready for (on an on-demand room, after its first `provision`) | Xcode works; enough free disk |
 
 Contract:
 
@@ -721,8 +733,10 @@ warm_running = "5m"                 # default for its machines
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
 platforms = ["ios"]
 labels = ["xcode-26.5", "desktop"]
+# tahoe-slim has several Xcode versions; select one.
+env = { DEVELOPER_DIR = "/Applications/Xcode_26.5.app/Contents/Developer", HOSTEL_IOS_RUNTIME = "26.5" }
 max_rooms = 1
-max_lifetime = "3h"                 # devbox plan maximum (verify in M3)
+max_lifetime = "3h"                 # required for a devbox: the plan's maximum duration
 
 [providers.namespace.machines.linux]
 spec = { product = "instance", machine_type = "linux/amd64:8x16" }
@@ -837,10 +851,9 @@ A Mac Catalyst app runs on the macOS desktop, not in a simulator. Rules:
   share one desktop. A `macos` lease without `desktop` (for example a headless
   build) is not exclusive.
 - `platforms/macos/screenshot.macos.sh` uses `screencapture` on the room. Over SSH,
-  macOS can refuse this without the Screen Recording permission. Verify it in M2
-  (static Mac) and M3 (devbox). If it does not work on a devbox, M3 adds an optional
-  provider screenshot: the server runs `devbox desktop screenshot`, because the
-  `devbox` CLI and its login exist only on the server.
+  macOS can refuse this without the Screen Recording permission. On the static Mac
+  it needs the permission for `sshd-keygen-wrapper` (M2); on a devbox it works
+  without a prompt (M3, 2026-10-26).
 
 ### mise on rooms
 
@@ -1392,8 +1405,10 @@ failed; the result lists each step.
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the room has no IPv6
    loopback address), and retry for up to 10 seconds, because
    the room's SSH server removes its listeners after the connections close.
-5. Delete the directory `slots/<slot>/`. This deletes `work/`, `.env`, job output,
-   `device.env`, and the manifest. The shared `cache/` stays. This step is last
+5. Delete the devbox task markers of the slot's jobs whose supervisor was killed
+   (if any), and the directory `slots/<slot>/`. This
+   deletes `work/`, `.env`, job output, `device.env`, and the manifest. The shared
+   `cache/` stays. This step is last
    before `health`, so a repeated cleanup still finds `device.env` until `reset` has
    run.
 6. Run the `health` script of each platform that the room is ready for.
@@ -1516,11 +1531,23 @@ Privilege escalation to root on a room stays out of scope.
   scripts in a Linux container, so the tests cover script selection by OS.
 - Tests use short durations (for example `idle_timeout = "3s"`). They wait for
   conditions with a deadline. They never use a fixed sleep as an assertion.
+- `test/fakeprovider` under the name `devbox` (a link on the server's `PATH`) is a
+  fake Namespace devbox CLI. It makes Docker rooms and copies the output formats of
+  the real CLI (the list JSON, the text line of an empty list, the error lines), so
+  the E2E tests cover the `namespace` provider. Its rooms set
+  `NAMESPACE_DEVBOX_TASKS_DIR` for SSH sessions, as a real devbox does. As at
+  Namespace, a devbox is in the list from the start of its create and boots on
+  its own (`FAKE_DELAY`), also when the create call is killed; `ssh-proxy` fails
+  until the boot ends. `FAKE_CREATE_ERROR` makes a create fail with a given
+  text.
 - Real providers: opt-in smoke tests (`HOSTEL_SMOKE_NAMESPACE=1`) and manual tests
   on the spare MacBook.
 - CI (GitHub Actions, Linux `amd64`): `make lint`, `make test-unit`, builds for all
   six targets, and one `make test-e2e` run. `make test-e2e` fetches only the Linux
   mise binaries; CI caches them.
+- The stability gate (workflow "E2E gate", `.github/workflows/e2e-10.yml`): 10
+  parallel `make test-e2e` jobs, without fail-fast. The label `e2e-10` on a pull
+  request starts it.
 
 ## 21. Decisions in this design
 

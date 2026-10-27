@@ -72,6 +72,10 @@ type CleanupRequest struct {
 	Platform string   `json:"platform"`
 	Devices  []string `json:"devices"`
 	Ports    []int    `json:"ports"`
+	// Health are the platforms whose health script runs at the end: those that
+	// the room is ready for. An on-demand room has the files of a device
+	// platform before its provision script ran.
+	Health []string `json:"health"`
 }
 
 // CleanupResponse lists the result of each cleanup step.

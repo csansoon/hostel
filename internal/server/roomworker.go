@@ -381,7 +381,7 @@ func (s *Server) cleanDirtySlots(ctx context.Context, room *roomops.Room, roomID
 		if err := json.Unmarshal([]byte(sl.CleanupData), &req); err != nil {
 			return fmt.Errorf("slot %s: cleanup data: %w", sl.Name, err)
 		}
-		if err := s.runCleanup(ctx, room, sl.Name, req); err != nil {
+		if err := s.runCleanup(ctx, room, roomID, sl.Name, req); err != nil {
 			return fmt.Errorf("cleanup of slot %s: %w", sl.Name, err)
 		}
 		if err := s.store.SetSlot(ctx, roomID, sl.Name, protocol.SlotFree, "", ""); err != nil {
