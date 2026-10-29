@@ -1256,7 +1256,9 @@ is defense in depth.
   30 s). Without the connection, the room is unreachable: a probe fails, and guest
   commands of a ready lease fail until the connection comes back. When the room
   connects, the server probes an unreachable room at once (not at the next
-  reconcile). Revoking a room token closes the connections that use it. A dial
+  reconcile). Revoking a room token closes the connections that use it; a
+  connection checks its token again after it is registered, so a revoke during
+  its handshake also ends it. A dial
   through the connection has the same 15 s limit as a TCP dial.
 
 ## 14. Port forwarding

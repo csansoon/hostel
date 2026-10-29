@@ -87,15 +87,25 @@ func (b gwBackend) AuthorizeRoom(ctx context.Context, token string) (string, int
 	return tok.Machine, tok.ID, nil
 }
 
-// RoomConnected probes the machine's room now if it was unreachable, instead
-// of at the next reconcile.
-func (b gwBackend) RoomConnected(machine string) {
+// RoomConnected refuses a token that was revoked after the handshake, and
+// probes the machine's room now if it was unreachable, instead of at the next
+// reconcile. A revoke writes the store first and then closes the registered
+// connections, so either it sees this connection or this check sees the
+// revoke.
+func (b gwBackend) RoomConnected(machine string, token int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	active, err := b.s.store.TokenActive(ctx, token)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return errors.New("the room token was revoked")
+	}
 	rooms, err := b.s.store.Rooms(ctx)
 	if err != nil {
 		b.s.log.Warn("room connected: list rooms", "machine", machine, "err", err)
-		return
+		return nil
 	}
 	for _, r := range rooms {
 		if r.Provider+"/"+r.Machine != machine || r.State != protocol.RoomBroken || r.BrokenReason != reasonUnreachable {
@@ -106,4 +116,5 @@ func (b gwBackend) RoomConnected(machine string) {
 		}
 	}
 	b.s.kickScheduler()
+	return nil
 }
