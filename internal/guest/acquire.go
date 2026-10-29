@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -246,17 +247,23 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 }
 
 // transient reports whether a poll error is a network error or a proxy
-// error, which the next poll can survive.
+// error, which the next poll can survive. Other errors (a TLS certificate, an
+// unknown host, a bad response) fail at once.
 func transient(err error) bool {
 	var apiErr *client.APIError
-	if !errors.As(err, &apiErr) {
-		return true
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		}
+		return false
 	}
-	switch apiErr.Status {
-	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return true
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
 	}
-	return false
+	var opErr *net.OpError
+	return errors.As(err, &opErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || os.IsTimeout(err)
 }
 
 func isFinal(state string) bool {

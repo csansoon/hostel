@@ -221,6 +221,8 @@ func (s *Server) resolve() error {
 		if a.key == "gateway_public" && IsWebSocketURL(a.v) {
 			if u, err := url.Parse(a.v); err != nil || u.Host == "" {
 				el.add(a.key, "%q is not a ws:// or wss:// URL", a.v)
+			} else if !strings.HasSuffix(u.Path, "/v1/gateway") {
+				el.add(a.key, "%q must end with the path /v1/gateway (the gateway on the API)", a.v)
 			}
 			continue
 		}

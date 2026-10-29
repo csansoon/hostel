@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,8 +44,8 @@ type Backend interface {
 	// AllowForward reports whether the lease registered a room port as a tunnel.
 	AllowForward(ctx context.Context, leaseID string, port int) bool
 	// AuthorizeRoom accepts a room token of a machine with connect = true and
-	// returns the machine ("<provider>/<machine>").
-	AuthorizeRoom(ctx context.Context, token string) (string, error)
+	// returns the machine ("<provider>/<machine>") and the token ID.
+	AuthorizeRoom(ctx context.Context, token string) (string, int64, error)
 	// RoomConnected asks for a probe of the machine's room, which was
 	// unreachable until now.
 	RoomConnected(machine string)
@@ -89,11 +90,11 @@ func New(hostKey ssh.Signer, be Backend, rooms *RoomConns, log *slog.Logger) *Ga
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 			defer cancel()
-			machine, err := be.AuthorizeRoom(ctx, string(password))
+			machine, id, err := be.AuthorizeRoom(ctx, string(password))
 			if err != nil {
 				return nil, err
 			}
-			return &ssh.Permissions{Extensions: map[string]string{"room": machine}}, nil
+			return &ssh.Permissions{Extensions: map[string]string{"room": machine, "room_token": strconv.FormatInt(id, 10)}}, nil
 		},
 		ServerVersion: "SSH-2.0-hostel-gateway",
 	}
@@ -167,7 +168,8 @@ func (g *Gateway) handle(nc net.Conn) {
 	nc.SetDeadline(time.Time{})
 	defer conn.Close()
 	if machine := conn.Permissions.Extensions["room"]; machine != "" {
-		g.serveRoom(conn, chans, reqs, machine)
+		token, _ := strconv.ParseInt(conn.Permissions.Extensions["room_token"], 10, 64)
+		g.serveRoom(conn, chans, reqs, machine, token)
 		return
 	}
 	leaseID := conn.Permissions.Extensions["lease"]

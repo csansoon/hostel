@@ -46,9 +46,9 @@ fetch() {
 		curl -fsSL --max-time 300 -o "$tmp/$1" "$HOSTEL_INSTALL_URL/$1"
 	elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
 		if [ "$version" = latest ]; then
-			gh release download -R "$repo" -p "$1" -D "$tmp"
+			gh release download -R "$repo" -p "$1" -D "$tmp" --clobber
 		else
-			gh release download "$version" -R "$repo" -p "$1" -D "$tmp"
+			gh release download "$version" -R "$repo" -p "$1" -D "$tmp" --clobber
 		fi
 	elif [ "$version" = latest ]; then
 		curl -fsSL --max-time 300 -o "$tmp/$1" "https://github.com/$repo/releases/latest/download/$1"

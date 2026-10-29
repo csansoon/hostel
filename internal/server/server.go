@@ -40,6 +40,8 @@ type Server struct {
 	notify     notifier
 	full       fullFlags
 	gateway    *gateway.Gateway
+	// rooms are the connections of rooms behind NAT.
+	rooms *gateway.RoomConns
 	// gatewayAddr is the gateway address for guests.
 	gatewayAddr string
 	// uploads has the platform files and hashes for each platform and OS.
@@ -101,7 +103,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	}
 	defer st.Close()
 	s := &Server{cfg: cfg, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
-		providers: providers, kick: make(chan struct{}, 1)}
+		providers: providers, rooms: rooms, kick: make(chan struct{}, 1)}
 	st.SetLeaseHook(s.notify.notify)
 	if err := s.loadPlatformUploads(); err != nil {
 		return err

@@ -59,7 +59,7 @@ func (r *roomConnect) stop() {
 // TestRoomConnect: a static room behind NAT (connect = true). The server
 // reaches the room's SSH server only through the room's outbound connection to
 // the gateway, here over the WebSocket gateway. A guest token and a token of
-// another machine cannot connect. The room is unreachable without the
+// another machine cannot connect, and a revoked token loses its connection. The room is unreachable without the
 // connection; when the room connects, the server probes it at once (here
 // reconcile runs only at the start).
 func TestRoomConnect(t *testing.T) {
@@ -134,12 +134,25 @@ connect = true
 	if r.code == 0 || !strings.Contains(r.stderr, "connection to the room lost") {
 		t.Fatalf("run without the connection: %s", r)
 	}
-	e.startRoomConnect(server, boxToken, sshAddr)
+	room = e.startRoomConnect(server, boxToken, sshAddr)
 	e.waitFor("run works again", time.Minute, func() bool {
 		r := e.hostel("run", "--", "echo again")
 		return r.code == 0 && r.stdout == "again\n"
 	})
 	if l := f.lease(id); l.State != protocol.LeaseReady {
 		t.Fatalf("lease after the connection came back: %s", l.State)
+	}
+
+	// Revoking the room token (ID 4: after the admin token and the tokens
+	// above) closes its live connection at once.
+	guestToken := e.vars["HOSTEL_TOKEN"]
+	e.vars["HOSTEL_TOKEN"] = e.admin
+	e.mustHostel("admin", "token", "revoke", "4")
+	e.vars["HOSTEL_TOKEN"] = guestToken
+	e.waitFor("the revoked token's connection closed", time.Minute, func() bool {
+		return strings.Contains(room.output(), "the server refused the room token")
+	})
+	if r := e.hostel("run", "--", "true"); r.code == 0 {
+		t.Fatalf("run after the room token was revoked: %s", r)
 	}
 }

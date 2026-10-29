@@ -178,15 +178,15 @@ func TestRestartQueue(t *testing.T) {
 	}
 }
 
-// TestPollNetworkError: a waiting acquire survives a server that is down for a
-// while; it retries its poll and continues the same lease.
+// TestPollNetworkError: a waiting acquire survives a server that stops during
+// its long poll and is down for a while; it retries its poll and continues the
+// same lease.
 func TestPollNetworkError(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.acquire()
 	f.e.newRepoNamed("waits", defaultRepoFiles())
 	id := f.queued()
-	f.s.stop()
 	var stderr syncBuffer
 	cmd := exec.Command(hostelBin, "acquire", "fakedevice", "--task", "wait", "--wait", "110s")
 	cmd.Env, cmd.Dir, cmd.Stderr = f.e.environ(), f.e.cwd, &stderr
@@ -196,6 +196,9 @@ func TestPollNetworkError(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	t.Cleanup(func() { cmd.Process.Kill() })
+	// The first poll answers at once; the second waits for a change.
+	f.e.waitFor("the guest polls", time.Minute, func() bool { return strings.Contains(stderr.String(), "lease "+id+" queued") })
+	f.s.stop()
 	f.e.waitFor("the guest retries", time.Minute, func() bool { return strings.Contains(stderr.String(), "; retrying") })
 	f.s = f.s.restart()
 	f.useRepo("repo")

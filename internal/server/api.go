@@ -140,5 +140,6 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "revoke token", err)
 		return
 	}
+	s.rooms.CloseToken(id)
 	writeJSON(w, http.StatusOK, struct{}{})
 }

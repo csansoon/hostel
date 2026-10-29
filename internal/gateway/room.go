@@ -20,31 +20,50 @@ const RoomSSHChannel = "hostel-room-ssh"
 // machine replaces the old one.
 type RoomConns struct {
 	mu    sync.Mutex
-	conns map[string]*ssh.ServerConn
+	conns map[string]roomConn
 }
 
-func NewRoomConns() *RoomConns { return &RoomConns{conns: map[string]*ssh.ServerConn{}} }
+// roomConn is a room's connection and the ID of the token it authenticated
+// with.
+type roomConn struct {
+	conn  *ssh.ServerConn
+	token int64
+}
 
-func (r *RoomConns) set(machine string, c *ssh.ServerConn) *ssh.ServerConn {
+func NewRoomConns() *RoomConns { return &RoomConns{conns: map[string]roomConn{}} }
+
+func (r *RoomConns) set(machine string, c roomConn) *ssh.ServerConn {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	old := r.conns[machine]
 	r.conns[machine] = c
-	return old
+	return old.conn
 }
 
 func (r *RoomConns) remove(machine string, c *ssh.ServerConn) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.conns[machine] == c {
+	if r.conns[machine].conn == c {
 		delete(r.conns, machine)
+	}
+}
+
+// CloseToken closes the connections that authenticated with the token (after
+// it was revoked).
+func (r *RoomConns) CloseToken(id int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.conns {
+		if c.token == id {
+			c.conn.Close()
+		}
 	}
 }
 
 // Dial opens a stream to the room's SSH server through its connection.
 func (r *RoomConns) Dial(ctx context.Context, machine string) (net.Conn, error) {
 	r.mu.Lock()
-	conn := r.conns[machine]
+	conn := r.conns[machine].conn
 	r.mu.Unlock()
 	if conn == nil {
 		return nil, fmt.Errorf("machine %s is not connected: \"hostel room connect\" does not run on it", machine)
@@ -97,8 +116,8 @@ func (roomAddr) String() string  { return "hostel-room" }
 
 // serveRoom keeps a room's connection until it ends. The room only answers
 // the channels that the gateway opens; it cannot open channels itself.
-func (g *Gateway) serveRoom(conn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, machine string) {
-	if old := g.rooms.set(machine, conn); old != nil {
+func (g *Gateway) serveRoom(conn *ssh.ServerConn, chans <-chan ssh.NewChannel, reqs <-chan *ssh.Request, machine string, token int64) {
+	if old := g.rooms.set(machine, roomConn{conn, token}); old != nil {
 		old.Close()
 	}
 	defer g.rooms.remove(machine, conn)

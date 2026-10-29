@@ -53,8 +53,12 @@ func (s *Static) Access(ctx context.Context, room RoomRef) (RoomAccess, error) {
 		// The room connects out; only the user of the address applies.
 		key := s.cfg.Name + "/" + room.Machine
 		return RoomAccess{
-			User:    user,
-			Dial:    func(ctx context.Context) (net.Conn, error) { return s.dialRoom(ctx, key) },
+			User: user,
+			Dial: func(ctx context.Context) (net.Conn, error) {
+				ctx, cancel := context.WithTimeout(ctx, DialTimeout)
+				defer cancel()
+				return s.dialRoom(ctx, key)
+			},
 			Signers: []ssh.Signer{s.serverKey},
 		}, nil
 	}

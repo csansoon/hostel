@@ -113,6 +113,17 @@ exe.dev, the owner's account (personal plan), test VM `hostel-test`
 - 2026-10-29, headless login: `nsc login --browser=false` on the VM prints the
   login URL; `deploy-vps.md` section 5. The Namespace login was not completed on
   the VM.
+- 2026-10-29, local review (subagent), fixed: `install.sh --server` with `gh`
+  failed (a second download of the same file; now `--clobber`); a dial through a
+  room connection had no limit of its own (now 15 s); a revoked room token kept
+  its live connection (now closed; `TestRoomConnect`, fails without the fix);
+  the poll retry also retried TLS and DNS errors (now only network and proxy
+  errors); a `wss://` `gateway_public` without `/v1/gateway` passed the check
+  (`TestConfigErrors`); `TestPollNetworkError` now stops the server during a
+  long poll. Not changed: two `room connect` processes with one token replace
+  each other (an operator error; each replacement is in the server log); a room
+  that connects while a probe is about to fail stays broken until the next
+  reconcile (a small window, 5 minutes at most).
 - Notes for `deploy-vps.md` (now in it): make archives on macOS with `COPYFILE_DISABLE=1`
   (else AppleDouble `._*` files break the platform check); a second server key
   for a static room must go into `authorized_keys` and

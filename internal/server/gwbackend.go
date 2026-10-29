@@ -75,16 +75,16 @@ func (b gwBackend) AllowForward(ctx context.Context, leaseID string, port int) b
 
 // AuthorizeRoom accepts a room token whose machine is a static machine with
 // connect = true.
-func (b gwBackend) AuthorizeRoom(ctx context.Context, token string) (string, error) {
+func (b gwBackend) AuthorizeRoom(ctx context.Context, token string) (string, int64, error) {
 	tok, err := b.s.store.TokenBySecret(ctx, token)
 	if err != nil || tok.Role != protocol.RoleRoom {
-		return "", errors.New("invalid or revoked room token")
+		return "", 0, errors.New("invalid or revoked room token")
 	}
 	m := b.s.cfg.Machine(tok.Machine)
 	if m == nil || !m.Connect {
-		return "", fmt.Errorf("machine %s does not have connect = true", tok.Machine)
+		return "", 0, fmt.Errorf("machine %s does not have connect = true", tok.Machine)
 	}
-	return tok.Machine, nil
+	return tok.Machine, tok.ID, nil
 }
 
 // RoomConnected probes the machine's room now if it was unreachable, instead
