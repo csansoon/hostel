@@ -1248,7 +1248,9 @@ is defense in depth.
   `connect = true`; the user comes from `address` (its host is not used). The room
   sends a keepalive every 30 s and connects again after a loss (backoff 1 s to
   30 s). Without the connection, the room is unreachable: a probe fails, and guest
-  commands of a ready lease fail until the connection comes back.
+  commands of a ready lease fail until the connection comes back. When the room
+  connects, the server probes an unreachable room at once (not at the next
+  reconcile).
 
 ## 14. Port forwarding
 

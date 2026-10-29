@@ -60,14 +60,16 @@ func (r *roomConnect) stop() {
 // reaches the room's SSH server only through the room's outbound connection to
 // the gateway, here over the WebSocket gateway. A guest token and a token of
 // another machine cannot connect. The room is unreachable without the
-// connection and recovers when it comes back.
+// connection; when the room connects, the server probes it at once (here
+// reconcile runs only at the start).
 func TestRoomConnect(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
 	c := e.startStaticRoom("box")
 	e.usePlatform("fakedevice")
-	e.writeConfig(serverHeader() + `gateway_public = "ws://127.0.0.1:0/v1/gateway"
+	header := strings.Replace(serverHeader(), `reconcile = "2s"`, `reconcile = "1h"`, 1)
+	e.writeConfig(header + `gateway_public = "ws://127.0.0.1:0/v1/gateway"
 
 [providers.home]
 kind = "static"

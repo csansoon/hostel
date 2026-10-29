@@ -45,6 +45,9 @@ type Backend interface {
 	// AuthorizeRoom accepts a room token of a machine with connect = true and
 	// returns the machine ("<provider>/<machine>").
 	AuthorizeRoom(ctx context.Context, token string) (string, error)
+	// RoomConnected asks for a probe of the machine's room, which was
+	// unreachable until now.
+	RoomConnected(machine string)
 }
 
 type Gateway struct {

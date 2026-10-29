@@ -104,6 +104,7 @@ func (g *Gateway) serveRoom(conn *ssh.ServerConn, chans <-chan ssh.NewChannel, r
 	defer g.rooms.remove(machine, conn)
 	g.log.Info("gateway: room connected", "machine", machine)
 	defer g.log.Info("gateway: room disconnected", "machine", machine)
+	g.be.RoomConnected(machine)
 	go ssh.DiscardRequests(reqs)
 	for nch := range chans {
 		nch.Reject(ssh.Prohibited, "a room connection cannot open channels")

@@ -86,9 +86,12 @@ exe.dev, the owner's account (personal plan), test VM `hostel-test`
   with "connection reset by peer", and the lease expired after the idle timeout.
   The owner's Mac was in clamshell sleep at that time (`pmset -g log`), which
   explains the reset. Open: measure long-polls through the proxy with the Mac
-  awake. Found in passing: a guest stops at the first network error of a poll;
-  it should retry until its deadline. A room that connects is probed only at the
-  next reconcile (5 minutes); it should be probed at once.
+  awake.
+- 2026-10-29, fixes from the first try: a waiting guest retries its poll after a
+  network error or a proxy error (502, 503, 504) until its deadline
+  (`TestPollNetworkError`); the server probes an unreachable room at once when
+  it connects (`TestRoomConnect` with reconcile only at the start). Both tests
+  fail without the fix.
 - Notes for `deploy-vps.md`: make archives on macOS with `COPYFILE_DISABLE=1`
   (else AppleDouble `._*` files break the platform check); a second server key
   for a static room must go into `authorized_keys` and

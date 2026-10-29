@@ -86,3 +86,24 @@ func (b gwBackend) AuthorizeRoom(ctx context.Context, token string) (string, err
 	}
 	return tok.Machine, nil
 }
+
+// RoomConnected probes the machine's room now if it was unreachable, instead
+// of at the next reconcile.
+func (b gwBackend) RoomConnected(machine string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rooms, err := b.s.store.Rooms(ctx)
+	if err != nil {
+		b.s.log.Warn("room connected: list rooms", "machine", machine, "err", err)
+		return
+	}
+	for _, r := range rooms {
+		if r.Provider+"/"+r.Machine != machine || r.State != protocol.RoomBroken || r.BrokenReason != reasonUnreachable {
+			continue
+		}
+		if _, err := b.s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomBroken}, protocol.RoomProvisioning, "", time.Now()); err != nil {
+			b.s.log.Warn("room connected: probe the room", "room", r.Name, "err", err)
+		}
+	}
+	b.s.kickScheduler()
+}
