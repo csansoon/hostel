@@ -9,7 +9,7 @@ TARGETS = darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 window
 
 export CGO_ENABLED = 0
 
-.PHONY: build dist mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace
+.PHONY: build dist release mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace
 
 build:
 	$(GO) build $(GOFLAGS_BUILD) -o dist/hostel ./cmd/hostel
@@ -23,6 +23,13 @@ dist:
 	done
 	./build/fetch-mise.sh $(MISE_VERSION) build/mise-checksums.txt dist
 
+# The files of a GitHub release (install.sh downloads them).
+release: dist
+	rm -rf dist/release && mkdir dist/release
+	cp dist/hostel-* dist/mise-* dist/release/
+	COPYFILE_DISABLE=1 tar -czf dist/release/hostel-platforms.tar.gz platforms
+	cd dist/release && for f in *; do printf '%s  %s\n' "$$(shasum -a 256 $$f | cut -d' ' -f1)" "$$f"; done > ../SHA256SUMS && mv ../SHA256SUMS .
+
 mise:
 	./build/fetch-mise.sh $(MISE_VERSION) build/mise-checksums.txt dist
 
@@ -33,7 +40,7 @@ mise-linux:
 lint:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) vet -tags e2e ./...
-	shellcheck platforms/*/*.sh test/platforms/*/*.sh
+	shellcheck install.sh platforms/*/*.sh test/platforms/*/*.sh
 
 test-unit:
 	$(GO) test ./...

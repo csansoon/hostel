@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,6 +40,8 @@ type Server struct {
 	notify     notifier
 	full       fullFlags
 	gateway    *gateway.Gateway
+	// rooms are the connections of rooms behind NAT.
+	rooms *gateway.RoomConns
 	// gatewayAddr is the gateway address for guests.
 	gatewayAddr string
 	// uploads has the platform files and hashes for each platform and OS.
@@ -47,18 +50,13 @@ type Server struct {
 	lastReconcile time.Time
 }
 
-func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, log *slog.Logger) (map[string]provider.Provider, error) {
+func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, dialRoom provider.RoomDialer, log *slog.Logger) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for _, name := range cfg.ProviderOrder {
 		p := cfg.Providers[name]
 		switch p.Kind {
 		case config.ProviderStatic:
-			for _, mn := range p.MachineOrder {
-				if p.Machines[mn].Connect {
-					return nil, fmt.Errorf("providers.%s.machines.%s: connect = true is not supported yet (milestone M5)", name, mn)
-				}
-			}
-			out[name] = provider.NewStatic(p, serverKey)
+			out[name] = provider.NewStatic(p, serverKey, dialRoom)
 		case config.ProviderNamespace:
 			for _, mn := range p.MachineOrder {
 				m := p.Machines[mn]
@@ -94,7 +92,8 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	providers, err := newProviders(ctx, cfg, serverKey, log)
+	rooms := gateway.NewRoomConns()
+	providers, err := newProviders(ctx, cfg, serverKey, rooms.Dial, log)
 	if err != nil {
 		return err
 	}
@@ -104,7 +103,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	}
 	defer st.Close()
 	s := &Server{cfg: cfg, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
-		providers: providers, kick: make(chan struct{}, 1)}
+		providers: providers, rooms: rooms, kick: make(chan struct{}, 1)}
 	st.SetLeaseHook(s.notify.notify)
 	if err := s.loadPlatformUploads(); err != nil {
 		return err
@@ -125,8 +124,8 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		ln.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.GatewayListen, err)
 	}
-	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr())
-	s.gateway = gateway.New(gatewayKey, gwBackend{s}, log)
+	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr(), ln.Addr())
+	s.gateway = gateway.New(gatewayKey, gwBackend{s}, rooms, log)
 	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 2)
 	go func() { errc <- httpServer.Serve(ln) }()
@@ -166,7 +165,8 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/info", s.auth(s.handleInfo))
+	// "hostel room connect" reads the gateway address with a room token.
+	mux.HandleFunc("GET /v1/info", s.authRoom(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /v1/platforms", s.auth(s.handlePlatforms))
 	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
@@ -180,13 +180,21 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/rooms/{id}/destroy", s.auth(s.admin(s.handleRoomDestroy)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
+	// The gateway's SSH over a WebSocket; SSH authenticates inside.
+	mux.Handle("GET /v1/gateway", s.gateway)
 	return mux
 }
 
 type tokenKey struct{}
 
-// auth checks the bearer token and passes it in the request context.
-func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+// auth checks the bearer token and passes it in the request context. Room
+// tokens are refused.
+func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, false) }
+
+// authRoom is auth that also accepts room tokens.
+func (s *Server) authRoom(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, true) }
+
+func (s *Server) authWith(next http.HandlerFunc, allowRoom bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || secret == "" {
@@ -194,7 +202,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		tok, err := s.store.TokenBySecret(r.Context(), secret)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && tok.Role == protocol.RoleRoom) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && tok.Role == protocol.RoleRoom && !allowRoom) {
 			writeError(w, http.StatusUnauthorized, "", "invalid or revoked token")
 			return
 		}
@@ -227,8 +235,17 @@ func writeError(w http.ResponseWriter, status int, code, msg string) {
 }
 
 // publicAddr returns the gateway address for guests: gateway_public, with the
-// real port when it has port 0.
-func publicAddr(public string, real net.Addr) string {
+// real port when it has port 0 (the API's port for a WebSocket URL).
+func publicAddr(public string, real, api net.Addr) string {
+	// A WebSocket gateway is on the API listener.
+	if config.IsWebSocketURL(public) {
+		u, err := url.Parse(public)
+		if err != nil || u.Port() != "0" {
+			return public
+		}
+		u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(api.(*net.TCPAddr).Port))
+		return u.String()
+	}
 	host, port, err := net.SplitHostPort(public)
 	if err != nil || port != "0" {
 		return public

@@ -5,6 +5,9 @@
 set -eu
 for d in $(echo "$HOSTEL_PLATFORM_DEVICES" | tr ',' ' '); do
 	for udid in $(xcrun simctl list devices | sed -n "s/^ *hostel-$HOSTEL_SLOT-$d (\([0-9A-F-]*\)) .*/\1/p"); do
+		# Shut down first: the simulator's launchd_sim also has the UDID in its
+		# command line, and killing it leaves all its processes behind.
+		xcrun simctl shutdown "$udid" 2>/dev/null || true
 		# Processes that use the simulator and that cleanup did not find (for
 		# example the agent-device iOS runner after its daemon ended) have its
 		# UDID in their command line.

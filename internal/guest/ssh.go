@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
@@ -43,8 +43,7 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse the gateway host key: %w", err)
 	}
-	d := net.Dialer{Timeout: dialTimeout}
-	nc, err := d.DialContext(ctx, "tcp", st.Access.GatewayAddress)
+	nc, err := gateway.Dial(ctx, st.Access.GatewayAddress, dialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("%w: connect to the Hostel gateway at %s: %v", ErrConnLost, st.Access.GatewayAddress, err)
 	}

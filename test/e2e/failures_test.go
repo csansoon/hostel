@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -174,5 +175,43 @@ func TestRestartQueue(t *testing.T) {
 	r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "5s")
 	if r.code != 75 || !strings.Contains(r.stderr, "lease "+id+" queued") {
 		t.Fatalf("the queued lease after the restart: %s", r)
+	}
+}
+
+// TestPollNetworkError: a waiting acquire survives a server that stops during
+// its long poll and is down for a while; it retries its poll and continues the
+// same lease.
+func TestPollNetworkError(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	f.acquire()
+	f.e.newRepoNamed("waits", defaultRepoFiles())
+	id := f.queued()
+	var stderr syncBuffer
+	cmd := exec.Command(hostelBin, "acquire", "fakedevice", "--task", "wait", "--wait", "110s")
+	cmd.Env, cmd.Dir, cmd.Stderr = f.e.environ(), f.e.cwd, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() { cmd.Process.Kill() })
+	// The first poll answers at once; the second waits for a change.
+	f.e.waitFor("the guest polls", time.Minute, func() bool { return strings.Contains(stderr.String(), "lease "+id+" queued") })
+	f.s.stop()
+	f.e.waitFor("the guest retries", time.Minute, func() bool { return strings.Contains(stderr.String(), "; retrying") })
+	f.s = f.s.restart()
+	f.useRepo("repo")
+	f.e.mustHostel("release")
+	select {
+	case err := <-done:
+		if err != nil || strings.Contains(stderr.String(), "created") {
+			t.Fatalf("acquire of lease %s after the outage: %v\n%s", id, err, stderr.String())
+		}
+	case <-time.After(2 * time.Minute):
+		t.Fatalf("acquire did not finish:\n%s", stderr.String())
+	}
+	if l := f.lease(id); l.State != protocol.LeaseReady {
+		t.Fatalf("lease %s: %s", id, l.State)
 	}
 }

@@ -39,6 +39,7 @@ var commands = []command{
 	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
 	{name: "ports", hidden: true, run: guest.Ports},
+	{name: "gateway-proxy", hidden: true, run: guest.GatewayProxy},
 	{name: "room", hidden: true, run: roomCmd},
 }
 

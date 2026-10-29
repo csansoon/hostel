@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -70,4 +71,50 @@ func (b gwBackend) AllowForward(ctx context.Context, leaseID string, port int) b
 		}
 	}
 	return false
+}
+
+// AuthorizeRoom accepts a room token whose machine is a static machine with
+// connect = true.
+func (b gwBackend) AuthorizeRoom(ctx context.Context, token string) (string, int64, error) {
+	tok, err := b.s.store.TokenBySecret(ctx, token)
+	if err != nil || tok.Role != protocol.RoleRoom {
+		return "", 0, errors.New("invalid or revoked room token")
+	}
+	m := b.s.cfg.Machine(tok.Machine)
+	if m == nil || !m.Connect {
+		return "", 0, fmt.Errorf("machine %s does not have connect = true", tok.Machine)
+	}
+	return tok.Machine, tok.ID, nil
+}
+
+// RoomConnected refuses a token that was revoked after the handshake, and
+// probes the machine's room now if it was unreachable, instead of at the next
+// reconcile. A revoke writes the store first and then closes the registered
+// connections, so either it sees this connection or this check sees the
+// revoke.
+func (b gwBackend) RoomConnected(machine string, token int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	active, err := b.s.store.TokenActive(ctx, token)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return errors.New("the room token was revoked")
+	}
+	rooms, err := b.s.store.Rooms(ctx)
+	if err != nil {
+		b.s.log.Warn("room connected: list rooms", "machine", machine, "err", err)
+		return nil
+	}
+	for _, r := range rooms {
+		if r.Provider+"/"+r.Machine != machine || r.State != protocol.RoomBroken || r.BrokenReason != reasonUnreachable {
+			continue
+		}
+		if _, err := b.s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomBroken}, protocol.RoomProvisioning, "", time.Now()); err != nil {
+			b.s.log.Warn("room connected: probe the room", "room", r.Name, "err", err)
+		}
+	}
+	b.s.kickScheduler()
+	return nil
 }

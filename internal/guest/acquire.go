@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,9 @@ import (
 
 // pollWait is the long-poll time of one request (design, section 10).
 const pollWait = 50 * time.Second
+
+// maxPollRetry is the longest pause before a poll after a network error.
+const maxPollRetry = 10 * time.Second
 
 func notFinished(stderr io.Writer) int {
 	fmt.Fprintln(stderr, "hostel: not finished; run the same command again")
@@ -189,6 +193,7 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 // lease is ready, else the exit code of the command.
 func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writer) int {
 	var since int64
+	var retry time.Duration
 	last := ""
 	for {
 		remaining := time.Until(deadline)
@@ -204,8 +209,21 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 				l.st.Final = true
 				l.st.Save()
 			}
-			return fail(stderr, err)
+			if !transient(err) {
+				return fail(stderr, err)
+			}
+			if retry == 0 {
+				fmt.Fprintf(stderr, "hostel: %v; retrying\n", err)
+			}
+			retry = min(max(2*retry, time.Second), maxPollRetry)
+			select {
+			case <-time.After(min(retry, time.Until(deadline))):
+			case <-ctx.Done():
+				return fail(stderr, ctx.Err())
+			}
+			continue
 		}
+		retry = 0
 		since = lease.Revision
 		line := describe(lease)
 		if line != last {
@@ -226,6 +244,26 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 			return ExitError
 		}
 	}
+}
+
+// transient reports whether a poll error is a network error or a proxy
+// error, which the next poll can survive. Other errors (a TLS certificate, an
+// unknown host, a bad response) fail at once.
+func transient(err error) bool {
+	var apiErr *client.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		}
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || os.IsTimeout(err)
 }
 
 func isFinal(state string) bool {

@@ -58,6 +58,12 @@ One Go binary, `hostel`, for darwin, linux, and windows on amd64 and arm64.
 Rooms need no permanent daemon. Exception: a static room behind NAT runs
 `hostel room connect` as a service (launchd, systemd, or a Windows service).
 
+Distribution. A tag `v*` makes a GitHub release (`make release`): the binary for
+each OS and architecture, the pinned `mise` binaries, `hostel-platforms.tar.gz`,
+and `SHA256SUMS`. `install.sh` installs the binary for the machine, or with
+`--server DIR` also the helper binaries and the platform scripts; it checks each
+file against `SHA256SUMS`. `docs/deploy-vps.md` shows a server on a VPS.
+
 Dependencies. Use pure Go only, so that cross-compilation needs no C toolchain:
 
 - `golang.org/x/crypto/ssh` (gateway, guest SSH, server-to-room SSH).
@@ -779,7 +785,7 @@ Server-level keys and defaults:
 | Key | Default |
 |---|---|
 | `listen` | `127.0.0.1:7410` (HTTP API) |
-| `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen` |
+| `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen`; `gateway_public` can also be a `wss://<host>/v1/gateway` URL (section 13) |
 | `data_dir` | `~/.local/share/hostel` |
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
 | `platforms_dir` | `~/.config/hostel/platforms` |
@@ -1180,6 +1186,14 @@ guest ──SSH (lease key)──► gateway ──SSH (server key)──► roo
 
 ### Gateway behavior
 
+- **Transport.** The gateway listens on TCP (`gateway_listen`). It also accepts
+  the same SSH inside a WebSocket (binary messages) on the API listener at
+  `GET /v1/gateway`, for a server that only HTTPS reaches (an exe.dev VM, M5).
+  `gateway_public` tells guests which one to use: a `host:port`, or a `ws://` or
+  `wss://` URL (port 0 means the real port). For the system `ssh` (`hostel ssh`,
+  `hostel shell`), the ssh_config of a WebSocket gateway has a `ProxyCommand`
+  with `hostel gateway-proxy <url>`, which connects stdin and stdout to the
+  WebSocket.
 - **Gateway host key.** `hostel server init` generates it. Guests get it from
   `GET /v1/info` over the authenticated API and pin it.
 - **Gateway user.** `<lease-id>.<purpose>`. Purpose is `cmd` (commands, sync,
@@ -1225,14 +1239,27 @@ is defense in depth.
 - Static machines: the owner adds the server public key once (`hostel admin pubkey`).
 - External machines: the provider installs `server_key`.
 - Namespace: `RoomAccess` from the provider.
-- **Rooms behind NAT.** `hostel room connect --gateway <address> --token <token>`
-  keeps an outbound SSH connection to the gateway (user
-  `room.<provider>.<machine>`, a token with the role `room` as the password). A
-  `room` token is bound to one machine when it is created
-  (`hostel admin token create --role room --machine home/macbook`); the gateway
-  refuses it for another machine. The gateway uses that connection to
-  open streams to the room's local SSH server. The `static` provider's `Dial` uses
-  it for machines with `connect = true`.
+- **Rooms behind NAT** (M5). `hostel room connect --server <url> --token-file
+  <file>` (or `HOSTEL_ROOM_TOKEN`; never a token in the arguments, which other
+  users can read) runs on the room as a service. It reads the gateway address and
+  host key from `GET /v1/info` (the only API call that accepts a `room` token),
+  connects to the gateway (TCP or WebSocket), and authenticates as user `room`
+  with the token as the password. A `room` token is bound to one machine when it
+  is created (`hostel admin token create --role room --machine home/macbook`); the
+  gateway accepts it only for a static machine with `connect = true`. The gateway
+  keeps one connection for each machine (a new one replaces the old one) and opens
+  a channel `hostel-room-ssh` on it for each server connection; the room connects
+  the channel to its own SSH server (`--ssh`, default `127.0.0.1:22`). The room
+  cannot open channels. The static provider's `Dial` uses this for machines with
+  `connect = true`; the user comes from `address` (its host is not used). The room
+  sends a keepalive every 30 s and connects again after a loss (backoff 1 s to
+  30 s). Without the connection, the room is unreachable: a probe fails, and guest
+  commands of a ready lease fail until the connection comes back. When the room
+  connects, the server probes an unreachable room at once (not at the next
+  reconcile). Revoking a room token closes the connections that use it; a
+  connection checks its token again after it is registered, so a revoke during
+  its handshake also ends it. A dial
+  through the connection has the same 15 s limit as a TCP dial.
 
 ## 14. Port forwarding
 

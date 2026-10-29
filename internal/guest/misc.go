@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/csansoon/hostel/internal/cli"
+	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/syncfs"
 )
@@ -287,16 +289,36 @@ func extract(r io.Reader, target string) error {
 // writeSSHConfig writes an ssh_config file for "ssh -F" and returns its path
 // and the host alias.
 func writeSSHConfig(st *State) (string, string, error) {
-	host, port, err := net.SplitHostPort(st.Access.GatewayAddress)
-	if err != nil {
-		return "", "", err
-	}
 	alias := "hostel-" + st.LeaseID
-	known := filepath.Join(st.Dir, "known_hosts")
-	hostEntry := host
-	if port != "22" {
-		hostEntry = "[" + host + "]:" + port
+	var hostEntry, hostLines string
+	if addr := st.Access.GatewayAddress; config.IsWebSocketURL(addr) {
+		// The system ssh reaches a WebSocket gateway through this binary.
+		exe, err := os.Executable()
+		if err != nil {
+			return "", "", err
+		}
+		exePath, err := sshConfigPath(exe)
+		if err != nil {
+			return "", "", err
+		}
+		if strings.ContainsAny(addr, "'\n") {
+			return "", "", fmt.Errorf("the gateway address %q contains a quote or a newline", addr)
+		}
+		hostEntry = "hostel-gateway"
+		hostLines = fmt.Sprintf("  HostName hostel-gateway\n  HostKeyAlias hostel-gateway\n  ProxyCommand %s gateway-proxy '%s'\n",
+			exePath, strings.ReplaceAll(addr, "%", "%%"))
+	} else {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return "", "", err
+		}
+		hostEntry = host
+		if port != "22" {
+			hostEntry = "[" + host + "]:" + port
+		}
+		hostLines = fmt.Sprintf("  HostName %s\n  Port %s\n", host, port)
 	}
+	known := filepath.Join(st.Dir, "known_hosts")
 	if err := os.WriteFile(known, []byte(hostEntry+" "+st.Access.GatewayHostKey+"\n"), 0o600); err != nil {
 		return "", "", err
 	}
@@ -309,21 +331,40 @@ func writeSSHConfig(st *State) (string, string, error) {
 		return "", "", err
 	}
 	cfg := fmt.Sprintf(`Host %s
-  HostName %s
-  Port %s
-  User %s.cmd
+%s  User %s.cmd
   IdentityFile %s
   IdentitiesOnly yes
   IdentityAgent none
   ForwardAgent no
   UserKnownHostsFile %s
   StrictHostKeyChecking yes
-`, alias, host, port, st.LeaseID, keyPath, knownPath)
+`, alias, hostLines, st.LeaseID, keyPath, knownPath)
 	file := filepath.Join(st.Dir, "ssh_config")
 	if err := os.WriteFile(file, []byte(cfg), 0o600); err != nil {
 		return "", "", err
 	}
 	return file, alias, nil
+}
+
+// GatewayProxy is "hostel gateway-proxy <url>" (hidden): the ProxyCommand of
+// the system ssh for a WebSocket gateway. It connects stdin and stdout to the
+// gateway.
+func GatewayProxy(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 || !config.IsWebSocketURL(args[0]) {
+		fmt.Fprintln(stderr, "usage: hostel gateway-proxy <wss://...>")
+		return 2
+	}
+	nc, err := gateway.Dial(context.Background(), args[0], dialTimeout)
+	if err != nil {
+		fmt.Fprintf(stderr, "hostel: connect to the Hostel gateway at %s: %v\n", args[0], err)
+		return 1
+	}
+	defer nc.Close()
+	done := make(chan struct{}, 2)
+	go func() { io.Copy(nc, os.Stdin); done <- struct{}{} }()
+	go func() { io.Copy(stdout, nc); done <- struct{}{} }()
+	<-done
+	return 0
 }
 
 // sshConfigPath quotes a path for ssh_config. OpenSSH splits values at

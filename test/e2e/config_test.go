@@ -110,6 +110,11 @@ func TestConfigErrors(t *testing.T) {
 			want: []string{"{dir}/server.toml: providers.home.machines.box.platforms[0]: platform \"fakedevice\" has no prepare script for linux; add {dir}/platforms/fakedevice/prepare.linux.sh"},
 		},
 		{
+			name:   "WebSocket gateway without its path",
+			config: "gateway_public = \"wss://hostel.example.com\"\n" + staticMachine,
+			want:   []string{"{dir}/server.toml: gateway_public: \"wss://hostel.example.com\" must end with the path /v1/gateway"},
+		},
+		{
 			name:   "number as a duration",
 			config: staticMachine + "max_lease = 5\n",
 			marker: "max_lease",

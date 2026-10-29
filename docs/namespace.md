@@ -101,7 +101,8 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 | `nsc extend ID --ensure_minimum D` | Extend the deadline. |
 | `nsc destroy ID --force` | Destroy. |
 | `nsc proxy`, `nsc vnc`, `nsc rdp` | Other access methods. |
-| `nsc auth check-login` | Exit code 0 if logged in. `nsc auth generate-dev-token` and `exchange-oidc-token` exist (possible headless login; verify in M5). |
+| `nsc auth check-login [--duration D]` | Exit code 0 if logged in (and the session can issue credentials for D, default 5m). |
+| `nsc login --browser=false` / `devbox login --browser=false` | Headless login: prints a URL to open in a browser on any machine, and ends when the login is complete. |
 
 ## Traps
 
@@ -180,7 +181,7 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 | How the server can `Dial` an `nsc` instance's SSH server (`--ssh_key` with a public address, `nsc proxy`, or a relay through `nsc ssh`). | M4: `nsc instance port-forward <id> --target_port <port>`; the instance's agent refuses remote forwards, so the room is a container with OpenSSH (2026-10-27) |
 | KVM on a Linux devbox (it was tested only on an instance). | M4: yes, `/dev/kvm` for every user; the Android emulator runs (2026-10-27) |
 | Does the Android emulator run inside a macOS devbox (virtualization inside a virtual machine)? | Not needed: Android on Namespace uses Linux only (owner decision, 2026-10-27). |
-| Headless login for `devbox` and `nsc` on a Linux VPS. | M5 |
+| Headless login for `devbox` and `nsc` on a Linux VPS. | M5: `login --browser=false` prints a URL to open elsewhere (checked on the exe.dev VM; login not completed there). A session lasts days: the owner's `nsc` login of 2026-10-20 was valid on 2026-10-29 (2026-10-29) |
 | SSH server on a Windows instance (after a plan change). | M6 |
 
 ## Sources

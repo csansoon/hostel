@@ -66,6 +66,16 @@ func (s *Store) TokenBySecret(ctx context.Context, secret string) (Token, error)
 	return t, nil
 }
 
+// TokenActive reports whether the token with the ID exists and is not revoked.
+func (s *Store) TokenActive(ctx context.Context, id int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tokens WHERE id = ? AND revoked_at IS NULL`, id).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("read token: %w", err)
+	}
+	return n > 0, nil
+}
+
 // CountTokens returns the number of tokens, revoked or not.
 func (s *Store) CountTokens(ctx context.Context) (int, error) {
 	var n int

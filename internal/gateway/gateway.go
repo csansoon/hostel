@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,12 +43,20 @@ type Backend interface {
 	Activity(leaseID string)
 	// AllowForward reports whether the lease registered a room port as a tunnel.
 	AllowForward(ctx context.Context, leaseID string, port int) bool
+	// AuthorizeRoom accepts a room token of a machine with connect = true and
+	// returns the machine ("<provider>/<machine>") and the token ID.
+	AuthorizeRoom(ctx context.Context, token string) (string, int64, error)
+	// RoomConnected checks again that the token is not revoked (a revoke
+	// during the handshake did not see the connection), then asks for a
+	// probe of the machine's room, which was unreachable until now.
+	RoomConnected(machine string, token int64) error
 }
 
 type Gateway struct {
 	be     Backend
 	log    *slog.Logger
 	config *ssh.ServerConfig
+	rooms  *RoomConns
 
 	mu       sync.Mutex
 	conns    map[string]map[*ssh.ServerConn]string // lease → connection → purpose
@@ -57,8 +66,8 @@ type Gateway struct {
 // handshakeTimeout bounds the guest handshake and the upstream dial.
 const handshakeTimeout = 30 * time.Second
 
-func New(hostKey ssh.Signer, be Backend, log *slog.Logger) *Gateway {
-	g := &Gateway{be: be, log: log, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
+func New(hostKey ssh.Signer, be Backend, rooms *RoomConns, log *slog.Logger) *Gateway {
+	g := &Gateway{be: be, log: log, rooms: rooms, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
 	g.config = &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			leaseID, purpose, ok := strings.Cut(meta.User(), ".")
@@ -73,6 +82,20 @@ func New(hostKey ssh.Signer, be Backend, log *slog.Logger) *Gateway {
 			}
 			return &ssh.Permissions{Extensions: map[string]string{
 				"lease": leaseID, "purpose": purpose, "helper": t.HelperPath, "slot": t.Slot}}, nil
+		},
+		// Rooms behind NAT ("hostel room connect"): user "room", a room token
+		// as the password.
+		PasswordCallback: func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+			if meta.User() != "room" {
+				return nil, fmt.Errorf("password authentication is only for the user room")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+			defer cancel()
+			machine, id, err := be.AuthorizeRoom(ctx, string(password))
+			if err != nil {
+				return nil, err
+			}
+			return &ssh.Permissions{Extensions: map[string]string{"room": machine, "room_token": strconv.FormatInt(id, 10)}}, nil
 		},
 		ServerVersion: "SSH-2.0-hostel-gateway",
 	}
@@ -145,6 +168,11 @@ func (g *Gateway) handle(nc net.Conn) {
 	}
 	nc.SetDeadline(time.Time{})
 	defer conn.Close()
+	if machine := conn.Permissions.Extensions["room"]; machine != "" {
+		token, _ := strconv.ParseInt(conn.Permissions.Extensions["room_token"], 10, 64)
+		g.serveRoom(conn, chans, reqs, machine, token)
+		return
+	}
 	leaseID := conn.Permissions.Extensions["lease"]
 	purpose := conn.Permissions.Extensions["purpose"]
 	target := Target{HelperPath: conn.Permissions.Extensions["helper"], Slot: conn.Permissions.Extensions["slot"]}
