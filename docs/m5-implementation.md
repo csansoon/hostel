@@ -106,7 +106,14 @@ exe.dev, the owner's account (personal plan), test VM `hostel-test`
   then kill the processes with the UDID, then shut down again. Check on the
   MacBook: three lease cycles through the VM, 0 simulator processes after
   each. The old orphans on the MacBook were removed by hand.
-- Notes for `deploy-vps.md`: make archives on macOS with `COPYFILE_DISABLE=1`
+- 2026-10-29, release and install: `make release` and the workflow "Release" (a
+  tag `v*`) make a GitHub release; `install.sh` installed from a local copy of
+  the release files on macOS and on the exe.dev VM, also with `--server`, and
+  stopped at a wrong checksum. No release exists yet: a tag needs the owner.
+- 2026-10-29, headless login: `nsc login --browser=false` on the VM prints the
+  login URL; `deploy-vps.md` section 5. The Namespace login was not completed on
+  the VM.
+- Notes for `deploy-vps.md` (now in it): make archives on macOS with `COPYFILE_DISABLE=1`
   (else AppleDouble `._*` files break the platform check); a second server key
   for a static room must go into `authorized_keys` and
   `~/hostel/authorized_keys.base` (cleanup restores the file from the base).

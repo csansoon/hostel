@@ -58,6 +58,12 @@ One Go binary, `hostel`, for darwin, linux, and windows on amd64 and arm64.
 Rooms need no permanent daemon. Exception: a static room behind NAT runs
 `hostel room connect` as a service (launchd, systemd, or a Windows service).
 
+Distribution. A tag `v*` makes a GitHub release (`make release`): the binary for
+each OS and architecture, the pinned `mise` binaries, `hostel-platforms.tar.gz`,
+and `SHA256SUMS`. `install.sh` installs the binary for the machine, or with
+`--server DIR` also the helper binaries and the platform scripts; it checks each
+file against `SHA256SUMS`. `docs/deploy-vps.md` shows a server on a VPS.
+
 Dependencies. Use pure Go only, so that cross-compilation needs no C toolchain:
 
 - `golang.org/x/crypto/ssh` (gateway, guest SSH, server-to-room SSH).
