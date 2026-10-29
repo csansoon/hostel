@@ -92,6 +92,20 @@ exe.dev, the owner's account (personal plan), test VM `hostel-test`
   (`TestPollNetworkError`); the server probes an unreachable room at once when
   it connects (`TestRoomConnect` with reconcile only at the start). Both tests
   fail without the fix.
+- 2026-10-29, done-when passed: from the owner's Mac (awake), an `ios` lease
+  through `https://hostel.example.com` became ready on the home MacBook in 25 s
+  (sync, setup, `run`, the `api` tunnel to a local HTTP server, and a
+  screenshot). A second lease waited in the queue for 130 s (three long-polls of
+  50, 50, and 30 s through the proxy, no error) and got the slot after the first
+  was released.
+- 2026-10-29, found by that handoff: the ios `reset` killed the simulator's
+  `launchd_sim` (its command line has the UDID) before `simctl shutdown`, and
+  about 270 simulator processes of each lease stayed as orphans. After about
+  four leases, the room user reached its process limit, and `prepare` failed
+  ("insufficient system resources", code 67). Since M3. Fix: shut down first,
+  then kill the processes with the UDID, then shut down again. Check on the
+  MacBook: three lease cycles through the VM, 0 simulator processes after
+  each. The old orphans on the MacBook were removed by hand.
 - Notes for `deploy-vps.md`: make archives on macOS with `COPYFILE_DISABLE=1`
   (else AppleDouble `._*` files break the platform check); a second server key
   for a static room must go into `authorized_keys` and
