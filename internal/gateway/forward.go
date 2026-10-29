@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -186,8 +187,8 @@ func (g *Gateway) acceptForwarded(conn *ssh.ServerConn, ln net.Listener, fr forw
 }
 
 // directTCPIP relays a guest → room forward. Only the room's 127.0.0.1 is
-// allowed.
-func (g *Gateway) directTCPIP(nch ssh.NewChannel, upstream *ssh.Client) {
+// allowed, and on a room with several slots only the ports of the lease's slot.
+func (g *Gateway) directTCPIP(nch ssh.NewChannel, upstream *ssh.Client, leaseID string) {
 	var dp directPayload
 	if ssh.Unmarshal(nch.ExtraData(), &dp) != nil {
 		nch.Reject(ssh.Prohibited, "invalid direct-tcpip request")
@@ -195,6 +196,13 @@ func (g *Gateway) directTCPIP(nch ssh.NewChannel, upstream *ssh.Client) {
 	}
 	if dp.Addr != "127.0.0.1" && dp.Addr != "localhost" {
 		nch.Reject(ssh.Prohibited, "forwards may only go to 127.0.0.1 on the room")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	allowed := g.be.AllowDirect(ctx, leaseID, int(dp.Port))
+	cancel()
+	if !allowed {
+		nch.Reject(ssh.Prohibited, fmt.Sprintf("port %d is not a port of the lease's slot; this room has several slots, and a forward may only go to a port of its own slot", dp.Port))
 		return
 	}
 	up, err := upstream.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(dp.Port))))

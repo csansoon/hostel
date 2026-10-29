@@ -9,7 +9,7 @@ TARGETS = darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 window
 
 export CGO_ENABLED = 0
 
-.PHONY: build dist release mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace
+.PHONY: build dist release mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace test-smoke-windows
 
 build:
 	$(GO) build $(GOFLAGS_BUILD) -o dist/hostel ./cmd/hostel
@@ -40,6 +40,7 @@ mise-linux:
 lint:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) vet -tags e2e ./...
+	GOOS=windows $(GO) vet ./...
 	shellcheck install.sh platforms/*/*.sh test/platforms/*/*.sh
 
 test-unit:
@@ -57,3 +58,8 @@ test-e2e-10: mise-linux
 # Against the real Namespace account: it costs money (docs/m3-implementation.md).
 test-smoke-namespace: dist
 	HOSTEL_SMOKE_NAMESPACE=1 $(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeNamespace(Instance)?$$' -v ./test/e2e/...
+
+# Against a real Windows room (docs/m6-implementation.md): HOSTEL_SMOKE_WINDOWS
+# (user@host) and HOSTEL_SMOKE_WINDOWS_KEY (a key that the room user accepts).
+test-smoke-windows: dist
+	$(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeWindows$$' -v ./test/e2e/...

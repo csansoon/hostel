@@ -264,12 +264,18 @@ check).
 
 ## M6. Windows and several slots
 
-- Windows (after the owner changes the plan): verify SSH on a Windows instance,
-  write the `.windows.ps1` scripts, and test job objects and cleanup.
+- Windows on a static Windows host, the owner's Cloud PC `win-pc` (owner
+  decision, 2026-10-29): verify SSH, write the `.windows.ps1` scripts, and test
+  job objects and cleanup. `docs/m6-implementation.md` has the plan.
 - Several slots per room: an OS user for each slot on static rooms, port and device
   separation for each slot, and E2E scenarios with two leases on one room. An
   exclusive lease (platform `exclusive`, or the `desktop` label) takes all slots of a
   room with two slots.
+
+Done when: a guest on the owner's Mac uses `win-pc` through the exe.dev server
+(sync, a .NET build, a detached job, a tunnel; no lease process remains after the
+release), and the E2E suite has scenarios with two leases on one room
+(`m6-implementation.md`, section 4).
 
 ## M7. Hardening against backdoors (later; not required for version 1)
 

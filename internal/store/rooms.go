@@ -18,6 +18,7 @@ type Room struct {
 	OS               string
 	Arch             string
 	Home             string
+	Shell            string
 	SSHHostKey       string
 	HelperSHA256     string
 	ProviderDeadline time.Time
@@ -34,6 +35,7 @@ type Slot struct {
 	State       string
 	LeaseID     string
 	CleanupData string
+	Home        string
 }
 
 type RoomPlatform struct {
@@ -43,14 +45,14 @@ type RoomPlatform struct {
 	ProvisionedAt time.Time
 }
 
-const roomColumns = `id, name, provider, machine, provider_ref, state, os, arch, home, ssh_host_key,
+const roomColumns = `id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key,
 	helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at`
 
 func scanRoom(row interface{ Scan(...any) error }) (Room, error) {
 	var r Room
 	var deadline, warm sql.NullInt64
 	var created, changed int64
-	err := row.Scan(&r.ID, &r.Name, &r.Provider, &r.Machine, &r.ProviderRef, &r.State, &r.OS, &r.Arch, &r.Home,
+	err := row.Scan(&r.ID, &r.Name, &r.Provider, &r.Machine, &r.ProviderRef, &r.State, &r.OS, &r.Arch, &r.Home, &r.Shell,
 		&r.SSHHostKey, &r.HelperSHA256, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed)
 	r.ProviderDeadline, r.WarmUntil = fromMS(deadline), fromMS(warm)
 	r.CreatedAt, r.StateChangedAt = time.UnixMilli(created), time.UnixMilli(changed)
@@ -162,8 +164,8 @@ func (s *Store) SetRoomState(ctx context.Context, id int64, from []string, to, r
 }
 
 // SetRoomProbe records the probe result.
-func (s *Store) SetRoomProbe(ctx context.Context, id int64, osName, arch, home string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET os = ?, arch = ?, home = ? WHERE id = ?`, osName, arch, home, id)
+func (s *Store) SetRoomProbe(ctx context.Context, id int64, osName, arch, home, shell string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET os = ?, arch = ?, home = ?, shell = ? WHERE id = ?`, osName, arch, home, shell, id)
 	return err
 }
 
@@ -178,9 +180,22 @@ func (s *Store) SetHelperSHA256(ctx context.Context, id int64, sum string) error
 	return err
 }
 
+// SetSlotHome records the home directory of a slot's own user.
+func (s *Store) SetSlotHome(ctx context.Context, roomID int64, slot, home string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE slots SET home = ? WHERE room_id = ? AND name = ?`, home, roomID, slot)
+	return err
+}
+
+// SlotHome returns the recorded home directory of a slot's own user.
+func (s *Store) SlotHome(ctx context.Context, roomID int64, slot string) (string, error) {
+	var home string
+	err := s.db.QueryRowContext(ctx, `SELECT home FROM slots WHERE room_id = ? AND name = ?`, roomID, slot).Scan(&home)
+	return home, err
+}
+
 // Slots returns the slots of all rooms that are not destroyed.
 func (s *Store) Slots(ctx context.Context) ([]Slot, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT s.room_id, s.name, s.state, s.lease_id, s.cleanup_data
+	rows, err := s.db.QueryContext(ctx, `SELECT s.room_id, s.name, s.state, s.lease_id, s.cleanup_data, s.home
 		FROM slots s JOIN rooms r ON r.id = s.room_id WHERE r.state != 'destroyed' ORDER BY s.room_id, s.name`)
 	if err != nil {
 		return nil, fmt.Errorf("list slots: %w", err)
@@ -189,7 +204,7 @@ func (s *Store) Slots(ctx context.Context) ([]Slot, error) {
 	var out []Slot
 	for rows.Next() {
 		var sl Slot
-		if err := rows.Scan(&sl.RoomID, &sl.Name, &sl.State, &sl.LeaseID, &sl.CleanupData); err != nil {
+		if err := rows.Scan(&sl.RoomID, &sl.Name, &sl.State, &sl.LeaseID, &sl.CleanupData, &sl.Home); err != nil {
 			return nil, err
 		}
 		out = append(out, sl)

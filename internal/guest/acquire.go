@@ -97,7 +97,7 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		{StepPorts, func() (int, error) { return 0, startTunnels(st, rc, deadline) }},
 		{StepSynced, func() (int, error) { _, err := syncFiles(ctx, st, repo, rc, stderr); return 0, err }},
 		{StepSetup, func() (int, error) {
-			return runSetup(ctx, l, setupCommand(rc, platform, true), deadline, stderr)
+			return runSetup(ctx, l, setupCommand(rc, platform, st.Access.RoomOS, true), deadline, stderr)
 		}},
 	}
 	order := []string{StepCreated, StepEnv, StepPorts, StepSynced, StepSetup, StepDone}
@@ -320,8 +320,12 @@ var miseFiles = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.lo
 	".nvmrc", ".python-version", ".config/mise.toml", ".config/mise/config.toml", "mise/config.toml", ".mise/config.toml"}
 
 // setupCommand returns the setup job: "mise install" (unless mise = false) and,
-// with full, the repository setup commands of the platform.
-func setupCommand(rc *config.Repo, platform string, full bool) string {
+// with full, the repository setup commands of the platform. The first failure
+// stops the job.
+func setupCommand(rc *config.Repo, platform, roomOS string, full bool) string {
+	if roomOS == config.OSWindows {
+		return setupCommandPS(rc, platform, full)
+	}
 	var parts []string
 	if rc.MiseEnabled() {
 		// The job PATH comes from "mise env" at the job start, so it does not
@@ -334,6 +338,22 @@ func setupCommand(rc *config.Repo, platform string, full bool) string {
 		}
 	}
 	return strings.Join(parts, " && ")
+}
+
+// setupCommandPS is setupCommand for PowerShell, which the helper uses on
+// Windows. Windows PowerShell 5.1 has no "&&".
+func setupCommandPS(rc *config.Repo, platform string, full bool) string {
+	const stop = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
+	var parts []string
+	if rc.MiseEnabled() {
+		parts = append(parts, "mise install"+stop, `$env:PATH = ((mise bin-paths) -join ';') + ';' + $env:PATH`)
+	}
+	if rp := rc.Platforms[platform]; full && rp != nil {
+		for _, c := range rp.Setup {
+			parts = append(parts, c+stop)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // runSetup continues the running setup job, or starts cmd as the setup job

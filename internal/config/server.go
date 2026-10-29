@@ -24,6 +24,7 @@ const (
 
 var (
 	nameRE     = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	userRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
 	serverIDRE = regexp.MustCompile(`^[a-z0-9]{1,20}$`)
 )
 
@@ -119,6 +120,7 @@ type Machine struct {
 
 type Slot struct {
 	Name  string            `toml:"name"`
+	User  string            `toml:"user,omitempty"`
 	Ports []int             `toml:"ports,omitempty"`
 	Env   map[string]string `toml:"env,omitempty"`
 }
@@ -428,6 +430,7 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 		m.Slots = []Slot{{Name: "a"}}
 	}
 	names := map[string]bool{}
+	users := map[string]bool{}
 	ports := map[int]bool{}
 	for i := range m.Slots {
 		sl := &m.Slots[i]
@@ -439,6 +442,17 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 			el.add(sk+".name", "duplicate slot %q", sl.Name)
 		}
 		names[sl.Name] = true
+		if sl.User != "" {
+			switch {
+			case m.Kind != ProviderStatic:
+				el.add(sk+".user", "a slot user is only for static machines")
+			case !userRE.MatchString(sl.User):
+				el.add(sk+".user", "user %q must match %s", sl.User, userRE)
+			case users[sl.User]:
+				el.add(sk+".user", "user %q has two slots; each slot needs its own user", sl.User)
+			}
+			users[sl.User] = true
+		}
 		if sl.Ports == nil {
 			for port := 7500 + 10*i; port <= 7509+10*i; port++ {
 				sl.Ports = append(sl.Ports, port)

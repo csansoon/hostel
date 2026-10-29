@@ -168,3 +168,16 @@ func TestCleanupKeepsOtherSlot(t *testing.T) {
 	f.e.mustHostel("release")
 	f.e.waitFor("the second lease's processes stopped", time.Minute, func() bool { return count("2") == "0" })
 }
+
+// TestJobCommandNotFound: a job whose command is not in the job PATH ends with
+// exit code 127 and a clear message (the supervisor writes no
+// supervisor.json then; found in M6).
+func TestJobCommandNotFound(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	f.acquire()
+	r := f.e.hostel("run", "--", "no-such-command-hostel", "x")
+	if r.code != 127 || !strings.Contains(r.stdout+r.stderr, "no-such-command-hostel: command not found in the job PATH") {
+		t.Fatalf("job with a missing command: %s", r)
+	}
+}

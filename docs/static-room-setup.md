@@ -164,3 +164,57 @@ ssh -i ~/.local/share/hostel/server_ed25519 hostel@<address> 'uname -sm; sw_vers
 
 Send to the agent: the address (`hostel@<address>`), and the output of this
 command.
+
+## Windows (M6)
+
+A Windows machine is a static room for command-line work (the `windows` OS
+platform): builds and tests over SSH, not desktop UI. The reference room is the
+owner's Cloud PC `win-pc`. Do these steps as an administrator, in PowerShell.
+
+1. **OpenSSH Server.** It must run and start automatically
+   (`Get-Service sshd`). Its default shell can stay as it is (PowerShell or
+   `cmd`); the server finds it at the probe.
+2. **The room user.** Create a local user without administrator rights, with a
+   random password that nobody keeps (the server logs in with its key only):
+
+   ```powershell
+   $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+   $pw = ConvertTo-SecureString ([Convert]::ToBase64String($b) + 'aA1!') -AsPlainText -Force
+   New-LocalUser -Name hostel -Password $pw -PasswordNeverExpires -AccountNeverExpires
+   Add-LocalGroupMember -Group Users -Member hostel
+   # The profile must exist before the first SSH login.
+   $cred = New-Object Management.Automation.PSCredential('hostel', $pw)
+   Start-Process cmd.exe -ArgumentList '/c','exit' -Credential $cred -LoadUserProfile -WorkingDirectory C:\Windows -Wait
+   ```
+
+3. **The server key.** Put the output of `hostel admin pubkey` into
+   `C:\Users\hostel\.ssh\authorized_keys`. The SSH server accepts the file only
+   if SYSTEM and the user are the only users with access:
+
+   ```powershell
+   icacls C:\Users\hostel\.ssh\authorized_keys /inheritance:r /grant 'SYSTEM:F' /grant 'hostel:F'
+   ```
+
+   After the first lease, cleanup restores the file from
+   `C:\Users\hostel\hostel\authorized_keys.base`; a new server key goes into both
+   files.
+4. **Configuration** on the server:
+
+   ```toml
+   [providers.home.machines.win]
+   address = "hostel@localhost"   # with connect = true, only the user is used
+   os = "windows"
+   connect = true
+   ```
+
+5. **`room connect`** as a scheduled task of `LOCAL SERVICE`:
+   `deploy-vps.md`, section 6.
+
+Notes:
+
+- Guest commands run with PowerShell 7 if it is in the `PATH`, else Windows
+  PowerShell 5.1. The setup job installs the repository's mise tools.
+- On Windows, a background process of a job ends when the job's command ends.
+  Use `hostel run --detach` for a long-running server.
+- Microsoft Defender did not block the helper on `win-pc`. If it does, add an
+  exclusion for `C:\Users\hostel\hostel`.

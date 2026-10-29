@@ -85,6 +85,12 @@ const reasonUnreachable = "unreachable"
 // connect opens an SSH connection to a room and pins its host key at the first
 // connection.
 func (s *Server) connect(ctx context.Context, r store.Room) (*roomops.Conn, error) {
+	return s.connectAs(ctx, r, "")
+}
+
+// connectAs connects to a room as user (a slot's own user), or as the
+// provider's user if user is empty.
+func (s *Server) connectAs(ctx context.Context, r store.Room, user string) (*roomops.Conn, error) {
 	p := s.providers[r.Provider]
 	if p == nil {
 		return nil, fmt.Errorf("provider %q is not in the configuration", r.Provider)
@@ -92,6 +98,9 @@ func (s *Server) connect(ctx context.Context, r store.Room) (*roomops.Conn, erro
 	access, err := p.Access(ctx, provider.RoomRef{Name: r.Name, Machine: r.Machine, ID: r.ProviderRef})
 	if err != nil {
 		return nil, fmt.Errorf("room access: %w", err)
+	}
+	if user != "" {
+		access.User = user
 	}
 	conn, err := roomops.Connect(ctx, access, r.SSHHostKey)
 	if err != nil {
@@ -133,7 +142,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if m.Kind == config.ProviderStatic && room.OS != m.OS {
 		return fmt.Errorf("the room runs %s, but the configuration says os = %q", room.OS, m.OS)
 	}
-	if err := s.store.SetRoomProbe(ctx, r.ID, room.OS, room.Arch, room.Home); err != nil {
+	if err := s.store.SetRoomProbe(ctx, r.ID, room.OS, room.Arch, room.Home, room.Shell); err != nil {
 		return err
 	}
 	upload, err := s.roomUpload(room, m)
@@ -145,6 +154,11 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		return err
 	}
 	if err := s.store.SetHelperSHA256(ctx, r.ID, helperSum); err != nil {
+		return err
+	}
+	// Slot users first: the cleanup of a dirty slot runs as its user, with its
+	// recorded home and its current helper.
+	if err := s.provisionSlotUsers(ctx, r, m); err != nil {
 		return err
 	}
 	if err := s.cleanDirtySlots(ctx, room, r.ID); err != nil {
@@ -185,6 +199,82 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		}
 	}
 	return s.runHealth(ctx, room, r.ID)
+}
+
+// provisionSlotUsers prepares the slots that have their own OS user: each has
+// its own hostel directory, helper, and machine-level tools (design, section
+// 9). It records each user's home directory.
+func (s *Server) provisionSlotUsers(ctx context.Context, r store.Room, m *config.Machine) error {
+	for _, sl := range m.Slots {
+		if sl.User == "" {
+			continue
+		}
+		if err := s.provisionSlotUser(ctx, r, m, sl); err != nil {
+			return fmt.Errorf("slot %s (user %s): %w", sl.Name, sl.User, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) provisionSlotUser(ctx context.Context, r store.Room, m *config.Machine, sl config.Slot) error {
+	conn, err := s.connectAs(ctx, r, sl.User)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	room, err := roomops.Probe(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if room.OS != r.OS {
+		return fmt.Errorf("the user runs %s, the machine user %s", room.OS, r.OS)
+	}
+	if err := s.store.SetSlotHome(ctx, r.ID, sl.Name, room.Home); err != nil {
+		return err
+	}
+	upload, err := s.roomUpload(room, m)
+	if err != nil {
+		return err
+	}
+	if _, err := room.Sync(ctx, upload); err != nil {
+		return err
+	}
+	var resp protocol.RunScriptResponse
+	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.cfg.Mise.AgentDeviceEnabled()}
+	if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
+		return err
+	}
+	if resp.TimedOut || resp.ExitCode != 0 {
+		s.store.AddEvent(ctx, time.Now(), "", r.ID, "mise", fmt.Sprintf("slot %s: mise install exited with code %d\n%s", sl.Name, resp.ExitCode, resp.OutputTail))
+		return fmt.Errorf("machine-level tools: mise install failed (exit code %d); see the events", resp.ExitCode)
+	}
+	return nil
+}
+
+// slotUser returns the slot's own OS user, or "" (the machine user).
+func slotUser(m *config.Machine, slot string) string {
+	if m == nil {
+		return ""
+	}
+	for _, sl := range m.Slots {
+		if sl.Name == slot {
+			return sl.User
+		}
+	}
+	return ""
+}
+
+// slotHome returns the home directory of a slot's user: its own user's, or
+// the machine user's.
+func (s *Server) slotHome(ctx context.Context, r store.Room, slot string) (string, error) {
+	if slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot) == "" {
+		return r.Home, nil
+	}
+	home, err := s.store.SlotHome(ctx, r.ID, slot)
+	if err == nil && home == "" {
+		err = fmt.Errorf("slot %s: the home directory of its user is not known; the room provisioning records it", slot)
+	}
+	return home, err
 }
 
 // healthPlatforms returns the platforms of a room that have a health script
@@ -290,13 +380,16 @@ func (s *Server) readyPlatforms(ctx context.Context, roomID int64) (map[string]s
 // and architecture, the machine-level mise tools, the room environment, and the
 // platform directories.
 func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Upload, error) {
-	goos := room.OS
-	if goos == config.OSMacOS {
+	goos, ext := room.OS, ""
+	switch goos {
+	case config.OSMacOS:
 		goos = "darwin"
+	case config.OSWindows:
+		ext = ".exe"
 	}
 	u := roomops.Upload{
-		HelperFile: filepath.Join(s.cfg.HelperDir, fmt.Sprintf("hostel-%s-%s", goos, room.Arch)),
-		MiseFile:   filepath.Join(s.cfg.HelperDir, fmt.Sprintf("mise-%s-%s", goos, room.Arch)),
+		HelperFile: filepath.Join(s.cfg.HelperDir, fmt.Sprintf("hostel-%s-%s%s", goos, room.Arch, ext)),
+		MiseFile:   filepath.Join(s.cfg.HelperDir, fmt.Sprintf("mise-%s-%s%s", goos, room.Arch, ext)),
 		Platforms:  map[string]roomops.Platform{},
 	}
 	var err error
@@ -307,7 +400,7 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 	for k, v := range m.Env {
 		env[k] = v
 	}
-	for k, v := range s.miseEnv(room.Home) {
+	for k, v := range s.miseEnv(room.OS, room.Home) {
 		env[k] = v
 	}
 	re := protocol.RoomEnv{Env: env, Slots: map[string]map[string]string{}, OS: m.OS}
@@ -325,14 +418,13 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 
 // miseEnv returns the MISE_* variables of all room-side processes (design,
 // section 9, "mise on rooms").
-func (s *Server) miseEnv(home string) map[string]string {
-	root := home + "/hostel"
+func (s *Server) miseEnv(osName, home string) map[string]string {
 	env := map[string]string{
-		"MISE_DATA_DIR":             root + "/cache/mise",
-		"MISE_CACHE_DIR":            root + "/cache/mise-cache",
-		"MISE_CONFIG_DIR":           root + "/mise",
-		"MISE_STATE_DIR":            root + "/mise-state",
-		"MISE_TRUSTED_CONFIG_PATHS": root + "/slots",
+		"MISE_DATA_DIR":             roomops.Path(osName, home, "cache", "mise"),
+		"MISE_CACHE_DIR":            roomops.Path(osName, home, "cache", "mise-cache"),
+		"MISE_CONFIG_DIR":           roomops.Path(osName, home, "mise"),
+		"MISE_STATE_DIR":            roomops.Path(osName, home, "mise-state"),
+		"MISE_TRUSTED_CONFIG_PATHS": roomops.Path(osName, home, "slots"),
 		"MISE_YES":                  "1",
 		"MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": strings.Join(s.cfg.Mise.IdiomaticTools, ","),
 	}

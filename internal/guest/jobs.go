@@ -300,7 +300,8 @@ func Jobs(args []string, stdout, stderr io.Writer) int {
 		if j.ExitCode != nil {
 			exit = strconv.Itoa(*j.ExitCode)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", j.ID, j.State, exit, j.StartedAt.Local().Format(time.TimeOnly), strings.Join(j.Command, " "))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", j.ID, j.State, exit, j.StartedAt.Local().Format(time.TimeOnly),
+			strings.ReplaceAll(strings.Join(j.Command, " "), "\n", "; "))
 	}
 	tw.Flush()
 	return 0

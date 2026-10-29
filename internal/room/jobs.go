@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +31,8 @@ type supervisorInfo struct {
 	SupervisorStart string `json:"supervisor_start"`
 	PGID            int    `json:"pgid"`
 	CommandStart    string `json:"command_start"`
+	// Group is the name of the command's job object (Windows).
+	Group string `json:"group,omitempty"`
 }
 
 func (h *helper) jobsDir(slot string) string { return filepath.Join(h.slotDir(slot), "jobs") }
@@ -90,6 +93,10 @@ func (h *helper) jobStart(args []string, stdin io.Reader) (map[string]string, er
 		if _, err := os.Stat(filepath.Join(dir, "supervisor.json")); err == nil {
 			return map[string]string{"job_id": id}, nil
 		}
+		// A command that could not start has an exit code and no supervisor.json.
+		if _, ok := readExit(dir); ok {
+			return map[string]string{"job_id": id}, nil
+		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("the supervisor of job %s did not start in 10 seconds", id)
 		}
@@ -139,26 +146,28 @@ func (h *helper) jobSupervise(args []string) error {
 		}
 		defer os.Remove(marker)
 	}
-	argv := meta.Command
+	var path string
+	var argv []string
 	if meta.Shell {
-		argv = []string{"/bin/sh", "-c", meta.Command[0]}
-	}
-	// The command is found in the PATH of the job environment (with the mise
-	// tools), not in the helper's PATH.
-	path, err := lookPath(argv[0], env)
-	if err != nil {
-		fmt.Fprintf(out, "hostel: %s: command not found in the job PATH\n", argv[0])
-		return writeExit(127)
+		path, argv = shellCommand(meta.Command[0], env)
+	} else {
+		argv = meta.Command
+		// The command is found in the PATH of the job environment (with the
+		// mise tools), not in the helper's PATH.
+		if path, err = lookPath(argv[0], env); err != nil {
+			fmt.Fprintf(out, "hostel: %s: command not found in the job PATH\n", argv[0])
+			return writeExit(127)
+		}
 	}
 	cmd := &exec.Cmd{Path: path, Args: argv, Dir: h.workDir(slot), Env: env, Stdout: out, Stderr: out}
-	setProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
+	group := jobGroupName(slot, pos[0])
+	if err := startInGroup(cmd, group); err != nil {
 		fmt.Fprintf(out, "hostel: start the command: %v\n", err)
 		return writeExit(127)
 	}
 	selfStart, _ := processStart(os.Getpid())
 	cmdStart, _ := processStart(cmd.Process.Pid)
-	info, _ := json.Marshal(supervisorInfo{SupervisorPID: os.Getpid(), SupervisorStart: selfStart, PGID: cmd.Process.Pid, CommandStart: cmdStart})
+	info, _ := json.Marshal(supervisorInfo{SupervisorPID: os.Getpid(), SupervisorStart: selfStart, PGID: cmd.Process.Pid, CommandStart: cmdStart, Group: group})
 	if err := writeFileAtomic(filepath.Join(dir, "supervisor.json"), info, 0o644); err != nil {
 		return err
 	}
@@ -180,15 +189,35 @@ func devboxTaskMarker(slot, job string) string {
 	return filepath.Join(dir, "hostel-"+slot+"."+job)
 }
 
-// lookPath finds a command in the PATH of the job environment (not the helper's).
+// lookPath finds a command in the PATH of the job environment (not the
+// helper's). On Windows, it also tries the extensions in PATHEXT, and a file
+// needs no executable bit.
 func lookPath(name string, env []string) (string, error) {
-	if strings.Contains(name, "/") {
+	if strings.ContainsAny(name, `/\`) {
 		return name, nil
 	}
-	for _, dir := range filepath.SplitList(envMap(env)["PATH"]) {
-		p := filepath.Join(dir, name)
-		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return p, nil
+	m := envMap(env)
+	exts := []string{""}
+	if runtime.GOOS == "windows" {
+		pathext := m["PATHEXT"]
+		if pathext == "" {
+			pathext = ".COM;.EXE;.BAT;.CMD"
+		}
+		if filepath.Ext(name) == "" {
+			exts = nil
+		}
+		for _, ext := range strings.Split(strings.ToLower(pathext), ";") {
+			if ext != "" {
+				exts = append(exts, ext)
+			}
+		}
+	}
+	for _, dir := range filepath.SplitList(m["PATH"]) {
+		for _, ext := range exts {
+			p := filepath.Join(dir, name+ext)
+			if info, err := os.Stat(p); err == nil && !info.IsDir() && (runtime.GOOS == "windows" || info.Mode()&0o111 != 0) {
+				return p, nil
+			}
 		}
 	}
 	return "", exec.ErrNotFound
@@ -341,7 +370,7 @@ func (h *helper) jobStop(args []string) (struct{}, error) {
 	if !alive(sup.PGID, sup.CommandStart) {
 		return struct{}{}, nil
 	}
-	signalGroup(sup.PGID, false)
+	stopGroup(sup.PGID, sup.Group, false)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, ok := readExit(dir); ok {
@@ -349,7 +378,7 @@ func (h *helper) jobStop(args []string) (struct{}, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	signalGroup(sup.PGID, true)
+	stopGroup(sup.PGID, sup.Group, true)
 	return struct{}{}, nil
 }
 

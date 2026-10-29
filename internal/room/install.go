@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/csansoon/hostel/internal/cli"
@@ -77,7 +78,25 @@ func writeVerified(path string, r io.Reader, want string, mode os.FileMode) erro
 	if err := os.Chmod(tmp.Name(), mode); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return replaceFile(tmp.Name(), path)
+}
+
+// replaceFile renames src to dst. Windows cannot replace an executable that
+// runs (for example mise.exe in another slot's lease), but it can rename it:
+// the old file moves aside and is deleted at a later install.
+func replaceFile(src, dst string) error {
+	err := os.Rename(src, dst)
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	old, _ := filepath.Glob(filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".old-*"))
+	for _, f := range old {
+		os.Remove(f)
+	}
+	if os.Rename(dst, filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".old-"+randHex())) != nil {
+		return err
+	}
+	return os.Rename(src, dst)
 }
 
 func (h *helper) installPlatform(name string, r io.Reader, want string) error {

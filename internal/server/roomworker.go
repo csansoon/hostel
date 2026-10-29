@@ -366,6 +366,24 @@ func (s *Server) markLost(ctx context.Context, r store.Room, reason string) {
 	}
 }
 
+// cleanDirtySlot runs the cleanup of a slot through room, or as the slot's own
+// user.
+func (s *Server) cleanDirtySlot(ctx context.Context, room *roomops.Room, roomID int64, slot string, req protocol.CleanupRequest) error {
+	r, err := s.store.Room(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	if slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot) != "" {
+		sr, _, err := s.openSlot(ctx, roomID, slot)
+		if err != nil {
+			return err
+		}
+		defer sr.Conn.Close()
+		room = sr
+	}
+	return s.runCleanup(ctx, room, roomID, slot, req)
+}
+
 // cleanDirtySlots runs the cleanup of each dirty slot of a room (design,
 // section 4, "Dirty slot").
 func (s *Server) cleanDirtySlots(ctx context.Context, room *roomops.Room, roomID int64) error {
@@ -381,7 +399,7 @@ func (s *Server) cleanDirtySlots(ctx context.Context, room *roomops.Room, roomID
 		if err := json.Unmarshal([]byte(sl.CleanupData), &req); err != nil {
 			return fmt.Errorf("slot %s: cleanup data: %w", sl.Name, err)
 		}
-		if err := s.runCleanup(ctx, room, roomID, sl.Name, req); err != nil {
+		if err := s.cleanDirtySlot(ctx, room, roomID, sl.Name, req); err != nil {
 			return fmt.Errorf("cleanup of slot %s: %w", sl.Name, err)
 		}
 		if err := s.store.SetSlot(ctx, roomID, sl.Name, protocol.SlotFree, "", ""); err != nil {

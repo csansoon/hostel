@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,23 +15,50 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf16"
 
+	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/hashes"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/shell"
 )
 
 // Room is a connected room with its probe result.
 type Room struct {
-	Conn *Conn
-	OS   string // Hostel OS name
-	Arch string // Go architecture name
-	Home string
+	Conn  *Conn
+	OS    string // Hostel OS name
+	Arch  string // Go architecture name
+	Home  string
+	Shell string // the SSH server's shell (shell.SH on macOS and Linux)
 }
 
 // HelperPath returns the absolute helper path on the room.
-func (r *Room) HelperPath() string { return r.Home + "/hostel/bin/hostel" }
+func (r *Room) HelperPath() string { return HelperPath(r.OS, r.Home) }
 
-// Probe finds the room's OS, architecture, and home directory.
+// Path returns a path below the hostel directory of a room user's home
+// directory, with the separator of the room's OS.
+func Path(osName, home string, elem ...string) string {
+	sep := "/"
+	if osName == config.OSWindows {
+		sep = `\`
+	}
+	return home + sep + strings.Join(append([]string{"hostel"}, elem...), sep)
+}
+
+// HelperPath returns the helper path in a room user's home directory.
+func HelperPath(osName, home string) string {
+	if osName == config.OSWindows {
+		return Path(osName, home, "bin", "hostel.exe")
+	}
+	return Path(osName, home, "bin", "hostel")
+}
+
+// WorkDir returns the work directory of a slot in a room user's home directory.
+func WorkDir(osName, home, slot string) string { return Path(osName, home, "slots", slot, "work") }
+
+// Probe finds the room's OS, architecture, home directory, and shell. On
+// Windows, "cmd /c echo" runs the same in cmd and in PowerShell; "echo %OS%"
+// does not: cmd expands the variable, PowerShell prints it unchanged.
 func Probe(ctx context.Context, c *Conn) (*Room, error) {
 	var out bytes.Buffer
 	code, stderr, err := c.Run(ctx, `uname -s -m && printf '%s\n' "$HOME"`, nil, &out)
@@ -38,8 +67,8 @@ func Probe(ctx context.Context, c *Conn) (*Room, error) {
 	}
 	if code != 0 {
 		out.Reset()
-		if code, _, err := c.Run(ctx, `cmd /c echo windows %PROCESSOR_ARCHITECTURE%`, nil, &out); err == nil && code == 0 {
-			return nil, errors.New("probe: the room runs Windows; Windows rooms are not supported yet (milestone M6)")
+		if code, _, err := c.Run(ctx, `cmd /c echo windows %PROCESSOR_ARCHITECTURE% %USERPROFILE%`, nil, &out); err == nil && code == 0 {
+			return probeWindows(ctx, c, out.String())
 		}
 		return nil, fmt.Errorf("probe: uname exited with code %d: %s", code, strings.TrimSpace(stderr))
 	}
@@ -60,18 +89,48 @@ func Probe(ctx context.Context, c *Conn) (*Room, error) {
 	default:
 		return nil, fmt.Errorf("probe: unsupported OS %q", fields[0])
 	}
-	switch fields[1] {
-	case "x86_64", "amd64":
-		r.Arch = "amd64"
-	case "aarch64", "arm64":
-		r.Arch = "arm64"
-	default:
-		return nil, fmt.Errorf("probe: unsupported architecture %q", fields[1])
+	if r.Arch, err = goArch(fields[1]); err != nil {
+		return nil, err
 	}
 	if !strings.HasPrefix(r.Home, "/") {
 		return nil, fmt.Errorf("probe: home directory %q is not absolute", r.Home)
 	}
 	return r, nil
+}
+
+func probeWindows(ctx context.Context, c *Conn, out string) (*Room, error) {
+	line := strings.TrimSpace(out)
+	fields := strings.SplitN(line, " ", 3)
+	if len(fields) != 3 || fields[0] != "windows" {
+		return nil, fmt.Errorf("probe: unexpected output %q", line)
+	}
+	r := &Room{Conn: c, OS: config.OSWindows, Home: strings.TrimSpace(fields[2])}
+	var err error
+	if r.Arch, err = goArch(fields[1]); err != nil {
+		return nil, err
+	}
+	if len(r.Home) < 3 || r.Home[1] != ':' || r.Home[2] != '\\' {
+		return nil, fmt.Errorf("probe: home directory %q is not absolute", r.Home)
+	}
+	var echo bytes.Buffer
+	if code, stderr, err := c.Run(ctx, `echo %OS%`, nil, &echo); err != nil || code != 0 {
+		return nil, fmt.Errorf("probe: find the shell: exit code %d, %v: %s", code, err, strings.TrimSpace(stderr))
+	}
+	r.Shell = shell.PowerShell
+	if strings.TrimSpace(echo.String()) != "%OS%" {
+		r.Shell = shell.Cmd
+	}
+	return r, nil
+}
+
+func goArch(s string) (string, error) {
+	switch strings.ToLower(s) {
+	case "x86_64", "amd64":
+		return "amd64", nil
+	case "aarch64", "arm64":
+		return "arm64", nil
+	}
+	return "", fmt.Errorf("probe: unsupported architecture %q", s)
 }
 
 // ErrNoHelper: the helper is not installed on the room.
@@ -80,9 +139,9 @@ var ErrNoHelper = errors.New("the helper is not installed")
 // Helper runs a helper control command. in (if not nil) is sent as JSON on
 // stdin, unless it is an io.Reader; out (if not nil) receives the JSON output.
 func (r *Room) Helper(ctx context.Context, args []string, in, out any) error {
-	cmd := Quote(r.HelperPath()) + " room"
-	for _, a := range args {
-		cmd += " " + Quote(a)
+	cmd, err := shell.Command(r.Shell, r.HelperPath(), append([]string{"room"}, args...)...)
+	if err != nil {
+		return fmt.Errorf("helper %s: %w", args[0], err)
 	}
 	var stdin io.Reader
 	switch v := in.(type) {
@@ -109,7 +168,8 @@ func (r *Room) Helper(ctx context.Context, args []string, in, out any) error {
 			}
 		}
 		return nil
-	case 126, 127:
+	}
+	if shell.NotFound(r.Shell, code) {
 		return ErrNoHelper
 	}
 	var he protocol.HelperError
@@ -232,17 +292,94 @@ func (r *Room) uploadHelper(ctx context.Context, file string) error {
 		return fmt.Errorf("open helper: %w", err)
 	}
 	defer f.Close()
+	if r.OS == config.OSWindows {
+		return r.uploadHelperWindows(ctx, f)
+	}
 	dir := Quote(r.Home + "/hostel/bin")
 	tmp := Quote(r.Home + "/hostel/bin/.hostel.upload")
 	cmd := fmt.Sprintf("mkdir -p %s && cat > %s && chmod 755 %s && mv %s %s", dir, tmp, tmp, tmp, Quote(r.HelperPath()))
-	code, stderr, err := r.Conn.Run(ctx, cmd, f, io.Discard)
+	return r.run(ctx, "upload helper", cmd, f)
+}
+
+// uploadHelperWindows sends the helper as a tar stream to tar.exe (part of
+// Windows since Windows 10 1803): Windows PowerShell does not give its stdin to
+// a script. Then PowerShell moves it into place. Windows cannot replace a
+// running executable (a job supervisor of another slot), but it can rename
+// it: the old file moves aside and is deleted at a later upload.
+func (r *Room) uploadHelperWindows(ctx context.Context, f *os.File) error {
+	info, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("upload helper: %w", err)
 	}
+	bin := Path(r.OS, r.Home, "bin")
+	tmp := Path(r.OS, r.Home, "bin", ".upload")
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+	prepare := "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'\n" +
+		"Remove-Item -Recurse -Force -ErrorAction SilentlyContinue " + q(tmp) + "\n" +
+		"New-Item -ItemType Directory -Force " + q(tmp) + " | Out-Null\n"
+	finish := "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'\n" +
+		"$dst = " + q(r.HelperPath()) + "; $dir = " + q(bin) + "\n" +
+		"Get-ChildItem $dir -Filter '.hostel.exe.old-*' -Force | Remove-Item -Force -ErrorAction SilentlyContinue\n" +
+		"try { Move-Item -Force " + q(tmp+`\hostel.exe`) + " $dst }\n" +
+		"catch { Move-Item -Force $dst (Join-Path $dir ('.hostel.exe.old-' + [guid]::NewGuid())); Move-Item -Force " + q(tmp+`\hostel.exe`) + " $dst }\n" +
+		"Remove-Item -Recurse -Force " + q(tmp) + "\n"
+	cmd, err := r.powerShell(prepare)
+	if err != nil {
+		return err
+	}
+	if err := r.run(ctx, "upload helper", cmd, nil); err != nil {
+		return err
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		tw := tar.NewWriter(pw)
+		err := tw.WriteHeader(&tar.Header{Name: "hostel.exe", Mode: 0o755, Size: info.Size(), Typeflag: tar.TypeReg})
+		if err == nil {
+			_, err = io.Copy(tw, f)
+		}
+		if err == nil {
+			err = tw.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	cmd, err = shell.Command(r.Shell, "tar", "-x", "-f", "-", "-C", tmp)
+	if err == nil {
+		err = r.run(ctx, "upload helper", cmd, pr)
+	}
+	pr.Close()
+	if err != nil {
+		return err
+	}
+	if cmd, err = r.powerShell(finish); err != nil {
+		return err
+	}
+	return r.run(ctx, "upload helper", cmd, nil)
+}
+
+// powerShell returns a command line that runs a Windows PowerShell script.
+func (r *Room) powerShell(script string) (string, error) {
+	return shell.Command(r.Shell, "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(script))
+}
+
+func (r *Room) run(ctx context.Context, what, cmd string, stdin io.Reader) error {
+	code, stderr, err := r.Conn.Run(ctx, cmd, stdin, io.Discard)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	if code != 0 {
-		return fmt.Errorf("upload helper: exit code %d: %s", code, strings.TrimSpace(stderr))
+		return fmt.Errorf("%s: exit code %d: %s", what, code, strings.TrimSpace(stderr))
 	}
 	return nil
+}
+
+// encodePS encodes a script for powershell -EncodedCommand (UTF-16LE, base64).
+func encodePS(s string) string {
+	u := utf16.Encode([]rune(s))
+	b := make([]byte, 2*len(u))
+	for i, c := range u {
+		binary.LittleEndian.PutUint16(b[2*i:], c)
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // uploadMise sends the mise binary compressed with gzip; the helper

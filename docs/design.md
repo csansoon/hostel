@@ -135,9 +135,9 @@ database stores runtime state.
 
 | Table | Main columns |
 |---|---|
-| `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
+| `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
 | `room_platforms` | room_id, platform, scripts_sha256, provisioned_at |
-| `slots` | room_id, name, state, lease_id, cleanup_data |
+| `slots` | room_id, name, state, lease_id, cleanup_data, home |
 | `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
 | `lease_tunnels` | lease_id, name, room_port |
 | `tokens` | id, name, role, machine (for `room` tokens), sha256, created_at, revoked_at |
@@ -577,7 +577,13 @@ path as a key (for example Xcode DerivedData) are therefore reused.
 ### Probe and upload
 
 1. The server runs `uname -s -m` on the room. If that fails, it runs
-   `cmd /c echo windows %PROCESSOR_ARCHITECTURE%`. The result selects
+   `cmd /c echo windows %PROCESSOR_ARCHITECTURE% %USERPROFILE%` (the same in
+   `cmd` and in PowerShell), and then `echo %OS%` to find the SSH server's default
+   shell: `cmd` prints `Windows_NT`, PowerShell prints `%OS%`. The shell goes to
+   `rooms.shell`; the server and the gateway quote each command for it (package
+   `shell`). Only the PowerShell default shell is tested (on `win-pc`); `cmd`
+   is not (its quoting rules for `cmd /c` with several quoted words are a risk). A PowerShell command line ends with `exit $LASTEXITCODE`, because
+   PowerShell itself exits with 0 or 1. The result selects
    `hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>` from `helper_dir` (Go names:
    `darwin`, `linux`, `windows`; `amd64`, `arm64`; `.exe` on Windows). The Hostel OS
    names in configuration and script files are `macos`, `linux`, and `windows`;
@@ -593,7 +599,11 @@ path as a key (for example Xcode DerivedData) are therefore reused.
 3. The server repeats step 2 at each `preparing`, so that a guest cannot leave a
    changed helper or script for the next lease.
 4. Transfer. The helper itself goes first, with `sh -c 'cat > tmp && chmod 755 tmp
-   && mv tmp hostel/bin/hostel'`. All other items go through the helper `install`
+   && mv tmp hostel/bin/hostel'`. On Windows, Windows PowerShell does not give its
+   stdin to a script, so the helper goes as a `tar` stream to `tar.exe` (part of
+   Windows since 10 1803), and PowerShell then moves it into place. Windows cannot
+   replace a running executable, but it can rename it: the old file moves aside
+   and a later install deletes it. All other items go through the helper `install`
    command, which writes a temporary file, checks the SHA-256, and renames it. mise
    goes compressed with gzip (151 MB → about 52 MB for Linux). An OS platform without
    scripts for the room's OS has an empty upload, which removes old scripts.
@@ -817,7 +827,21 @@ not inherited: on a provider it is a limit for all machines together.
 | `command`, `command_env`, `timeouts` | external provider | `command` required; `timeouts = { provision = "5m", default = "1m" }` |
 
 Explicit slots: `slots = [{ name = "a", ports = [7500, 7501], env = { ANDROID_SERIAL = "emulator-5554" } }]`.
-From M6, a slot can have its own OS `user`.
+
+**Slot users** (static machines, M6). A slot can have its own OS `user`
+(`slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]`),
+so two leases on one room cannot read each other's files or stop each other's
+processes. The user needs the server key in its `authorized_keys`, and a home
+directory that other users cannot read. The server connects as the machine user
+(`address`) for the room-level steps (probe, install, provision, health) and as
+the slot user for the slot steps (begin, prepare, cleanup) and for the guest's
+connections. At each room provisioning, it probes each slot user (its home goes to
+`slots.home`), uploads its own `hostel/` directory, and installs the machine-level
+tools for it. After the cleanup of such a slot, the server runs the health scripts
+as the machine user. A platform whose `prepare` needs the result of `provision` in
+the machine user's account (for example the iOS golden simulators, which belong to
+the user that made them) does not work with slot users; such machines keep one
+slot or use slots without users.
 
 **Commands for the owner:**
 
@@ -1205,8 +1229,12 @@ guest ──SSH (lease key)──► gateway ──SSH (server key)──► roo
   `window-change`, `signal`, and `exit-status`. It wraps each session in the
   helper: `shell` becomes `hostel room shell --slot <slot>`, and `exec <string>`
   becomes `hostel room exec --slot <slot> --command-b64 <base64 of the string>`. The
-  helper decodes the string and runs it with `sh -c` (macOS, Linux) or
-  `powershell -NoProfile -Command` (Windows). Base64 avoids all quoting problems.
+  helper decodes the string and runs it with `sh -c` (macOS, Linux) or PowerShell
+  (Windows: PowerShell 7 `pwsh` if it is in the room's `PATH`, else Windows
+  PowerShell 5.1, with `-NoProfile -NonInteractive -Command`; not
+  `-EncodedCommand`, with which Windows PowerShell writes stderr as CLIXML). On
+  Windows, a wrapper gives the exit code of the last command and turns off
+  progress records and colors. Base64 avoids all quoting problems.
   Guest calls of the helper are wrapped the same way; there is no exception. So every
   guest process has the lease environment and `HOSTEL_LEASE`, and cleanup can find
   it (section 17).
@@ -1241,7 +1269,11 @@ is defense in depth.
 - Namespace: `RoomAccess` from the provider.
 - **Rooms behind NAT** (M5). `hostel room connect --server <url> --token-file
   <file>` (or `HOSTEL_ROOM_TOKEN`; never a token in the arguments, which other
-  users can read) runs on the room as a service. It reads the gateway address and
+  users can read) runs on the room as a service. It runs as an account other than
+  the room user and the slot users, and only that account can read the token: a
+  guest runs as the room user, and with the token it could replace the room's
+  connection (found in M6; the server pins the room's host key, so it cannot read
+  the server's sessions, but it can stop them). It reads the gateway address and
   host key from `GET /v1/info` (the only API call that accepts a `room` token),
   connects to the gateway (TCP or WebSocket), and authenticates as user `room`
   with the token as the password. A `room` token is bound to one machine when it
@@ -1313,9 +1345,9 @@ room's loopback interface).
   The gateway accepts a remote forward only for a registered port of that lease, and
   after each change it closes the forwards of ports that the lease no longer
   registers. At assignment, a lease does not get a room where another lease uses one
-  of its fixed room ports; it waits. From M6, the scheduler treats fixed room ports as
-  a resource of the room (today such a lease can wait for that room although another
-  room is free).
+  of its fixed room ports; it waits. (Such a lease can wait for that room although
+  another room is free; a later version can treat fixed room ports as a resource of
+  the room.)
 - **Changing the room port.** `hostel tunnel set <name> --room-port P` registers the
   new port, closes the old forward, and opens the new one. The guest updates
   `lease.env`, so new jobs get the new `HOSTEL_TUNNEL_<NAME>_PORT` and the new values
@@ -1331,9 +1363,14 @@ room's loopback interface).
   sends each connection through the gateway (`direct-tcpip`) to the room's
   `127.0.0.1:<room-port>`. It prints the local address.
 - `hostel forward list` and `hostel forward stop <room-port>` control forwards.
-- The gateway allows `direct-tcpip` only to `127.0.0.1` on the lease's room. In
-  version 1 any port is allowed (one slot for each machine). From M6, only ports of
-  the lease's slot.
+- The gateway allows `direct-tcpip` only to `127.0.0.1` on the lease's room. On a
+  room with one slot, any port is allowed (for example a bundler on 8081). On a room
+  with several slots, only the ports of the lease's slot, unless the lease holds
+  all slots (an exclusive lease) (M6). A tunnel cannot use a port of another
+  slot either. This keeps the gateway paths apart; it does not isolate the slots
+  on the room: all slot users share the room's loopback interface, so a guest
+  command on the room can connect to a server of the other slot's lease. Slot
+  users keep files and processes apart, not loopback ports.
 
 ### The port process
 
@@ -1380,7 +1417,15 @@ handles all tunnels and forwards of the lease.
 ## 15. Jobs
 
 - `job start` starts a **supervisor** (`hostel room job supervise`) in a new session
-  (`setsid`) on macOS and Linux, or in a job object on Windows. The guest chooses
+  (`setsid`) on macOS and Linux. On Windows, the SSH server puts each session in a
+  job object that ends its processes when the session ends; the supervisor starts
+  with `CREATE_BREAKAWAY_FROM_JOB`, and it starts the command suspended in a job
+  object of its own (`Local\hostel-<user SID>-<slot>-<job id>`, with
+  `KILL_ON_JOB_CLOSE` and without breakaway), then resumes it. `job stop` and
+  cleanup terminate that job by name. A guest process cannot leave it, and when
+  the command ends, the rest of its job ends too (on Windows, a background process
+  of a job does not outlive the job's command). Windows has no SIGTERM for
+  processes without a console: stop and cleanup end them at once. The guest chooses
   the job ID (`j-<unix-ms>-<4 random hex>`; the helper makes one if the request has
   none). A start with an existing ID returns that job, so a guest whose connection
   dropped during the start repeats it with the same ID and gets one job, not two.
@@ -1452,6 +1497,17 @@ failed; the result lists each step.
    cleanup, escapes; the `ios` reset also stops the processes whose command line
    has the UDID of a slot simulator (the `agent-device` runner has it). Send
    SIGTERM, wait 10 seconds, then SIGKILL.
+
+   On Windows (M6), the helper reads `HOSTEL_LEASE` from the environment block of
+   each process of the room user (through its PEB), and finds descendants through
+   the parent PIDs of a Toolhelp snapshot; a child must be younger than its parent,
+   because Windows gives the PID of an ended parent to new processes. Windows has
+   no Unix sessions. A guest command (`exec`, `shell`) runs in a job object
+   without breakaway, inside the SSH session's job, so its processes end with
+   the session and cannot leave it; only the helper's own `job start` runs
+   outside it (its supervisor must break away, section 15).
+   The helper merges environment sources with upper-case names on Windows, which
+   ignores the case of names (`Path` is `PATH`).
 2. Run the `reset` script of the lease's platform. If `slots/<slot>/` does not exist
    (a repeated cleanup after step 5), the helper creates it empty first; `reset` must
    then do nothing.

@@ -83,11 +83,11 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 // stopLeaseProcesses stops the job process groups and all processes of the
 // lease (leaseProcesses): SIGTERM, wait, then SIGKILL.
 func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
-	var groups []int
+	var groups []supervisorInfo
 	des, _ := os.ReadDir(h.jobsDir(slot))
 	for _, de := range des {
 		if sup, err := h.readSupervisor(filepath.Join(h.jobsDir(slot), de.Name())); err == nil && alive(sup.PGID, sup.CommandStart) {
-			groups = append(groups, sup.PGID)
+			groups = append(groups, sup)
 		}
 	}
 	pids, err := h.leaseProcesses(slot, leaseID)
@@ -98,7 +98,7 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 		return nil
 	}
 	for _, g := range groups {
-		signalGroup(g, false)
+		stopGroup(g.PGID, g.Group, false)
 	}
 	for _, p := range pids {
 		signalProcess(p, false)
@@ -111,7 +111,7 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	for _, g := range groups {
-		signalGroup(g, true)
+		stopGroup(g.PGID, g.Group, true)
 	}
 	left, err := h.leaseProcesses(slot, leaseID)
 	if err != nil {

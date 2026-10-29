@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/roomops"
 )
 
 // gwBackend gives the gateway access to the leases and rooms.
@@ -31,7 +33,11 @@ func (b gwBackend) Authorize(ctx context.Context, leaseID string, key ssh.Public
 	if err != nil {
 		return gateway.Target{}, errNoAccess
 	}
-	return gateway.Target{HelperPath: r.Home + "/hostel/bin/hostel", Slot: l.SlotName}, nil
+	home, err := b.s.slotHome(ctx, r, l.SlotName)
+	if err != nil {
+		return gateway.Target{}, errNoAccess
+	}
+	return gateway.Target{HelperPath: roomops.HelperPath(r.OS, home), Shell: r.Shell, Slot: l.SlotName}, nil
 }
 
 func (b gwBackend) Dial(ctx context.Context, leaseID string) (*ssh.Client, error) {
@@ -39,7 +45,7 @@ func (b gwBackend) Dial(ctx context.Context, leaseID string) (*ssh.Client, error
 	if err != nil {
 		return nil, err
 	}
-	room, _, err := b.s.openRoom(ctx, l.RoomID)
+	room, _, err := b.s.openSlot(ctx, l.RoomID, l.SlotName)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +63,46 @@ func (b gwBackend) Activity(leaseID string) {
 	if err := b.s.store.Touch(ctx, leaseID, time.Now()); err != nil {
 		b.s.log.Error("record activity", "lease_id", leaseID, "err", err)
 	}
+}
+
+// AllowDirect allows any room port on a room with one slot; with several
+// slots, only the ports of the lease's slot (design, section 14).
+func (b gwBackend) AllowDirect(ctx context.Context, leaseID string, port int) bool {
+	l, err := b.s.store.Lease(ctx, leaseID)
+	if err != nil {
+		return false
+	}
+	r, err := b.s.store.Room(ctx, l.RoomID)
+	if err != nil {
+		return false
+	}
+	m, err := b.s.machineOf(r)
+	if err != nil {
+		return false
+	}
+	if len(m.Slots) <= 1 {
+		return true
+	}
+	// An exclusive lease holds all slots of the room.
+	slots, err := b.s.store.Slots(ctx)
+	if err != nil {
+		return false
+	}
+	held := 0
+	for _, sl := range slots {
+		if sl.RoomID == r.ID && sl.LeaseID == l.ID {
+			held++
+		}
+	}
+	if held == len(m.Slots) {
+		return true
+	}
+	for _, sl := range m.Slots {
+		if sl.Name == l.SlotName {
+			return slices.Contains(sl.Ports, port)
+		}
+	}
+	return false
 }
 
 // AllowForward reports whether the lease registered the room port as a tunnel.

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -111,9 +112,13 @@ func FileEntry(root, rel string) (Entry, bool, error) {
 	return e, true, nil
 }
 
+// modes is false on Windows, which has no executable bit: a Windows room
+// compares and writes file content only.
+var modes = runtime.GOOS != "windows"
+
 // same reports whether two entries have the same content.
 func same(a, b Entry) bool {
-	return a.Type == b.Type && a.SHA256 == b.SHA256 && (a.Type == TypeSymlink || a.Mode == b.Mode)
+	return a.Type == b.Type && a.SHA256 == b.SHA256 && (a.Type == TypeSymlink || !modes || a.Mode == b.Mode)
 }
 
 // safeLstat returns the room object at rel. blocked is true if a parent
@@ -426,8 +431,10 @@ func writeEntry(work string, e Entry, hdr *tar.Header, r io.Reader) error {
 		if got := hex.EncodeToString(h.Sum(nil)); got != e.SHA256 {
 			return fmt.Errorf("hash mismatch: got %s, want %s", got, e.SHA256)
 		}
-		if err := os.Chmod(tmp.Name(), e.Mode.Perm()); err != nil {
-			return err
+		if modes {
+			if err := os.Chmod(tmp.Name(), e.Mode.Perm()); err != nil {
+				return err
+			}
 		}
 		// Rename replaces a file or a symbolic link; it does not follow a link.
 		return os.Rename(tmp.Name(), full)

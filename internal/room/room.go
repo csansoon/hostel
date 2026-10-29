@@ -116,8 +116,6 @@ func fail(stdout io.Writer, err error) int {
 	return 1
 }
 
-var errWindows = errors.New("Windows rooms are not supported yet (milestone M6)")
-
 // helper knows the room layout. root is the "hostel" directory in the room
 // user's home directory; the helper binary is root/bin/hostel.
 type helper struct {

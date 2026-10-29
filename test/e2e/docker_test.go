@@ -182,7 +182,8 @@ func (e *env) createStaticRoom(name string) *container {
 	}
 	c := &container{e: e, name: "hostel-e2e-" + e.runID + "-" + name, port: freePort(e.t)}
 	if _, err := docker("create", "--name", c.name, "--label", dockerLabel+"="+e.runID,
-		"-p", fmt.Sprintf("127.0.0.1:%d:22", c.port), "-e", "HOSTEL_AUTHORIZED_KEY="+strings.TrimSpace(string(pub)), roomImage); err != nil {
+		"-p", fmt.Sprintf("127.0.0.1:%d:22", c.port), "-e", "HOSTEL_AUTHORIZED_KEY="+strings.TrimSpace(string(pub)),
+		"-e", "HOSTEL_SLOT_USERS="+strings.Join(e.slotUsers, " "), roomImage); err != nil {
 		e.t.Fatal(err)
 	}
 	return c

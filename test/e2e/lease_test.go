@@ -36,6 +36,8 @@ type fixtureOpts struct {
 	agentDevice bool
 	// platforms are extra platform files: platform → file → content.
 	platforms map[string]map[string]string
+	// slotUsers are extra users of the room container.
+	slotUsers []string
 }
 
 func defaultRepoFiles() map[string]string {
@@ -61,6 +63,7 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	if opts == nil {
 		opts = &fixtureOpts{}
 	}
+	e.slotUsers = opts.slotUsers
 	c := e.startStaticRoom("box")
 	e.usePlatform("fakedevice")
 	for name, files := range opts.platforms {

@@ -8,9 +8,17 @@ import (
 	"syscall"
 )
 
-func setProcessGroup(cmd *exec.Cmd) {
+// startInGroup starts cmd in a new process group. The name is for Windows.
+func startInGroup(cmd *exec.Cmd, _ string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return cmd.Start()
 }
+
+func jobGroupName(string, string) string { return "" }
+
+// confine is for Windows; on macOS and Linux, cleanup finds the processes of a
+// guest command by its session.
+func confine() error { return nil }
 
 // setSession starts the command in a new session, so it survives the end of
 // the SSH session that started it.
@@ -22,8 +30,8 @@ func killProcessGroup(cmd *exec.Cmd) error {
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 
-// signalGroup sends SIGTERM (or SIGKILL) to a process group.
-func signalGroup(pgid int, kill bool) {
+// stopGroup sends SIGTERM (or SIGKILL) to a process group.
+func stopGroup(pgid int, _ string, kill bool) {
 	sig := syscall.SIGTERM
 	if kill {
 		sig = syscall.SIGKILL
@@ -97,4 +105,21 @@ func descendants(pids []int) ([]int, error) {
 
 func execProcess(path string, argv, env []string) error {
 	return syscall.Exec(path, argv, env)
+}
+
+func shellCommand(command string, _ []string) (string, []string) {
+	return "/bin/sh", []string{"sh", "-c", command}
+}
+
+// interactiveShell returns the room user's shell.
+func interactiveShell(env []string) (string, []string) {
+	sh := envMap(env)["SHELL"]
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	return sh, []string{sh}
+}
+
+func scriptCommand(script string, args, _ []string) (string, []string) {
+	return "/bin/sh", append([]string{"sh", script}, args...)
 }

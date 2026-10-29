@@ -42,6 +42,7 @@ All other terms are plain technical words.
 | 2026-10-27 | Android emulators do not run on Namespace macOS devboxes, also if they can. Android rooms on Namespace are Linux machines. The test of the emulator on a macOS host uses the owner's physical Mac `mac-mini` (the static room of M2). |
 | 2026-10-27 | The VPS for the server is an exe.dev VM. It uses the exe.dev hostname (`<vm>.exe.xyz`) and its TLS; no own domain. |
 | 2026-10-27 | The M5 done-when uses a guest on the owner's Mac (a local agent), not a cloud agent: guest on the Mac → server on the VPS → home MacBook through `room connect`. A cloud agent is an optional extra check. |
+| 2026-10-29 | The Windows room of M6 is the owner's cloud Windows PC (`win-pc`) as a static machine, not a Namespace instance (no plan change). Hostel uses its own local user `hostel` without administrator rights, one slot, command-line work only (the desktop session stays for ExampleApp), and `room connect`. |
 | 2026-10-23 | Hostel focuses on iOS (simulators) for now. macOS desktop apps (UI control with Automation Mode, Mac Catalyst builds with team signing) are future work. The `macos` platform keeps its desktop screenshot. |
 | 2026-10-23 | Each room gets `agent-device` (Callstack) by default, so that agents can tap, type, and read the screen of simulators, emulators, and desktops on the room. Hostel pins its version (the same as T3 Code). The server option `mise.agent_device = false` turns it off. |
 | 2026-10-22 | The spare MacBook has FileVault off and logs in the `hostel` user automatically, so that it has a desktop session (label `desktop`). It holds no personal data. |
@@ -223,7 +224,7 @@ All other terms are plain technical words.
 | Many rooms download tools from GitHub and hit its rate limit. | Optional `mise.github_token`; installed tools stay in the room cache. |
 | One platform behaves differently on different OSes (for example an ARM Android image on a Mac, x86 on Linux). | `hostel status` and the lease summary show the provider and machine. The owner can limit a platform to some machines. |
 | A build cache from an earlier lease breaks a build. | `--fresh` requests a new room with empty caches. |
-| Windows: SSH access and scripts are not verified. | Windows comes last (M6), after a plan change; scripts in PowerShell. |
+| Windows: SSH access and scripts are not verified. | Windows comes last (M6), on a static Windows host (`win-pc`); scripts in PowerShell. |
 | The data path goes through the server, which sees the plaintext. | The server is the owner's own machine. Transfers are small (source files only, about 87 MB for ExampleApp on the first sync). |
 | A public static room accepts SSH from anywhere. | Guests have no room key; the owner also limits SSH to the server's address (M5). |
 | The owner uses Namespace for other work. | Hostel acts only on machines that it created (name prefix or label). |

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +19,7 @@ import (
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/shell"
 )
 
 // miseEnvTimeout bounds "mise env --json" at each job or shell start.
@@ -174,18 +174,18 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	maps.Copy(env, roomEnv.Env)
-	maps.Copy(env, roomEnv.Slots[slot])
+	mergeEnv(env, roomEnv.Env)
+	mergeEnv(env, roomEnv.Slots[slot])
 	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
 	// 3. mise env in work/: tool paths and the repository's mise [env].
-	maps.Copy(env, h.miseEnv(h.workDir(slot), env, warn))
+	mergeEnv(env, h.miseEnv(h.workDir(slot), env, warn))
 	// 4. device.env from prepare. 5. lease.env from the guest.
 	for _, f := range []string{"device.env", "lease.env"} {
 		m, err := readEnvFile(filepath.Join(h.slotDir(slot), f))
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(env, m)
+		mergeEnv(env, m)
 	}
 	// 6. The lease variables.
 	env["HOSTEL_LEASE"] = lease.LeaseID
@@ -253,7 +253,19 @@ func (h *helper) execCommand(args []string, stderr io.Writer) error {
 	if err := os.Chdir(h.workDir(*slot)); err != nil {
 		return err
 	}
-	return execProcess("/bin/sh", []string{"sh", "-c", string(cmd)}, env)
+	// On Windows, a guest command runs in a job object that it cannot break
+	// away from; the job supervisor must break away, so the helper runs its
+	// own "job start" itself, outside that job.
+	if runtime.GOOS == "windows" {
+		if start, err := shell.Command(shell.PowerShell, h.exe, "room", "job", "start", "--slot", *slot); err == nil && strings.EqualFold(string(cmd), start) {
+			os.Exit(Main([]string{"job", "start", "--slot", *slot}, os.Stdin, os.Stdout, os.Stderr))
+		}
+	}
+	if err := confine(); err != nil {
+		return err
+	}
+	path, argv := shellCommand(string(cmd), env)
+	return execProcess(path, argv, env)
 }
 
 // shell runs the room user's shell with the lease environment in work/.
@@ -273,9 +285,9 @@ func (h *helper) shell(args []string, stderr io.Writer) error {
 	if err := os.Chdir(h.workDir(slot)); err != nil {
 		return err
 	}
-	sh := envMap(env)["SHELL"]
-	if sh == "" {
-		sh = "/bin/sh"
+	if err := confine(); err != nil {
+		return err
 	}
-	return execProcess(sh, []string{sh}, env)
+	path, argv := interactiveShell(env)
+	return execProcess(path, argv, env)
 }

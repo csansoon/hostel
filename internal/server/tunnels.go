@@ -66,6 +66,13 @@ func (s *Server) handleSetTunnels(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("room port %d is listed twice", t.RoomPort))
 			return
 		}
+		// A port of another slot belongs to that slot's lease.
+		for _, sl := range m.Slots {
+			if sl.Name != l.SlotName && slices.Contains(sl.Ports, t.RoomPort) {
+				writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("room port %d belongs to slot %s of the room; choose another port", t.RoomPort, sl.Name))
+				return
+			}
+		}
 		ports[t.Name], used[t.RoomPort] = t.RoomPort, true
 	}
 	var names []string

@@ -16,6 +16,7 @@ import (
 
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/scheduler"
 	"github.com/csansoon/hostel/internal/store"
 )
@@ -339,13 +340,16 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	if err != nil {
 		return out
 	}
-	slotDir := room.Home + "/hostel/slots/" + l.SlotName
+	home, err := s.slotHome(r.Context(), room, l.SlotName)
+	if err != nil {
+		return out
+	}
 	out.Access = &protocol.Access{
 		GatewayAddress:     s.gatewayAddr,
 		GatewayHostKey:     strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.gatewayKey.PublicKey()))),
-		HelperPath:         room.Home + "/hostel/bin/hostel",
+		HelperPath:         roomops.HelperPath(room.OS, home),
 		Slot:               l.SlotName,
-		WorkDir:            slotDir + "/work",
+		WorkDir:            roomops.WorkDir(room.OS, home, l.SlotName),
 		TunnelPorts:        ports,
 		RoomOS:             room.OS,
 		RoomArch:           room.Arch,

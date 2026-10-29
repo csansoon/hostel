@@ -145,7 +145,25 @@ func (s *Server) openRoom(ctx context.Context, roomID int64) (*roomops.Room, sto
 	if err != nil {
 		return nil, r, err
 	}
-	return &roomops.Room{Conn: conn, OS: r.OS, Arch: r.Arch, Home: r.Home}, r, nil
+	return &roomops.Room{Conn: conn, OS: r.OS, Arch: r.Arch, Home: r.Home, Shell: r.Shell}, r, nil
+}
+
+// openSlot connects to a room for the work of one slot: as the slot's own
+// user, in its home directory, if the slot has one; else as openRoom does.
+func (s *Server) openSlot(ctx context.Context, roomID int64, slot string) (*roomops.Room, store.Room, error) {
+	r, err := s.store.Room(ctx, roomID)
+	if err != nil {
+		return nil, r, err
+	}
+	home, err := s.slotHome(ctx, r, slot)
+	if err != nil {
+		return nil, r, err
+	}
+	conn, err := s.connectAs(ctx, r, slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot))
+	if err != nil {
+		return nil, r, err
+	}
+	return &roomops.Room{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}, r, nil
 }
 
 func (s *Server) readyFor(ctx context.Context, r store.Room, m *config.Machine, platform string) (bool, error) {
@@ -252,7 +270,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err := s.store.SetSlots(ctx, l.ID, protocol.SlotPreparing); err != nil {
 		return err
 	}
-	room, r, err := s.openRoom(ctx, l.RoomID)
+	room, r, err := s.openSlot(ctx, l.RoomID, l.SlotName)
 	if err != nil {
 		return err
 	}
@@ -405,7 +423,7 @@ func (s *Server) cleanupData(ctx context.Context, l store.Lease) string {
 }
 
 func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
-	room, _, err := s.openRoom(ctx, l.RoomID)
+	room, _, err := s.openSlot(ctx, l.RoomID, l.SlotName)
 	if err != nil {
 		return err
 	}
@@ -421,7 +439,16 @@ func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int6
 	if err != nil {
 		return fmt.Errorf("find the platforms for health: %w", err)
 	}
-	req.Health = health
+	r, err := s.store.Room(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	// Health checks the machine, whose provision ran as the machine user: a
+	// slot with its own user runs it as the machine user after the cleanup.
+	ownUser := slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot) != ""
+	if !ownUser {
+		req.Health = health
+	}
 	var resp protocol.CleanupResponse
 	if err := room.Helper(ctx, []string{"cleanup", "--slot", slot}, req, &resp); err != nil {
 		return err
@@ -434,6 +461,16 @@ func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int6
 	}
 	if len(failed) > 0 {
 		return errors.New(strings.Join(failed, "; "))
+	}
+	if ownUser && len(health) > 0 {
+		machine, _, err := s.openRoom(ctx, roomID)
+		if err != nil {
+			return err
+		}
+		defer machine.Conn.Close()
+		if err := s.runHealth(ctx, machine, roomID); err != nil {
+			return fmt.Errorf("health: %w", err)
+		}
 	}
 	return nil
 }

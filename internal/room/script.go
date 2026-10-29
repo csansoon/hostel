@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,9 +35,6 @@ func (h *helper) runScript(args []string, stdin io.Reader) (protocol.RunScriptRe
 	}
 	if len(pos) != 2 || !config.ValidName(pos[0]) || (*slot != "" && !config.ValidName(*slot)) {
 		return resp, fmt.Errorf("%w: run-script <platform> <step> [--slot <slot>]", cli.ErrUsage)
-	}
-	if h.os == config.OSWindows {
-		return resp, errWindows
 	}
 	platform, step := pos[0], pos[1]
 	var req protocol.RunScriptRequest
@@ -76,16 +72,19 @@ func (h *helper) script(platform, step, slot string, args []string, reqEnv map[s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", append([]string{script}, args...)...)
+	path, argv := scriptCommand(script, args, env)
+	cmd := exec.CommandContext(ctx, path)
+	cmd.Args = argv
 	cmd.Dir = dir
 	cmd.Env = env
 	var out tailBuffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	setProcessGroup(cmd)
 	// The script and all processes of its group stop at the deadline.
 	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	cmd.WaitDelay = 10 * time.Second
-	err = cmd.Run()
+	if err = startInGroup(cmd, ""); err == nil {
+		err = cmd.Wait()
+	}
 	resp.OutputTail = out.String()
 	var exitErr *exec.ExitError
 	switch {
@@ -113,9 +112,9 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	maps.Copy(env, roomEnv.Env)
+	mergeEnv(env, roomEnv.Env)
 	if slot != "" {
-		maps.Copy(env, roomEnv.Slots[slot])
+		mergeEnv(env, roomEnv.Slots[slot])
 		// A script that a guest runs (screenshot) gets the same lease values as
 		// a script that the server runs.
 		if l, err := h.readLease(slot); err == nil {
@@ -127,10 +126,10 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 			}
 		}
 	}
-	maps.Copy(env, reqEnv)
+	mergeEnv(env, reqEnv)
 	// The machine-level mise tools are on the PATH of scripts.
 	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
-	maps.Copy(env, h.miseEnv(h.root, env, io.Discard))
+	mergeEnv(env, h.miseEnv(h.root, env, io.Discard))
 	cache := filepath.Join(h.root, "cache")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return nil, err
@@ -146,7 +145,7 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 		if err != nil {
 			return nil, err
 		}
-		maps.Copy(env, dev)
+		mergeEnv(env, dev)
 	}
 	return envList(env), nil
 }
@@ -195,10 +194,27 @@ func envMap(list []string) map[string]string {
 	m := make(map[string]string, len(list))
 	for _, kv := range list {
 		if k, v, ok := strings.Cut(kv, "="); ok {
-			m[k] = v
+			m[envKey(k)] = v
 		}
 	}
 	return m
+}
+
+// mergeEnv copies src into env; a later source overrides an earlier one.
+func mergeEnv(env, src map[string]string) {
+	for k, v := range src {
+		env[envKey(k)] = v
+	}
+}
+
+// envKey is the map key of a variable name. Windows ignores the case of
+// names ("Path" is PATH): there, the keys are upper case, so a later source
+// overrides an earlier one with another case.
+func envKey(k string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToUpper(k)
+	}
+	return k
 }
 
 func envList(m map[string]string) []string {

@@ -118,9 +118,9 @@ func Sync(args []string, stdout, stderr io.Writer) int {
 		}
 		switch {
 		case *setup:
-			cmd = setupCommand(rc, l.st.Platform, true)
+			cmd = setupCommand(rc, l.st.Platform, l.st.Access.RoomOS, true)
 		case rc.MiseEnabled() && slices.ContainsFunc(sent, func(p string) bool { return slices.Contains(miseFiles, p) }):
-			cmd = setupCommand(rc, l.st.Platform, false)
+			cmd = setupCommand(rc, l.st.Platform, l.st.Access.RoomOS, false)
 		}
 	}
 	code, err = runSetup(ctx, l, cmd, deadline, stderr)

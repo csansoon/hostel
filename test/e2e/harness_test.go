@@ -95,6 +95,8 @@ type env struct {
 	cwd string
 	// admin is the admin token from "server init".
 	admin string
+	// slotUsers are extra users of static room containers (slot users).
+	slotUsers []string
 }
 
 func newEnv(t *testing.T) *env {

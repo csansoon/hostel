@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/csansoon/hostel/internal/shell"
 )
 
 // Purposes of a guest connection (the part after "." in the user name).
@@ -28,6 +30,7 @@ const (
 // Target is where a lease's sessions go.
 type Target struct {
 	HelperPath string
+	Shell      string // the room's SSH shell (package shell)
 	Slot       string
 }
 
@@ -43,6 +46,9 @@ type Backend interface {
 	Activity(leaseID string)
 	// AllowForward reports whether the lease registered a room port as a tunnel.
 	AllowForward(ctx context.Context, leaseID string, port int) bool
+	// AllowDirect reports whether a guest may forward to a room port: on a room
+	// with several slots, only to a port of the lease's slot.
+	AllowDirect(ctx context.Context, leaseID string, port int) bool
 	// AuthorizeRoom accepts a room token of a machine with connect = true and
 	// returns the machine ("<provider>/<machine>") and the token ID.
 	AuthorizeRoom(ctx context.Context, token string) (string, int64, error)
@@ -81,7 +87,7 @@ func New(hostKey ssh.Signer, be Backend, rooms *RoomConns, log *slog.Logger) *Ga
 				return nil, err
 			}
 			return &ssh.Permissions{Extensions: map[string]string{
-				"lease": leaseID, "purpose": purpose, "helper": t.HelperPath, "slot": t.Slot}}, nil
+				"lease": leaseID, "purpose": purpose, "helper": t.HelperPath, "shell": t.Shell, "slot": t.Slot}}, nil
 		},
 		// Rooms behind NAT ("hostel room connect"): user "room", a room token
 		// as the password.
@@ -175,7 +181,7 @@ func (g *Gateway) handle(nc net.Conn) {
 	}
 	leaseID := conn.Permissions.Extensions["lease"]
 	purpose := conn.Permissions.Extensions["purpose"]
-	target := Target{HelperPath: conn.Permissions.Extensions["helper"], Slot: conn.Permissions.Extensions["slot"]}
+	target := Target{HelperPath: conn.Permissions.Extensions["helper"], Shell: conn.Permissions.Extensions["shell"], Slot: conn.Permissions.Extensions["slot"]}
 
 	g.register(leaseID, purpose, conn)
 	defer g.unregister(leaseID, conn)
@@ -212,7 +218,7 @@ func (g *Gateway) handle(nc net.Conn) {
 		case "session":
 			go g.session(nch, upstream, target)
 		case "direct-tcpip":
-			go g.directTCPIP(nch, upstream)
+			go g.directTCPIP(nch, upstream, leaseID)
 		default:
 			nch.Reject(ssh.UnknownChannelType, "channel type "+nch.ChannelType()+" is not allowed")
 		}
@@ -221,15 +227,9 @@ func (g *Gateway) handle(nc net.Conn) {
 
 // helperCommand wraps a guest command in the helper, so that each guest process
 // has the lease environment and HOSTEL_LEASE (cleanup finds it by that variable).
-func helperCommand(t Target, args ...string) string {
-	cmd := quote(t.HelperPath) + " room"
-	for _, a := range args {
-		cmd += " " + quote(a)
-	}
-	return cmd
+func helperCommand(t Target, args ...string) (string, error) {
+	return shell.Command(t.Shell, t.HelperPath, append([]string{"room"}, args...)...)
 }
-
-func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // stringPayload encodes an SSH string (uint32 length + bytes).
 func stringPayload(s string) []byte {
@@ -282,6 +282,8 @@ func (g *Gateway) session(nch ssh.NewChannel, upstream *ssh.Client, t Target) {
 		for r := range reqs {
 			payload := r.Payload
 			typ := r.Type
+			var wrapped string
+			var err error
 			switch r.Type {
 			case "exec":
 				cmd, ok := parseString(r.Payload)
@@ -289,14 +291,20 @@ func (g *Gateway) session(nch ssh.NewChannel, upstream *ssh.Client, t Target) {
 					r.Reply(false, nil)
 					continue
 				}
-				payload = stringPayload(helperCommand(t, "exec", "--slot", t.Slot, "--command-b64",
-					base64.StdEncoding.EncodeToString([]byte(cmd))))
+				wrapped, err = helperCommand(t, "exec", "--slot", t.Slot, "--command-b64", base64.StdEncoding.EncodeToString([]byte(cmd)))
 			case "shell":
 				typ = "exec"
-				payload = stringPayload(helperCommand(t, "shell", "--slot", t.Slot))
+				wrapped, err = helperCommand(t, "shell", "--slot", t.Slot)
 			case "subsystem":
 				r.Reply(false, nil)
 				continue
+			}
+			if err != nil {
+				r.Reply(false, nil)
+				continue
+			}
+			if wrapped != "" {
+				payload = stringPayload(wrapped)
 			}
 			ok, err := up.SendRequest(typ, r.WantReply, payload)
 			if r.WantReply {

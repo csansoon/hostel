@@ -162,8 +162,12 @@ gateway. It needs no inbound SSH from the internet. Prepare the room first with
    hostel admin token create --name macbook --role room --machine home/macbook
    ```
 
-3. Install Hostel as the room user, and write the token to a file that only that
-   user can read:
+3. Choose the account that runs `room connect`. It must not be the room user or a
+   slot user: a lease runs as that user, and with the token a guest could
+   replace the room's connection. Use your own account on macOS, a system user
+   (for example `hostel-connect`) on Linux, and `LOCAL SERVICE` on Windows.
+   Install Hostel for that account, and write the token to a file that only that
+   account can read:
 
    ```sh
    sh install.sh
@@ -175,8 +179,8 @@ gateway. It needs no inbound SSH from the internet. Prepare the room first with
 
 4. Run `hostel room connect` as a service.
 
-   macOS (a launch agent of the room user,
-   `~/Library/LaunchAgents/so.hostel.room-connect.plist`):
+   macOS (a launch daemon that runs as your account, so it starts at boot,
+   `/Library/LaunchDaemons/so.hostel.room-connect.plist`; replace `owner`):
 
    ```xml
    <?xml version="1.0" encoding="UTF-8"?>
@@ -184,30 +188,28 @@ gateway. It needs no inbound SSH from the internet. Prepare the room first with
    <plist version="1.0">
    <dict>
      <key>Label</key><string>so.hostel.room-connect</string>
+     <key>UserName</key><string>owner</string>
      <key>ProgramArguments</key>
      <array>
-       <string>/Users/hostel/.local/bin/hostel</string>
+       <string>/Users/owner/.local/bin/hostel</string>
        <string>room</string>
        <string>connect</string>
        <string>--server</string>
        <string>https://hostel.example.com</string>
        <string>--token-file</string>
-       <string>/Users/hostel/.config/hostel/room-token</string>
+       <string>/Users/owner/.config/hostel/room-token</string>
      </array>
      <key>RunAtLoad</key><true/>
      <key>KeepAlive</key><true/>
-     <key>StandardErrorPath</key><string>/Users/hostel/Library/Logs/hostel-room-connect.log</string>
-     <key>StandardOutPath</key><string>/Users/hostel/Library/Logs/hostel-room-connect.log</string>
+     <key>StandardErrorPath</key><string>/Users/owner/Library/Logs/hostel-room-connect.log</string>
+     <key>StandardOutPath</key><string>/Users/owner/Library/Logs/hostel-room-connect.log</string>
    </dict>
    </plist>
    ```
 
    ```sh
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/so.hostel.room-connect.plist
+   sudo launchctl bootstrap system /Library/LaunchDaemons/so.hostel.room-connect.plist
    ```
-
-   The agent runs while the room user has a GUI session (the desktop session of
-   `static-room-setup.md`, section 6).
 
    Linux (`/etc/systemd/system/hostel-room-connect.service`):
 
@@ -218,14 +220,32 @@ gateway. It needs no inbound SSH from the internet. Prepare the room first with
    Wants=network-online.target
 
    [Service]
-   User=hostel
-   ExecStart=/home/hostel/.local/bin/hostel room connect --server https://hostel.example.com --token-file /home/hostel/.config/hostel/room-token
+   User=hostel-connect
+   ExecStart=/home/hostel-connect/.local/bin/hostel room connect --server https://hostel.example.com --token-file /home/hostel-connect/.config/hostel/room-token
    Restart=always
    RestartSec=5
 
    [Install]
    WantedBy=multi-user.target
    ```
+
+   Windows (as an administrator, in PowerShell; a scheduled task that runs as
+   `LOCAL SERVICE` at boot; the token is in `C:\ProgramData\hostel\room-token`,
+   which only that account and administrators can read):
+
+   ```powershell
+   $dir = 'C:\ProgramData\hostel'
+   New-Item -ItemType Directory -Force $dir | Out-Null
+   # Copy hostel-windows-amd64.exe to $dir\hostel.exe, and the token to $dir\room-token.
+   icacls $dir /inheritance:r /grant 'SYSTEM:(OI)(CI)F' /grant 'Administrators:(OI)(CI)F' /grant '*S-1-5-19:(OI)(CI)M'
+   $tr = 'cmd.exe /c ""' + $dir + '\hostel.exe" room connect --server https://hostel.example.com --token-file ' + $dir + '\room-token >> ' + $dir + '\room-connect.log 2>&1"'
+   schtasks.exe /Create /F /TN 'Hostel room connect' /SC ONSTART /RU 'NT AUTHORITY\LOCALSERVICE' /RL LIMITED /TR $tr
+   schtasks.exe /Run /TN 'Hostel room connect'
+   ```
+
+   `Register-ScheduledTask` for another user failed with "Access is denied" in
+   an SSH session, and a task as the room user needs its password; `LOCAL
+   SERVICE` needs neither.
 
 5. Check: the log shows `connected to the gateway at wss://...`, and
    `hostel status` shows the room `running` within a few seconds. The server

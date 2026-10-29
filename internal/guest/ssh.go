@@ -12,8 +12,10 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/shell"
 )
 
 // dialTimeout bounds the connection to the gateway.
@@ -65,12 +67,15 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 func (c *Conn) Close() error { return c.client.Close() }
 
 // helperCmd returns the command line of a helper command for the lease slot.
+// The gateway wraps it in the helper, which runs it with sh, or with
+// PowerShell on Windows.
 func (c *Conn) helperCmd(args ...string) string {
-	cmd := quote(c.access.HelperPath) + " room"
-	for _, a := range args {
-		cmd += " " + quote(a)
+	kind := shell.SH
+	if c.access.RoomOS == config.OSWindows {
+		kind = shell.PowerShell
 	}
-	return cmd + " --slot " + quote(c.access.Slot)
+	cmd, _ := shell.Command(kind, c.access.HelperPath, append(append([]string{"room"}, args...), "--slot", c.access.Slot)...)
+	return cmd
 }
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
