@@ -123,3 +123,6 @@ func interactiveShell(env []string) (string, []string) {
 func scriptCommand(script string, args, _ []string) (string, []string) {
 	return "/bin/sh", append([]string{"sh", script}, args...)
 }
+
+// releaseGroup is for Windows (the job object handle).
+func releaseGroup(*exec.Cmd) {}

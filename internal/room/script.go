@@ -121,6 +121,7 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 			env["HOSTEL_LEASE_ID"] = l.LeaseID
 			env["HOSTEL_PLATFORM"] = l.Platform
 			env["HOSTEL_DEVICES"] = strings.Join(l.Devices, ",")
+			env["HOSTEL_EXCLUSIVE"] = exclusiveEnv(l.Exclusive)
 			if p, err := h.platformInfo(l.Platform); err == nil {
 				env["HOSTEL_PLATFORM_DEVICES"] = strings.Join(p.Devices, ",")
 			}
@@ -163,6 +164,15 @@ func (h *helper) readRoomEnv() (protocol.RoomEnv, error) {
 		return re, fmt.Errorf("read room-env.json: %w", err)
 	}
 	return re, nil
+}
+
+// exclusiveEnv is HOSTEL_EXCLUSIVE: "1" for a lease that holds the whole room
+// (only then may a script change the desktop), else empty.
+func exclusiveEnv(exclusive bool) string {
+	if exclusive {
+		return "1"
+	}
+	return ""
 }
 
 // readEnvFile reads KEY=VALUE lines. A missing file is empty.
@@ -282,6 +292,14 @@ func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error
 			return resp, nil
 		case err != nil:
 			return resp, fmt.Errorf("run mise %s: %w", args[0], err)
+		}
+	}
+	if err := h.writeDesktopCommand(); err != nil {
+		return resp, err
+	}
+	if runtime.GOOS == "windows" && req.AgentDevice {
+		if err := h.installWinApp(ctx); err != nil {
+			return resp, err
 		}
 	}
 	return resp, h.writeAgentDevice(req.AgentDevice, node)

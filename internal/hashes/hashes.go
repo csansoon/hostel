@@ -57,8 +57,9 @@ func Dir(entries []Entry) string {
 }
 
 // DirEntries lists the regular files in dir (not recursive) with their hashes.
-// The names filter selects files; nil selects all.
-func DirEntries(dir string, names func(string) bool) ([]Entry, error) {
+// The names filter selects files; nil selects all. Without modes (for Windows,
+// which has none), every Mode is 0.
+func DirEntries(dir string, names func(string) bool, modes bool) ([]Entry, error) {
 	des, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -76,7 +77,11 @@ func DirEntries(dir string, names func(string) bool) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Entry{Path: de.Name(), Mode: info.Mode(), SHA256: sum})
+		e := Entry{Path: de.Name(), SHA256: sum}
+		if modes {
+			e.Mode = info.Mode()
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }

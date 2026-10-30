@@ -34,7 +34,7 @@ func (h *helper) info() (protocol.HelperInfo, error) {
 		if !de.IsDir() {
 			continue
 		}
-		entries, err := hashes.DirEntries(h.platformDir(de.Name()), nil)
+		entries, err := hashes.DirEntries(h.platformDir(de.Name()), nil, runtime.GOOS != "windows")
 		if err != nil {
 			return out, err
 		}

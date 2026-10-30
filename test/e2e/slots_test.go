@@ -107,3 +107,26 @@ slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
 	f.e.waitFor("forward of the exclusive lease", time.Minute, func() bool { return readForward(t, fx) == "hello-x\n" })
 	f.e.mustHostel("release")
 }
+
+// TestExclusiveScripts: the platform scripts of an exclusive lease (label
+// desktop) get HOSTEL_EXCLUSIVE=1, so they may reset the desktop; those of a
+// normal lease get it empty (M7).
+func TestExclusiveScripts(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{machineKeys: "labels = [\"desktop\"]\n"})
+	desk := f.acquire("--require", "desktop")
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+	normal := f.acquire()
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+	log := f.c.sh("cat " + cacheDir + "/fakedevice.log")
+	for _, want := range []string{
+		"prepare linux " + desk + " phone exclusive=1", "reset linux " + desk + " phone exclusive=1",
+		"prepare linux " + normal + " phone exclusive=\n", "reset linux " + normal + " phone exclusive=\n",
+	} {
+		if !strings.Contains(log+"\n", want) {
+			t.Fatalf("fakedevice.log has no %q:\n%s", want, log)
+		}
+	}
+}

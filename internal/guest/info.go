@@ -103,6 +103,32 @@ Devices and the local API
     hostel run -- 'agent-device click "label=\"Sign in\"" --settle'
     hostel run -- 'agent-device fill "role=text-field" "me@example.com" --settle'
   "hostel run -- agent-device help" lists all commands.
+  macOS desktop apps: hostel acquire macos --require desktop (the lease takes
+  the whole machine). Build the app, start it with "open", then control it:
+    hostel run -- 'xcodebuild -scheme MyApp -derivedDataPath build build'
+    hostel run -- 'open build/Build/Products/Debug/MyApp.app'
+    hostel run -- 'agent-device open <bundle id> --platform macos'
+    hostel run -- 'agent-device snapshot -i --platform macos'
+    hostel run -- 'agent-device click "id=save" --platform macos'
+  The first agent-device command of a lease takes about 30 s. If a command
+  says the runner is still finishing an earlier command, wait a few seconds and
+  run it again. "hostel screenshot" shows the whole desktop. At the release,
+  Hostel ends the apps that the lease started.
+  Windows desktop apps: hostel acquire windows --require desktop. Commands
+  run over SSH and cannot show windows; "desktop" runs a command on the
+  desktop, and winapp (Microsoft's winapp CLI) always runs there:
+    hostel run -- 'dotnet build -c Release -o out'
+    hostel run -- 'desktop --detach out\MyApp.exe'
+    hostel run -- 'winapp ui inspect -a MyApp --interactive'
+    hostel run -- 'winapp ui invoke save -a MyApp'
+    hostel run -- 'winapp ui set-value email "me@example.com" -a MyApp'
+    hostel run -- 'winapp ui click save -a MyApp'
+    hostel run -- 'winapp ui send-keys "text" -a MyApp --via send-input'
+  Prefer invoke and set-value (UI Automation). click and send-keys are real
+  input: they need the app in the foreground and fail if it is not. Start an
+  app in a normal window (not hidden or minimized). "hostel run -- winapp ui
+  --help" lists all commands. At the release, Hostel ends the apps that
+  "desktop" started.
   Tunnels in hostel.toml make your local servers reachable on the room at
   localhost:$HOSTEL_TUNNEL_<NAME>_PORT.
 

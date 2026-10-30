@@ -136,6 +136,18 @@ func killProcessGroup(cmd *exec.Cmd) error {
 	return windows.TerminateJobObject(job, 1)
 }
 
+// releaseGroup closes the job object of cmd; a job with
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE ends its processes.
+func releaseGroup(cmd *exec.Cmd) {
+	groupsMu.Lock()
+	job, ok := groups[cmd]
+	delete(groups, cmd)
+	groupsMu.Unlock()
+	if ok {
+		windows.CloseHandle(job)
+	}
+}
+
 // jobGroupName is the name of the job object of a job command. The user SID
 // keeps the names of slot users apart (all SSH sessions are in Windows
 // session 0, so they share the Local namespace).

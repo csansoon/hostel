@@ -277,7 +277,27 @@ Done when: a guest on the owner's Mac uses `win-pc` through the exe.dev server
 release), and the E2E suite has scenarios with two leases on one room
 (`m6-implementation.md`, section 4).
 
-## M7. Hardening against backdoors (later; not required for version 1)
+## M7. Desktop testing (macOS, then Windows)
+
+Owner decision, 2026-10-29. An agent builds, installs, starts, and removes a
+desktop app, takes screenshots, and clicks and types in it, as on iOS and Android.
+Not in scope: the repository's own UI test suites, signed builds.
+
+- macOS first, on the home MacBook (a `desktop` machine): the `macos` platform with
+  the label `desktop` gets device-like control (agent-device supports macOS: an
+  accessibility snapshot, refs, and actions), install and cleanup of `.app`
+  bundles, and a clean desktop after each lease.
+- Windows after that: the owner selects the machine (a desktop session that stays
+  drawn; not the owner's session on `win-pc`). agent-device has no Windows
+  support; Hostel needs a bridge in the desktop session (UI Automation, input,
+  screenshots), as ExampleApp's QA bridge does.
+
+Done when: an agent on the owner's Mac builds a small macOS app on the MacBook,
+starts it, reads its accessibility snapshot, clicks and types in it, and takes a
+screenshot; after the release, the app is gone and the desktop is clean. The
+Windows part gets its own done-when when the owner selects the machine.
+
+## M8. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the

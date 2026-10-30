@@ -287,7 +287,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 		return err
 	}
 	if err := room.Helper(ctx, []string{"begin", "--slot", l.SlotName},
-		protocol.BeginRequest{LeaseID: l.ID, Platform: l.Platform, Devices: l.Devices}, nil); err != nil {
+		protocol.BeginRequest{LeaseID: l.ID, Platform: l.Platform, Devices: l.Devices, Exclusive: exclusive(p, l.RequiredLabels)}, nil); err != nil {
 		return err
 	}
 	if err := s.store.SetBegan(ctx, l.ID, time.Now()); err != nil {
@@ -404,6 +404,9 @@ func (s *Server) healthTimeout() time.Duration {
 // repeated cleanup does not need lease.json.
 func (s *Server) cleanupRequest(ctx context.Context, l store.Lease) protocol.CleanupRequest {
 	req := protocol.CleanupRequest{LeaseID: l.ID, Platform: l.Platform, Devices: l.Devices}
+	if p := s.cfg.Platforms[l.Platform]; p != nil {
+		req.Exclusive = exclusive(p, l.RequiredLabels)
+	}
 	if r, err := s.store.Room(ctx, l.RoomID); err == nil {
 		if m, err := s.machineOf(r); err == nil {
 			req.Ports = append(req.Ports, slotConfig(m, l.SlotName).Ports...)

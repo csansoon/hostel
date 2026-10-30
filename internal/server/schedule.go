@@ -39,7 +39,7 @@ func (s *Server) loadPlatformUploads() error {
 	for name, p := range s.cfg.Platforms {
 		s.uploads[name] = map[string]roomops.Platform{}
 		for _, osName := range config.OSNames {
-			up, err := roomops.PlatformUpload(p.Dir, platformFiles(p, osName))
+			up, err := roomops.PlatformUpload(p.Dir, platformFiles(p, osName), osName)
 			if err != nil {
 				return err
 			}

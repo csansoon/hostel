@@ -4,7 +4,7 @@ set -e
 # Test markers in the room cache: a slow or a failing prepare.
 if test -e "$HOSTEL_CACHE_DIR/slow-prepare"; then sleep 20; fi
 if test -e "$HOSTEL_CACHE_DIR/fail-prepare"; then echo "prepare failed on purpose" >&2; exit 1; fi
-echo "prepare linux $HOSTEL_LEASE_ID $HOSTEL_DEVICES" >> "$HOSTEL_CACHE_DIR/fakedevice.log"
+echo "prepare linux $HOSTEL_LEASE_ID $HOSTEL_DEVICES exclusive=$HOSTEL_EXCLUSIVE" >> "$HOSTEL_CACHE_DIR/fakedevice.log"
 ids=""
 for d in $(echo "$HOSTEL_DEVICES" | tr ',' ' '); do
 	ids="$ids${ids:+,}$d-$HOSTEL_LEASE_ID"

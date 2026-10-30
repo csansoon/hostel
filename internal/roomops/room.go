@@ -198,8 +198,9 @@ type Platform struct {
 }
 
 // PlatformUpload selects the files of a platform directory for an OS and
-// computes their hash. A platform without files has the empty hash.
-func PlatformUpload(dir string, files []string) (Platform, error) {
+// computes their hash. A platform without files has the empty hash. The hash
+// of a Windows room has no file modes: Windows has none.
+func PlatformUpload(dir string, files []string, osName string) (Platform, error) {
 	p := Platform{Dir: dir, Files: files}
 	if len(files) == 0 {
 		return p, nil
@@ -208,7 +209,7 @@ func PlatformUpload(dir string, files []string) (Platform, error) {
 	for _, f := range files {
 		set[f] = true
 	}
-	entries, err := hashes.DirEntries(dir, func(n string) bool { return set[n] })
+	entries, err := hashes.DirEntries(dir, func(n string) bool { return set[n] }, osName != config.OSWindows)
 	if err != nil {
 		return p, fmt.Errorf("read platform directory %s: %w", dir, err)
 	}

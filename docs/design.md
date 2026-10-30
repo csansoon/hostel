@@ -698,7 +698,9 @@ Contract:
 - Environment: `HOSTEL_PLATFORM`, `HOSTEL_PLATFORM_DEVICES` (all devices in
   `platform.toml`, comma-separated), `HOSTEL_SLOT`, `HOSTEL_SLOT_DIR`,
   `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_LEASE_ID`, `HOSTEL_DEVICES` (the
-  lease's devices, comma-separated; `prepare`, `screenshot`, `reset`), the `MISE_*`
+  lease's devices, comma-separated; `prepare`, `screenshot`, `reset`),
+  `HOSTEL_EXCLUSIVE` (`1` when the lease holds the whole room, for example a
+  desktop lease, else empty; `prepare`, `screenshot`, `reset`), the `MISE_*`
   variables, the provider, machine, and slot `env`, and `device.env` (for
   `screenshot` and `reset`). Machine `env` is also the way to vary a script between
   machines with the same OS. Scripts get `HOSTEL_LEASE_ID`, not `HOSTEL_LEASE`: device
@@ -913,6 +915,68 @@ A Mac Catalyst app runs on the macOS desktop, not in a simulator. Rules:
   macOS can refuse this without the Screen Recording permission. On the static Mac
   it needs the permission for `sshd-keygen-wrapper` (M2); on a devbox it works
   without a prompt (M3, 2026-10-26).
+- **Control (M7).** The guest controls desktop apps with `agent-device
+  --platform macos` (an XCTest runner; Automation Mode without a password
+  prompt). It starts its own app with `open <path to .app>` and then `agent-device
+  open <bundle id>`: `agent-device open` with a path failed (2026-10-29). The
+  first command of a lease builds and starts the runner (about 30 s). A command
+  can fail while the runner still drains an earlier one that hit its 30 s
+  watchdog; a retry a few seconds later works.
+- **Desktop cleanup (M7).** Apps that a guest starts with `open` are children of
+  launchd, without `HOSTEL_LEASE` and outside the lease's sessions, so the process
+  cleanup (section 17) does not find them. For a desktop lease
+  (`HOSTEL_EXCLUSIVE=1`), `platforms/macos/prepare.macos.sh` records the
+  foreground apps (`lsappinfo`; PID, start time, bundle ID) and the entries of
+  `~/Applications`, and `reset.macos.sh` ends each foreground app that was not
+  running then (SIGKILL: a quit can wait at a save dialog; not Finder or the
+  Dock), deletes its saved window state, ends the `agent-device` runner, and
+  deletes the new entries of `~/Applications`. A headless `macos` lease does not
+  touch the desktop. The room needs an unlocked desktop session: a locked screen
+  gives the lock screen to `screencapture` and blocks the runner (found on the
+  static MacBook, 2026-10-29).
+
+### The Windows desktop (M7)
+
+- The guest requests it with `hostel acquire windows --require desktop`
+  (exclusive, as on the Mac). The machine has the label `desktop`, a signed-in
+  desktop user, and the "Hostel desktop" task (`static-room-setup.md`, Windows,
+  step 6).
+- **The desktop program.** SSH sessions (Windows session 0) cannot show
+  windows, take screenshots, or use UI Automation. The task of the desktop user
+  starts `hostel room desktop serve` as the room user in the desktop session
+  (`Start-Process -Credential`; the Secondary Logon service gives it access to
+  that desktop). It listens on `127.0.0.1` with a random port; `hostel/desktop.json`
+  (only the room user can read it) has the address and a random token. It ends
+  when the helper file changes, and the task starts the new helper.
+- **`desktop [--detach] <command>`** (`hostel/bin/desktop`, `room desktop
+  run`) sends a command with the lease environment and the current directory.
+  The program accepts only the lease of the slot (the caller's `HOSTEL_LEASE`
+  must match `lease.json`) and only a desktop (exclusive) lease. It sets
+  `HOSTEL_LEASE` and `HOSTEL_SLOT` from `lease.json` (not from the request), runs the command in its own job object
+  (kill on close, no breakaway; on macOS and Linux a process group), and returns
+  the output and exit code. With `--detach`, it returns the PID at once. If the
+  caller ends, the command ends. A command and its processes stay until the
+  lease ends: within 2 s after cleanup starts (it writes the slot's
+  `lease-ended` marker first) or the slot's lease changes, the program ends the
+  job object. A command's output ends 2 s after it exits, also when a child
+  keeps it open. The program removes `desktop.json` when it ends, and it waits
+  for a new helper until no lease command runs. Cleanup (section 17) finds the processes by `HOSTEL_LEASE` before
+  that. Without the program, `desktop` exits with 69.
+- **Control.** Windows rooms with `agent_device` get the pinned `winapp` CLI
+  (Microsoft, `config.WinAppVersion`, SHA-256 checked) in
+  `hostel/tools/winapp-<version>`. `hostel/bin/winapp.cmd` runs it through
+  `desktop`. `winapp ui` reads the UI Automation tree and drives apps with
+  patterns (`invoke`, `set-value`) and with real input (`click`, `send-keys
+  --via send-input`), which it sends only when the app is the foreground
+  window.
+- **Screenshot.** `platforms/windows/screenshot.windows.ps1` captures the whole
+  desktop through `desktop`.
+- **Limits.** The apps of a lease run as the room user, but they share the
+  desktop with the desktop user's windows: real input can reach a window of
+  the desktop user that is not elevated. An app that is started through the
+  shell (for example a packaged app through its activation) is not a child of
+  the program and has no `HOSTEL_LEASE`, so cleanup does not end it. A
+  disconnected or locked desktop stops real input and screenshots.
 
 ### mise on rooms
 
@@ -1578,7 +1642,7 @@ What a guest can still do in version 1:
 - Put a changed binary in a shared cache (`hostel/cache`, mise tools, package
   stores). The next lease runs it.
 
-Planned hardening (milestone M7):
+Planned hardening (milestone M8):
 
 1. **One OS user for each lease.** `prepare` creates a new user without
    administrator rights; cleanup stops all its processes (`pkill -u`), removes its

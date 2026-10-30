@@ -42,7 +42,9 @@ All other terms are plain technical words.
 | 2026-10-27 | Android emulators do not run on Namespace macOS devboxes, also if they can. Android rooms on Namespace are Linux machines. The test of the emulator on a macOS host uses the owner's physical Mac `mac-mini` (the static room of M2). |
 | 2026-10-27 | The VPS for the server is an exe.dev VM. It uses the exe.dev hostname (`<vm>.exe.xyz`) and its TLS; no own domain. |
 | 2026-10-27 | The M5 done-when uses a guest on the owner's Mac (a local agent), not a cloud agent: guest on the Mac → server on the VPS → home MacBook through `room connect`. A cloud agent is an optional extra check. |
+| 2026-10-29 | Desktop testing for macOS and Windows comes before the hardening milestone: agents must build, install, start, and remove desktop apps, take screenshots, and click and type, as they do on iOS and Android. Running a repository's own UI test suites and signed builds are not in scope. macOS comes first (the home MacBook); the Windows machine is decided after that (on `win-pc`, the only desktop session is the owner's, and a Cloud PC stops drawing without a connected client). This replaces the decision of 2026-10-23 that macOS desktop apps are future work. |
 | 2026-10-29 | The Windows room of M6 is the owner's cloud Windows PC (`win-pc`) as a static machine, not a Namespace instance (no plan change). Hostel uses its own local user `hostel` without administrator rights, one slot, command-line work only (the desktop session stays for ExampleApp), and `room connect`. |
+| 2026-10-30 | Windows desktop testing (M7) is built and tested on `win-pc` while the owner keeps its desktop connected; Hostel and the ExampleApp agents share that desktop for this test (the `windows` devlock). The apps of a lease run as the room user `hostel` on the desktop user's desktop, started by a scheduled task of the desktop user with the password of `hostel` (option A), not as the desktop user. Hostel uses Microsoft's `winapp ui` (winapp CLI) to control Windows apps, not its own UI Automation commands. |
 | 2026-10-23 | Hostel focuses on iOS (simulators) for now. macOS desktop apps (UI control with Automation Mode, Mac Catalyst builds with team signing) are future work. The `macos` platform keeps its desktop screenshot. |
 | 2026-10-23 | Each room gets `agent-device` (Callstack) by default, so that agents can tap, type, and read the screen of simulators, emulators, and desktops on the room. Hostel pins its version (the same as T3 Code). The server option `mise.agent_device = false` turns it off. |
 | 2026-10-22 | The spare MacBook has FileVault off and logs in the `hostel` user automatically, so that it has a desktop session (label `desktop`). It holds no personal data. |
@@ -192,7 +194,7 @@ All other terms are plain technical words.
 - More than one slot per room in production use. The model supports it; the
   scripts and tests come in milestone M6.
 - Protection against a guest that installs a backdoor during a lease (for example a
-  process that connects out, or a cron job). Planned for M7; see design section 18,
+  process that connects out, or a cron job). Planned for M8; see design section 18,
   "Backdoors".
 
 ## 8. Known constraints

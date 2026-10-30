@@ -16,18 +16,10 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// TestSmokeWindows runs against a real static Windows room (M6; the owner's
-// Cloud PC win-pc). It runs only with HOSTEL_SMOKE_WINDOWS=<user@host[:port]>
-// ("make test-smoke-windows", which builds the Windows helper first).
-// HOSTEL_SMOKE_WINDOWS_KEY is the private key that the room user accepts; it
-// becomes the test server's key. The room user must have no other work: the
-// test leaves no process of it.
-//
-// A lease: the lease environment, exit codes, a tunnel, a forward, cp, sync,
-// diff, job stop, and a process that breaks away from the SSH session; after
-// the release, a second lease finds a clean work directory and no process of
-// the first one.
-func TestSmokeWindows(t *testing.T) {
+// windowsSmoke starts a test server with the Windows room of
+// HOSTEL_SMOKE_WINDOWS (machine "home/win"; machineKeys are more keys of the
+// machine) and a guest repository with files. agentDevice also installs winapp.
+func windowsSmoke(t *testing.T, agentDevice bool, machineKeys string, files func(port int) map[string]string) (*env, *serverProc) {
 	addr := os.Getenv("HOSTEL_SMOKE_WINDOWS")
 	if addr == "" {
 		t.Skip("set HOSTEL_SMOKE_WINDOWS=<user@host> and HOSTEL_SMOKE_WINDOWS_KEY to run it against a Windows room")
@@ -55,7 +47,7 @@ func TestSmokeWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.init()
-	e.writeConfig(serverHeader() + fmt.Sprintf(`platforms_dir = %q
+	e.writeConfig(serverHeaderWith(agentDevice) + fmt.Sprintf(`platforms_dir = %q
 
 [providers.home]
 kind = "static"
@@ -63,7 +55,7 @@ kind = "static"
 [providers.home.machines.win]
 address = %q
 os = "windows"
-`, platforms, addr))
+%s`, platforms, addr, machineKeys))
 	// serverHeader sets helper_dir to the E2E helpers; this test needs dist.
 	cfg, err := os.ReadFile(filepath.Join(e.configDir(), "server.toml"))
 	if err != nil {
@@ -73,9 +65,27 @@ os = "windows"
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
 	port := localHTTP(t, "127.0.0.1:0", "guest")
-	e.newRepo(map[string]string{
-		"hostel.toml": fmt.Sprintf("[tunnels.api]\nlocal_port = %d\n", port),
-		"a.txt":       "one\n",
+	e.newRepo(files(port))
+	return e, s
+}
+
+// TestSmokeWindows runs against a real static Windows room (M6; the owner's
+// Cloud PC win-pc). It runs only with HOSTEL_SMOKE_WINDOWS=<user@host[:port]>
+// ("make test-smoke-windows", which builds the Windows helper first).
+// HOSTEL_SMOKE_WINDOWS_KEY is the private key that the room user accepts; it
+// becomes the test server's key. The room user must have no other work: the
+// test leaves no process of it.
+//
+// A lease: the lease environment, exit codes, a tunnel, a forward, cp, sync,
+// diff, job stop, and a process that breaks away from the SSH session; after
+// the release, a second lease finds a clean work directory and no process of
+// the first one.
+func TestSmokeWindows(t *testing.T) {
+	e, s := windowsSmoke(t, false, "", func(port int) map[string]string {
+		return map[string]string{
+			"hostel.toml": fmt.Sprintf("[tunnels.api]\nlocal_port = %d\n", port),
+			"a.txt":       "one\n",
+		}
 	})
 
 	acquire := func() {

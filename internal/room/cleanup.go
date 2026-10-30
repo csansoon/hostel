@@ -60,6 +60,14 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		}
 		resp.Steps = append(resp.Steps, st)
 	}
+	// The desktop program ends the lease's desktop commands at this marker,
+	// also those that cleared HOSTEL_LEASE.
+	step("end desktop commands", func() error {
+		if _, err := os.Stat(h.slotDir(slot)); err != nil {
+			return nil
+		}
+		return os.WriteFile(h.leaseEndedFile(slot), nil, 0o644)
+	})
 	step("stop processes", func() error { return h.stopLeaseProcesses(slot, req.LeaseID) })
 	step("reset", func() error { return h.resetSlot(slot, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
@@ -138,6 +146,7 @@ func (h *helper) resetSlot(slot string, req protocol.CleanupRequest) error {
 		"HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
 		"HOSTEL_LEASE_ID":         req.LeaseID,
 		"HOSTEL_DEVICES":          strings.Join(req.Devices, ","),
+		"HOSTEL_EXCLUSIVE":        exclusiveEnv(req.Exclusive),
 	}, p.ScriptTimeout(config.StepReset))
 	if err != nil {
 		return err

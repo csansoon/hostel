@@ -28,62 +28,12 @@ func TestSmokeNamespace(t *testing.T) {
 	if os.Getenv("HOSTEL_SMOKE_NAMESPACE") != "1" {
 		t.Skip("set HOSTEL_SMOKE_NAMESPACE=1 to run it against the real Namespace account (it costs money)")
 	}
-	// The plan allows one devbox. Another devbox (for example the owner's)
-	// means: stop and ask the owner.
-	if names := realDevboxes(t); len(names) > 0 {
-		t.Fatalf("devboxes exist (%s); the test needs an account without devboxes", strings.Join(names, ", "))
-	}
-	dist, err := filepath.Abs("../../dist")
-	if err != nil {
-		t.Fatal(err)
-	}
-	platforms, err := filepath.Abs("../../platforms")
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := newEnv(t)
-	// The CLI keeps its login in the real home; the key files go to the test
-	// home.
-	realHome, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	login := filepath.Join("Library", "Application Support", "ns")
-	if err := os.MkdirAll(filepath.Dir(filepath.Join(e.home, login)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(realHome, login), filepath.Join(e.home, login)); err != nil {
-		t.Fatal(err)
-	}
-	e.init()
-	id := fmt.Sprintf("smoke%x", time.Now().UnixNano()&0xffffff)
-	prefix := "hostel-" + id + "-"
-	t.Cleanup(func() {
-		for _, name := range realDevboxes(t) {
-			if strings.HasPrefix(name, prefix) {
-				t.Logf("delete the devbox %s that the test left", name)
-				devboxCLI(t, "delete", name, "--force")
-			}
-		}
-	})
-	e.writeConfig(fmt.Sprintf(`server_id = %q
-listen = "127.0.0.1:0"
-gateway_listen = "127.0.0.1:0"
-helper_dir = %q
-platforms_dir = %q
-mise = { agent_device = false }
-
-[providers.ns]
-kind = "namespace"
-warm_running = "1m"
-
+	e, s, prefix := namespaceDevboxSmoke(t, `warm_running = "1m"`, `
 [providers.ns.machines.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
 labels = ["desktop"]
 max_lifetime = "3h"
-`, id, dist, platforms))
-	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	e.useGuestToken()
+`, false)
 	e.newRepo(defaultRepoFiles())
 
 	start := time.Now()
@@ -126,6 +76,65 @@ max_lifetime = "3h"
 		return true
 	})
 	t.Logf("total %s", time.Since(start).Round(time.Second))
+}
+
+// namespaceDevboxSmoke starts a server with a namespace provider "ns" (the
+// given provider keys and machines) for a smoke test on the real account. It
+// stops if a devbox exists (the plan allows one; another one can be the
+// owner's), and deletes the test's devboxes at the end, also when the test
+// fails. It returns the devbox name prefix of the test.
+func namespaceDevboxSmoke(t *testing.T, providerKeys, machines string, agentDevice bool) (*env, *serverProc, string) {
+	t.Helper()
+	if names := realDevboxes(t); len(names) > 0 {
+		t.Fatalf("devboxes exist (%s); the test needs an account without devboxes", strings.Join(names, ", "))
+	}
+	dist, err := filepath.Abs("../../dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	platforms, err := filepath.Abs("../../platforms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t)
+	// The CLI keeps its login in the real home; the key files go to the test
+	// home.
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := filepath.Join("Library", "Application Support", "ns")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(e.home, login)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(realHome, login), filepath.Join(e.home, login)); err != nil {
+		t.Fatal(err)
+	}
+	e.init()
+	id := fmt.Sprintf("smoke%x", time.Now().UnixNano()&0xffffff)
+	prefix := "hostel-" + id + "-"
+	t.Cleanup(func() {
+		for _, name := range realDevboxes(t) {
+			if strings.HasPrefix(name, prefix) {
+				t.Logf("delete the devbox %s that the test left", name)
+				devboxCLI(t, "delete", name, "--force")
+			}
+		}
+	})
+	e.writeConfig(fmt.Sprintf(`server_id = %q
+listen = "127.0.0.1:0"
+gateway_listen = "127.0.0.1:0"
+helper_dir = %q
+platforms_dir = %q
+mise = { agent_device = %t }
+
+[providers.ns]
+kind = "namespace"
+%s
+%s`, id, dist, platforms, agentDevice, providerKeys, machines))
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	e.useGuestToken()
+	return e, s, prefix
 }
 
 // devboxCLI runs the real devbox CLI with the real home directory.

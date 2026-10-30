@@ -81,6 +81,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return streamResult(h.execCommand(args[1:], stderr), stderr)
 	case "shell":
 		return streamResult(h.shell(args[1:], stderr), stderr)
+	case "desktop":
+		return h.desktop(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "hostel room: unknown command %q\n", args[0])
 		return 2

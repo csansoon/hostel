@@ -209,6 +209,53 @@ owner's Cloud PC `win-pc`. Do these steps as an administrator, in PowerShell.
 
 5. **`room connect`** as a scheduled task of `LOCAL SERVICE`:
    `deploy-vps.md`, section 6.
+6. **Desktop (M7, optional).** For desktop leases (the machine label
+   `desktop`), a user must be signed in to the desktop, and the desktop must
+   stay connected and unlocked. SSH sessions cannot show windows, take
+   screenshots, or use UI Automation. So a scheduled task of the desktop user
+   starts `hostel room desktop serve` as `hostel` in the desktop session, and
+   lease commands go to it (`desktop`, `winapp`). The apps of a lease run as
+   `hostel`, not as the desktop user. Run this as an administrator while the
+   desktop user is signed in:
+
+   ```powershell
+   $dir = 'C:\ProgramData\hostel\desktop'
+   $user = (Get-Process explorer -IncludeUserName | Select-Object -First 1).UserName
+   New-Item -ItemType Directory -Force $dir | Out-Null
+   # A new random password for hostel, readable only by the desktop user's task.
+   $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+   $pw = [Convert]::ToBase64String($b) + 'aA1!'
+   Set-LocalUser -Name hostel -Password (ConvertTo-SecureString $pw -AsPlainText -Force)
+   Set-Content "$dir\cred" $pw -NoNewline
+   icacls "$dir\cred" /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' "${user}:R" | Out-Null
+   icacls $dir /grant "${user}:(OI)(CI)RX" | Out-Null
+   Set-Content "$dir\start.ps1" @'
+   # Keeps "hostel room desktop serve" running as hostel on this desktop. It
+   # ends when the helper changes; then this starts the new one.
+   $dir = 'C:\ProgramData\hostel\desktop'
+   while ($true) {
+     try {
+       $pw = ConvertTo-SecureString (Get-Content "$dir\cred" -Raw).Trim() -AsPlainText -Force
+       $cred = New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\hostel", $pw)
+       $p = Start-Process C:\Users\hostel\hostel\bin\hostel.exe -ArgumentList 'room','desktop','serve' -Credential $cred -LoadUserProfile -WorkingDirectory C:\Users\hostel -WindowStyle Hidden -PassThru
+       $p.WaitForExit()
+     } catch {}
+     Start-Sleep 10
+   }
+   '@
+   $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File $dir\start.ps1"
+   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+   $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+   Register-ScheduledTask -TaskName 'Hostel desktop' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+   Start-ScheduledTask -TaskName 'Hostel desktop'
+   ```
+
+   Add `labels = ["desktop"]` to the machine. The `hostel` user cannot read
+   `cred`. Until the server installs the helper (the first provisioning), the
+   task tries again every 10 seconds. A lease can send keys and clicks to any
+   window on this desktop that is not elevated, also to the desktop user's
+   windows: use a desktop user that has nothing else open, or accept this.
 
 Notes:
 

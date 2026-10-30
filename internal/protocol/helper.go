@@ -63,6 +63,8 @@ type BeginRequest struct {
 	LeaseID  string   `json:"lease_id"`
 	Platform string   `json:"platform"`
 	Devices  []string `json:"devices"`
+	// Exclusive: the lease holds the whole room (for example the desktop).
+	Exclusive bool `json:"exclusive,omitempty"`
 }
 
 // CleanupRequest is the input of "hostel room cleanup". It comes from the
@@ -72,6 +74,9 @@ type CleanupRequest struct {
 	Platform string   `json:"platform"`
 	Devices  []string `json:"devices"`
 	Ports    []int    `json:"ports"`
+	// Exclusive: the lease held the whole room (its scripts may reset the
+	// desktop).
+	Exclusive bool `json:"exclusive,omitempty"`
 	// Health are the platforms whose health script runs at the end: those that
 	// the room is ready for. An on-demand room has the files of a device
 	// platform before its provision script ran.

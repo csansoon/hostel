@@ -55,7 +55,17 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 		return l.fail(stderr, err)
 	}
 	defer conn.Close()
-	remote := path.Join(path.Dir(l.st.Access.WorkDir), fmt.Sprintf("screenshot-%d.png", time.Now().UnixNano()))
+	file := fmt.Sprintf("screenshot-%d.png", time.Now().UnixNano())
+	remote := path.Join(path.Dir(l.st.Access.WorkDir), file)
+	// The room reads the file: sh, or PowerShell with a binary copy
+	// (Get-Content would change the bytes).
+	read := "cat " + quote(remote) + " && rm -f " + quote(remote)
+	if l.st.Access.RoomOS == config.OSWindows {
+		dir := l.st.Access.WorkDir[:max(strings.LastIndex(l.st.Access.WorkDir, `\`), 0)]
+		remote = dir + `\` + file
+		p := "'" + strings.ReplaceAll(remote, "'", "''") + "'"
+		read = "$f = [IO.File]::OpenRead(" + p + "); $o = [Console]::OpenStandardOutput(); $f.CopyTo($o); $o.Flush(); $f.Close(); Remove-Item -LiteralPath " + p
+	}
 	scriptArgs := []string{remote}
 	if *device != "" {
 		scriptArgs = append(scriptArgs, *device)
@@ -73,7 +83,7 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 		return l.fail(stderr, fmt.Errorf("the screenshot script failed (exit code %d): %s", resp.ExitCode, strings.TrimSpace(resp.OutputTail)))
 	}
 	var png, errb bytes.Buffer
-	code, err = conn.Run(ctx, "cat "+quote(remote)+" && rm -f "+quote(remote), nil, &png, &errb)
+	code, err = conn.Run(ctx, read, nil, &png, &errb)
 	if err != nil {
 		return l.fail(stderr, err)
 	}

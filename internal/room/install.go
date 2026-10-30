@@ -136,7 +136,7 @@ func (h *helper) installPlatform(name string, r io.Reader, want string) error {
 			return err
 		}
 	}
-	entries, err := hashes.DirEntries(tmp, nil)
+	entries, err := hashes.DirEntries(tmp, nil, runtime.GOOS != "windows")
 	if err != nil {
 		return err
 	}
