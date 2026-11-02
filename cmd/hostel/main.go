@@ -2,10 +2,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/guest"
 	"github.com/csansoon/hostel/internal/room"
 	"github.com/csansoon/hostel/internal/version"
@@ -19,6 +22,8 @@ type command struct {
 }
 
 var commands = []command{
+	{name: "connect", summary: "Connect this computer to a Hostel server with an invite code", run: connectCmd},
+	{name: "disconnect", summary: "Remove this computer's connection", run: disconnectCmd},
 	{name: "platforms", summary: "List platforms with free slots, queue length, and estimated wait", run: guest.Platforms},
 	{name: "acquire", summary: "Create or continue a lease for a platform", run: guest.Acquire},
 	{name: "sync", summary: "Send changed files to the lease again", run: guest.Sync},
@@ -36,7 +41,8 @@ var commands = []command{
 	{name: "status", summary: "Show all leases, rooms, and the queue", run: statusCmd},
 	{name: "release", summary: "End the lease", run: guest.Release},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents", run: guest.AgentGuide},
-	{name: "admin", summary: "Admin commands: tokens, leases, rooms, configuration", run: adminCmd},
+	{name: "config", summary: "The server configuration: users (admins change it)", run: configCmd},
+	{name: "admin", summary: "Admin commands: room tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
 	{name: "ports", hidden: true, run: guest.Ports},
 	{name: "gateway-proxy", hidden: true, run: guest.GatewayProxy},
@@ -62,11 +68,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
+			if needsConnection(c.name, args[1:]) {
+				if _, err := config.LoadGuest(); errors.Is(err, config.ErrNotConnected) {
+					fmt.Fprintln(stderr, "hostel:", err)
+					return ExitNotConnected
+				}
+			}
 			return c.run(args[1:], stdout, stderr)
 		}
 	}
 	fmt.Fprintf(stderr, "hostel: unknown command %q; run \"hostel help\" for the list of commands\n", args[0])
 	return 2
+}
+
+// needsConnection: commands that talk to a server need a connection; these do
+// not (they run on the server or a room machine, or set up the connection).
+func needsConnection(name string, args []string) bool {
+	switch name {
+	// The others report the missing connection themselves.
+	case "connect", "disconnect", "server", "room", "agent-guide", "ports", "gateway-proxy":
+		return false
+	case "admin":
+		// "admin config check|schema" is local; without a subcommand, admin
+		// prints its usage.
+		return len(args) > 0 && args[0] != "config" && !strings.HasPrefix(args[0], "-")
+	}
+	return true
 }
 
 func printHelp(w io.Writer) {

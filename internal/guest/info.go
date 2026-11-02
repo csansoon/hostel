@@ -70,9 +70,12 @@ Start
   hostel acquire <platform> --task "..."   one lease for this worktree
     --device <d>    a device of the platform (repeat for several)
     --require <l>   a machine label, for example desktop
-    --priority      only when the user asks for it
+    --priority      high or low, only when the user asks for it
   When acquire exits with code 75, run the SAME command again. It continues
   the same lease. Code 69: no machine can serve the request; do not retry.
+  Code 78: this computer is not connected to a Hostel server. Do not try to
+  connect; ask the user to run "hostel connect <invite code>" with a code from
+  an admin of their server.
 
 Work
   hostel run -- "<command>"     runs in the work directory; one argument runs

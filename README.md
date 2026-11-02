@@ -2,6 +2,8 @@
 
 Short, temporary, exclusive access to remote machines for coding agents.
 
+![Guests (agents on your machines) check in at the Hostel front desk, wait in one queue for each platform, and get a room (iOS, Android, macOS, Windows)](docs/images/hostel.gif)
+
 Agents edit code locally. When they need another platform (iOS, macOS, Android,
 Windows, Linux) for builds, UI QA, or device tests, they request a lease from the
 Hostel server. The server keeps a queue, gets a room from a provider (a static
@@ -9,7 +11,7 @@ machine or an on-demand cloud such as Namespace), prepares it, and gives the age
 SSH access through its gateway. When the lease ends, cleanup deletes everything the
 lease left on the room.
 
-Status: milestone M1 (core with Docker rooms) is in review in PR #1. Next: M2 in docs/plan.md.
+Status: milestones M0 to M7 are done (Docker, static, and Namespace rooms; iOS, Android, macOS, Windows, and Linux; desktop testing). M8 (users and connection) is in progress; see docs/plan.md.
 
 | Document | Content |
 |---|---|

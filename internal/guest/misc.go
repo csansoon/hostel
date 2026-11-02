@@ -26,8 +26,22 @@ import (
 func Release(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel release", stderr)
 	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
-	if _, err := cli.Parse(fs, args); err != nil {
+	pos, err := cli.Parse(fs, args)
+	if err != nil || len(pos) > 1 {
 		return ExitUsage
+	}
+	// "hostel release <lease>": any lease of the user, or any lease for an admin.
+	if len(pos) == 1 {
+		api, err := apiClient()
+		if err != nil {
+			return fail(stderr, err)
+		}
+		var l protocol.Lease
+		if err := api.Do(context.Background(), "POST", "/v1/leases/"+pos[0]+"/release", nil, &l); err != nil {
+			return fail(stderr, err)
+		}
+		fmt.Fprintf(stdout, "lease %s ended (%s)\n", l.ID, l.State)
+		return 0
 	}
 	repo, err := FindRepo()
 	if err != nil {
@@ -291,7 +305,11 @@ func extract(r io.Reader, target string) error {
 func writeSSHConfig(st *State) (string, string, error) {
 	alias := "hostel-" + st.LeaseID
 	var hostEntry, hostLines string
-	if addr := st.Access.GatewayAddress; config.IsWebSocketURL(addr) {
+	addr, _, err := gatewayTarget(st.Access.GatewayAddress)
+	if err != nil {
+		return "", "", err
+	}
+	if config.IsWebSocketURL(addr) {
 		// The system ssh reaches a WebSocket gateway through this binary.
 		exe, err := os.Executable()
 		if err != nil {
@@ -354,7 +372,12 @@ func GatewayProxy(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: hostel gateway-proxy <wss://...>")
 		return 2
 	}
-	nc, err := gateway.Dial(context.Background(), args[0], dialTimeout)
+	addr, tlsConfig, err := gatewayTarget(args[0])
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	nc, err := gateway.Dial(context.Background(), addr, tlsConfig, dialTimeout)
 	if err != nil {
 		fmt.Fprintf(stderr, "hostel: connect to the Hostel gateway at %s: %v\n", args[0], err)
 		return 1

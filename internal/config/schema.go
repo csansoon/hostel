@@ -43,7 +43,7 @@ func schemaFor(t reflect.Type) map[string]any {
 		for i := range t.NumField() {
 			f := t.Field(i)
 			name, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
-			if name == "" || name == "-" {
+			if name == "" || name == "-" || f.Tag.Get("schema") == "-" {
 				continue
 			}
 			props[name] = schemaFor(f.Type)

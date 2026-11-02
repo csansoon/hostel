@@ -64,17 +64,24 @@ directories.
 As the server user (`exedev`):
 
 ```sh
-hostel server init
+hostel server init --tls off --listen 0.0.0.0:8000 --url https://hostel.example.com
 ```
 
-It creates the data directory (`~/.local/share/hostel`: the database and the
-keys) and prints the admin token once. Keep the admin token in a password manager.
+It asks for the server name and your name, and creates the data directory
+(`~/.local/share/hostel`: the database and the keys). It prints the first admin
+invite code (`hostel connect hostel1-...`): run that command on your own computer
+within 24 hours (section 4.1). On a VPS behind a proxy with TLS (exe.dev, Caddy),
+use `--tls off`; on a machine without a proxy or a domain (an IP address or a
+Tailscale name), leave the default `self-signed`: the server then serves HTTPS
+with its own certificate, and clients pin its key.
 
 Edit `~/.config/hostel/server.toml`:
 
 ```toml
 server_id = "exe"
 listen = "0.0.0.0:8000"
+tls = "off"
+public_urls = ["https://hostel.example.com"]
 gateway_listen = "127.0.0.1:7422"
 gateway_public = "wss://hostel.example.com/v1/gateway"
 helper_dir = "/opt/hostel/helpers"
@@ -123,11 +130,35 @@ sudo systemctl enable --now hostel
 journalctl -u hostel -f
 ```
 
-From your own machine, check the API:
+### 4.1 Connect your computer and invite others
+
+On your own computer, run the command that `hostel server init` printed:
 
 ```sh
-HOSTEL_SERVER=https://hostel.example.com HOSTEL_TOKEN=<admin token> hostel status
+hostel connect hostel1-...
+hostel status
 ```
+
+Invite another person (they install `hostel` and run the printed command):
+
+```sh
+hostel config users invite                  # a member
+hostel config users invite --role admin     # an admin
+hostel config users                         # users and their computers
+```
+
+`hostel config users code` makes a code for your own other computer. If nobody
+can sign in as admin, run `hostel server invite` on the server machine. For a
+lost computer, or one that could not disconnect, run
+`hostel config users remove "<name>" --computer <computer>`: only that
+computer is disconnected.
+
+A server from before M8 keeps working: its tokens became users (one user for
+each token name and role; an admin token's user is admin). A guest token never
+gets admin rights: when an admin token has the same name, the guest tokens'
+user is "<name> (member)" (or "<name> (member 2)", and so on, when that name
+is taken). Add `public_urls` to `server.toml` before you invite
+people.
 
 ## 5. Namespace login (optional)
 
@@ -156,7 +187,7 @@ gateway. It needs no inbound SSH from the internet. Prepare the room first with
    `~/.ssh/authorized_keys` and also into `~/hostel/authorized_keys.base` if that
    file exists: cleanup restores `authorized_keys` from it.
 
-2. Create a room token for the machine, on any machine with the admin token:
+2. Create a room token for the machine, on a computer connected as an admin:
 
    ```sh
    hostel admin token create --name macbook --role room --machine home/macbook

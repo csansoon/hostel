@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/tlspin"
 )
 
 // Deadlines of "hostel room connect".
@@ -40,6 +42,7 @@ func Connect(args []string, stderr io.Writer) int {
 	server := fs.String("server", "", "the Hostel server URL, for example https://hostel.example.com")
 	tokenFile := fs.String("token-file", "", "a file with the room token (default: $HOSTEL_ROOM_TOKEN)")
 	sshAddr := fs.String("ssh", "127.0.0.1:22", "the address of the room's SSH server")
+	serverKey := fs.String("server-key", os.Getenv("HOSTEL_SERVER_KEY"), "the pinned TLS key of a server with its own certificate (sha256:...)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -56,13 +59,22 @@ func Connect(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel room connect: --server and a room token (--token-file or HOSTEL_ROOM_TOKEN) are required; create the token with: hostel admin token create --role room --machine <provider>/<machine>")
 		return 2
 	}
+	tlsConfig := tlspin.ClientConfig(nil)
+	if *serverKey != "" {
+		hash, err := tlspin.ParseFingerprint(*serverKey)
+		if err != nil {
+			fmt.Fprintln(stderr, "hostel room connect:", err)
+			return 2
+		}
+		tlsConfig = tlspin.ClientConfig(hash)
+	}
 	logger := log.New(stderr, "hostel room connect: ", log.LstdFlags)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	backoff := time.Second
 	for {
 		start := time.Now()
-		err := connectOnce(ctx, strings.TrimSuffix(*server, "/"), token, *sshAddr, logger)
+		err := connectOnce(ctx, strings.TrimSuffix(*server, "/"), token, *sshAddr, tlsConfig, logger)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -81,8 +93,8 @@ func Connect(args []string, stderr io.Writer) int {
 
 // connectOnce reads the gateway address from the server, connects, and serves
 // the gateway's streams until the connection ends.
-func connectOnce(ctx context.Context, server, token, sshAddr string, logger *log.Logger) error {
-	info, err := gatewayInfo(ctx, server, token)
+func connectOnce(ctx context.Context, server, token, sshAddr string, tlsConfig *tls.Config, logger *log.Logger) error {
+	info, err := gatewayInfo(ctx, server, token, tlsConfig)
 	if err != nil {
 		return err
 	}
@@ -90,9 +102,14 @@ func connectOnce(ctx context.Context, server, token, sshAddr string, logger *log
 	if err != nil {
 		return fmt.Errorf("parse the gateway host key: %w", err)
 	}
-	nc, err := gateway.Dial(ctx, info.GatewayAddress, connectTimeout)
+	addr, same := gateway.Resolve(info.GatewayAddress, server)
+	gwTLS := tlspin.ClientConfig(nil)
+	if same {
+		gwTLS = tlsConfig
+	}
+	nc, err := gateway.Dial(ctx, addr, gwTLS, connectTimeout)
 	if err != nil {
-		return fmt.Errorf("connect to the gateway at %s: %w", info.GatewayAddress, err)
+		return fmt.Errorf("connect to the gateway at %s: %w", addr, err)
 	}
 	nc.SetDeadline(time.Now().Add(connectTimeout))
 	conn, chans, reqs, err := ssh.NewClientConn(nc, "hostel-gateway", &ssh.ClientConfig{
@@ -107,7 +124,7 @@ func connectOnce(ctx context.Context, server, token, sshAddr string, logger *log
 	}
 	nc.SetDeadline(time.Time{})
 	defer conn.Close()
-	logger.Printf("connected to the gateway at %s", info.GatewayAddress)
+	logger.Printf("connected to the gateway at %s", addr)
 	go ssh.DiscardRequests(reqs)
 	go keepalive(ctx, conn)
 	for nch := range chans {
@@ -120,7 +137,7 @@ func connectOnce(ctx context.Context, server, token, sshAddr string, logger *log
 	return errors.New("the gateway connection ended")
 }
 
-func gatewayInfo(ctx context.Context, server, token string) (protocol.Info, error) {
+func gatewayInfo(ctx context.Context, server, token string, tlsConfig *tls.Config) (protocol.Info, error) {
 	var info protocol.Info
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
@@ -129,7 +146,9 @@ func gatewayInfo(ctx context.Context, server, token string) (protocol.Info, erro
 		return info, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
 		return info, fmt.Errorf("read the gateway address from %s: %w", server, err)
 	}

@@ -17,15 +17,19 @@ type Paths struct {
 	DataDir      string
 	PlatformsDir string
 	Listen       string
+	TLS          string
+	PublicURLs   []string
 }
 
 // ReadPaths reads data_dir, platforms_dir, and listen from server.toml without
 // the full validation, and applies the defaults.
 func ReadPaths(file string) (Paths, error) {
 	var raw struct {
-		DataDir      string `toml:"data_dir"`
-		PlatformsDir string `toml:"platforms_dir"`
-		Listen       string `toml:"listen"`
+		DataDir      string   `toml:"data_dir"`
+		PlatformsDir string   `toml:"platforms_dir"`
+		Listen       string   `toml:"listen"`
+		TLS          string   `toml:"tls"`
+		PublicURLs   []string `toml:"public_urls"`
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -42,10 +46,13 @@ func ReadPaths(file string) (Paths, error) {
 	setStr(&raw.DataDir, filepath.Join(home, ".local", "share", "hostel"))
 	setStr(&raw.PlatformsDir, filepath.Join(home, ".config", "hostel", "platforms"))
 	setStr(&raw.Listen, "127.0.0.1:7410")
+	setStr(&raw.TLS, TLSOff)
 	return Paths{
 		DataDir:      absPath(raw.DataDir, base, home),
 		PlatformsDir: absPath(raw.PlatformsDir, base, home),
 		Listen:       raw.Listen,
+		TLS:          raw.TLS,
+		PublicURLs:   raw.PublicURLs,
 	}, nil
 }
 
@@ -64,14 +71,23 @@ func DefaultServerID() string {
 }
 
 // Template returns the commented server.toml that "hostel server init" writes.
-func Template(serverID string) string {
+func Template(serverID, listen, tlsMode string, publicURLs []string) string {
+	urls := make([]string, len(publicURLs))
+	for i, u := range publicURLs {
+		urls[i] = fmt.Sprintf("%q", u)
+	}
 	return `#:schema ./hostel.schema.json
 # Hostel server configuration. Check it with "hostel admin config check".
 # docs/design.md, section 9, describes all keys.
 
 server_id = "` + serverID + `"   # [a-z0-9]{1,20}; part of the names of created rooms
+listen = "` + listen + `"
+# self-signed: HTTPS with the server's own certificate (clients pin its key);
+# off: plain HTTP behind a proxy that has TLS.
+tls = "` + tlsMode + `"
+# The addresses that clients use; invite codes contain them.
+public_urls = [` + strings.Join(urls, ", ") + `]
 
-# listen = "127.0.0.1:7410"          # HTTP API
 # gateway_listen = "127.0.0.1:7422"  # SSH gateway
 # data_dir = "~/.local/share/hostel"
 # platforms_dir = "~/.config/hostel/platforms"

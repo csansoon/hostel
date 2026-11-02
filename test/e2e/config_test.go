@@ -26,8 +26,9 @@ os = "linux"
 func TestServerStart(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	token := e.initServer(serverHeader() + staticMachine)
-	s := e.startServer(token)
+	e.initServer(serverHeader() + staticMachine)
+	s := e.startServer("")
+	token := e.admin
 
 	var info protocol.Info
 	if code := s.get("/v1/info", token, &info); code != http.StatusOK {

@@ -27,6 +27,13 @@ func (s *Store) AddEvent(ctx context.Context, now time.Time, leaseID string, roo
 	return s.tx(ctx, func(tx *sql.Tx) error { return insertEvent(ctx, tx, now, leaseID, roomID, kind, msg) })
 }
 
+// AddEventBy appends an event that a user caused (an admin action).
+func (s *Store) AddEventBy(ctx context.Context, now time.Time, leaseID string, roomID int64, kind, msg string, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO events (time, lease_id, room_id, kind, message, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		now.UnixMilli(), leaseID, roomID, kind, msg, userID)
+	return err
+}
+
 // Events returns the last n events, oldest first.
 func (s *Store) Events(ctx context.Context, n int) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, time, lease_id, room_id, kind, message FROM

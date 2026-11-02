@@ -54,8 +54,8 @@ func TestMaxLease(t *testing.T) {
 	}
 }
 
-// TestOwnership is scenario 21: a guest token cannot release a lease of
-// another token; an admin token can.
+// TestOwnership is scenario 21: a user cannot read or release another user's
+// lease; an admin can.
 func TestOwnership(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
@@ -69,7 +69,7 @@ func TestOwnership(t *testing.T) {
 			method = "POST"
 		}
 		if code := f.s.do(method, path, other, nil); code != 403 {
-			t.Fatalf("%s %s with another guest token: HTTP %d, want 403", method, path, code)
+			t.Fatalf("%s %s with another user's token: HTTP %d, want 403", method, path, code)
 		}
 	}
 	// An admin release ends a running "hostel run" at once, with the reason.
@@ -83,7 +83,7 @@ func TestOwnership(t *testing.T) {
 	}
 	select {
 	case r := <-done:
-		if r.code != 1 || !strings.Contains(r.stderr, "released by an admin") {
+		if r.code != 1 || !strings.Contains(r.stderr, "released by admin (admin)") {
 			t.Fatalf("run during the admin release: %s", r)
 		}
 	case <-time.After(30 * time.Second):

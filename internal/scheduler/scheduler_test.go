@@ -13,8 +13,6 @@ import (
 
 var t0 = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 
-const aging = 10 * time.Minute
-
 func static(key string, labels ...string) Machine {
 	return Machine{Key: key, Provider: "home", OS: "linux", Platforms: []string{"dev"}, Labels: labels,
 		PoolPorts: 10, Slots: []string{"a"}, MaxRooms: 1, MaxLease: 2 * time.Hour}
@@ -34,6 +32,11 @@ func lease(id string, prio int, age time.Duration) Lease {
 	return Lease{ID: id, Request: Request{Platform: "dev"}, Priority: prio, CreatedAt: t0.Add(-age)}
 }
 
+func placed(l Lease, pos int) Lease {
+	l.ManualPosition = pos
+	return l
+}
+
 func assigned(out Output) map[string]Assignment {
 	m := map[string]Assignment{}
 	for _, a := range out.Assignments {
@@ -50,30 +53,6 @@ func waiting(out Output) map[string]Waiting {
 	return m
 }
 
-func TestEffectivePriority(t *testing.T) {
-	cases := []struct {
-		prio int
-		wait time.Duration
-		want int
-	}{
-		{protocol.PriorityLow, 0, 0},
-		{protocol.PriorityLow, 9*time.Minute + 59*time.Second, 0},
-		{protocol.PriorityLow, 10 * time.Minute, 1},
-		{protocol.PriorityLow, 25 * time.Minute, 2},
-		{protocol.PriorityLow, 5 * time.Hour, 2},
-		{protocol.PriorityHigh, 0, 2},
-		{protocol.PriorityNormal, 10 * time.Minute, 2},
-	}
-	for _, c := range cases {
-		if got := EffectivePriority(c.prio, t0.Add(-c.wait), t0, aging); got != c.want {
-			t.Errorf("EffectivePriority(%d, wait %s) = %d, want %d", c.prio, c.wait, got, c.want)
-		}
-	}
-	if got := EffectivePriority(protocol.PriorityLow, t0.Add(-time.Hour), t0, 0); got != 0 {
-		t.Errorf("aging 0: got %d, want 0", got)
-	}
-}
-
 func TestOrder(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -82,13 +61,14 @@ func TestOrder(t *testing.T) {
 	}{
 		{"first in, first out", []Lease{lease("b", 1, time.Minute), lease("a", 1, 2*time.Minute)}, "a"},
 		{"high passes normal", []Lease{lease("n", 1, 5*time.Minute), lease("h", 2, time.Minute)}, "h"},
-		{"aged low passes newer normal", []Lease{lease("n", 1, time.Minute), lease("l", 0, 11*time.Minute)}, "l"},
-		{"aged low passes newer high", []Lease{lease("h", 2, time.Minute), lease("l", 0, 21*time.Minute)}, "l"},
-		{"low waits behind normal", []Lease{lease("l", 0, 9*time.Minute), lease("n", 1, time.Minute)}, "n"},
+		{"no aging: an old low lease waits behind a new normal one", []Lease{lease("l", 0, 5*time.Hour), lease("n", 1, time.Minute)}, "n"},
+		{"no aging: an old normal lease waits behind a new high one", []Lease{lease("n", 1, 5*time.Hour), lease("h", 2, time.Minute)}, "h"},
+		{"an admin's placed lease goes first", []Lease{lease("h", 2, time.Hour), placed(lease("l", 0, time.Minute), 1)}, "l"},
+		{"placed leases keep their order", []Lease{placed(lease("a", 2, time.Hour), 2), placed(lease("b", 0, time.Minute), 1)}, "b"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := Schedule(Input{Now: t0, Aging: aging, Machines: []Machine{static("home/m")},
+			out := Schedule(Input{Now: t0, Machines: []Machine{static("home/m")},
 				Rooms: []Room{running(1, "home/m", true, protocol.SlotFree)}, Leases: c.leases})
 			if len(out.Assignments) != 1 || out.Assignments[0].LeaseID != c.winner {
 				t.Fatalf("assignments = %+v, want lease %s", out.Assignments, c.winner)
@@ -126,7 +106,7 @@ func TestOptions(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			c.req.Platform = "dev"
-			out := Schedule(Input{Now: t0, Aging: aging, Machines: []Machine{m1, m2}, Providers: []Provider{{Name: "p"}},
+			out := Schedule(Input{Now: t0, Machines: []Machine{m1, m2}, Providers: []Provider{{Name: "p"}},
 				Rooms: c.rooms, Leases: []Lease{{ID: "l", Request: c.req, Priority: 1, CreatedAt: t0}}})
 			a, ok := assigned(out)["l"]
 			if !ok {
@@ -147,7 +127,7 @@ func TestRoomFilters(t *testing.T) {
 	busy := running(1, "home/m", true, protocol.SlotLeased)
 	for name, r := range map[string]Room{"drained": drained, "broken": broken, "busy": busy} {
 		t.Run(name, func(t *testing.T) {
-			out := Schedule(Input{Now: t0, Aging: aging, Machines: []Machine{static("home/m")}, Rooms: []Room{r},
+			out := Schedule(Input{Now: t0, Machines: []Machine{static("home/m")}, Rooms: []Room{r},
 				Leases: []Lease{lease("l", 1, 0)}})
 			if len(out.Assignments) != 0 || waiting(out)["l"].Reason != ReasonNoSlot {
 				t.Fatalf("got %+v, want the lease to wait with %q", out, ReasonNoSlot)
@@ -178,7 +158,7 @@ func TestBlockedMachines(t *testing.T) {
 	second := lease("second", 1, 2*time.Minute)
 	other := lease("other", 1, time.Minute)
 	other.Platform = "other"
-	out := Schedule(Input{Now: t0, Aging: aging, Machines: machines, Rooms: rooms, Leases: []Lease{first, second, other}})
+	out := Schedule(Input{Now: t0, Machines: machines, Rooms: rooms, Leases: []Lease{first, second, other}})
 	if a := assigned(out)["other"]; a.RoomID != 2 {
 		t.Fatalf("other platform: assignment = %+v, want room 2", a)
 	}
@@ -466,5 +446,28 @@ func TestPositionsArePerPlatform(t *testing.T) {
 	w := waiting(out)
 	if w["a"].Position != 1 || w["b"].Position != 1 || w["c"].Position != 2 {
 		t.Fatalf("positions = %+v, want a=1, b=1 (other platform), c=2", out.Waiting)
+	}
+}
+
+func TestOrderPlatforms(t *testing.T) {
+	a := func(id, platform string, prio int, age time.Duration, placed int) Lease {
+		return Lease{ID: id, Request: Request{Platform: platform}, Priority: prio, CreatedAt: t0.Add(-age), ManualPosition: placed}
+	}
+	leases := []Lease{
+		a("ios-old", "ios", protocol.PriorityNormal, time.Hour, 0),
+		a("ios-placed", "ios", protocol.PriorityLow, time.Minute, 1),
+		a("mac", "macos", protocol.PriorityNormal, 30*time.Minute, 0),
+		a("mac-high", "macos", protocol.PriorityHigh, time.Second, 0),
+	}
+	Order(leases)
+	var got []string
+	for _, l := range leases {
+		got = append(got, l.ID)
+	}
+	// Inside ios the placed lease is first; it does not pass the macOS queue,
+	// whose first lease is high.
+	want := []string{"mac-high", "mac", "ios-placed", "ios-old"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
 	}
 }

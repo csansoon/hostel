@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/scheduler"
 )
 
 type Lease struct {
@@ -44,6 +46,7 @@ type Lease struct {
 	EndedAt        time.Time
 	EndState       string
 	EndReason      string
+	ManualPosition int
 }
 
 // Final reports whether the lease state is final.
@@ -58,7 +61,7 @@ func Final(state string) bool {
 const leaseColumns = `id, token_id, state, revision, position, reason, platform, devices, task, priority,
 	required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id,
 	slot_name, attempts, began_at, created_at, last_poll_at, last_activity_at, ready_at, expires_at,
-	ended_at, end_state, end_reason`
+	ended_at, end_state, end_reason, manual_position`
 
 func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	var l Lease
@@ -68,7 +71,7 @@ func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	err := row.Scan(&l.ID, &l.TokenID, &l.State, &l.Revision, &l.Position, &l.Reason, &l.Platform, &devices,
 		&l.Task, &l.Priority, &labels, &tunnels, &l.Fresh, &l.PublicKey, &l.GuestHost, &l.Repo, &l.Worktree,
 		&l.Provider, &l.Machine, &roomID, &l.SlotName, &l.Attempts, &began, &created, &poll, &activity,
-		&ready, &expires, &ended, &l.EndState, &l.EndReason)
+		&ready, &expires, &ended, &l.EndState, &l.EndReason, &l.ManualPosition)
 	if err != nil {
 		return l, err
 	}
@@ -180,7 +183,7 @@ func (s *Store) Assign(ctx context.Context, leaseID string, room Room, slots []s
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'assigned', room_id = ?, slot_name = ?, provider = ?,
-			machine = ?, position = 0, reason = '', revision = revision + 1 WHERE id = ? AND state = 'queued'`,
+			machine = ?, position = 0, manual_position = 0, reason = '', revision = revision + 1 WHERE id = ? AND state = 'queued'`,
 			room.ID, slots[0], room.Provider, room.Machine, leaseID)
 		if err != nil {
 			return err
@@ -561,4 +564,114 @@ func (s *Store) FailLease(ctx context.Context, id string, from []string, reason,
 		s.leaseChanged(id)
 	}
 	return ok, nil
+}
+
+// PlaceLease is an admin's move of a queued lease inside the queue of its
+// platform (order: scheduler.Order): first, or before another queued lease.
+// The lease and the leases before it get manual positions, so they keep this
+// order until they start. It reports false when the lease is not queued.
+func (s *Store) PlaceLease(ctx context.Context, id, before string, now time.Time) (bool, error) {
+	var moved bool
+	var changed []string
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var platform string
+		err := tx.QueryRowContext(ctx, `SELECT platform FROM leases WHERE id = ? AND state = 'queued'`, id).Scan(&platform)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT id, priority, manual_position, created_at FROM leases WHERE platform = ? AND state = 'queued'`, platform)
+		if err != nil {
+			return err
+		}
+		var queue []scheduler.Lease
+		for rows.Next() {
+			var l scheduler.Lease
+			var created int64
+			if err := rows.Scan(&l.ID, &l.Priority, &l.ManualPosition, &created); err != nil {
+				rows.Close()
+				return err
+			}
+			l.CreatedAt = time.UnixMilli(created)
+			queue = append(queue, l)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		scheduler.Order(queue)
+		ids := make([]string, 0, len(queue))
+		placed := 0
+		for _, l := range queue {
+			if l.ID != id {
+				ids = append(ids, l.ID)
+				if l.ManualPosition > 0 {
+					placed++
+				}
+			}
+		}
+		at := 0
+		if before != "" {
+			at = slices.Index(ids, before)
+			if at < 0 {
+				return fmt.Errorf("%w: lease %s is not queued for %s", ErrNotFound, before, platform)
+			}
+		}
+		ids = slices.Insert(ids, at, id)
+		// The placed leases are first in the order; all of them and the moved
+		// lease get new positions, so no two have the same one.
+		for i, lid := range ids[:max(at, placed)+1] {
+			if _, err := tx.ExecContext(ctx, `UPDATE leases SET manual_position = ?, revision = revision + 1 WHERE id = ?`, i+1, lid); err != nil {
+				return err
+			}
+			changed = append(changed, lid)
+		}
+		moved = true
+		return nil
+	})
+	for _, lid := range changed {
+		s.leaseChanged(lid)
+	}
+	return moved, err
+}
+
+// SetPriority changes the lane of a queued lease. It reports false when the
+// lease is not queued.
+func (s *Store) SetPriority(ctx context.Context, id string, priority int) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE leases SET priority = ?, revision = revision + 1 WHERE id = ? AND state = 'queued'`, priority, id)
+	if err != nil {
+		return false, fmt.Errorf("set priority: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		s.leaseChanged(id)
+	}
+	return n > 0, nil
+}
+
+// UserTokenIDs returns the IDs of a user's tokens (also revoked ones).
+func (s *Store) UserTokenIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tokens WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// TokenUserID returns the user of a token (0 for a room token).
+func (s *Store) TokenUserID(ctx context.Context, tokenID int64) (int64, error) {
+	var id sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM tokens WHERE id = ?`, tokenID).Scan(&id)
+	return id.Int64, err
 }

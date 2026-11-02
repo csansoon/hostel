@@ -106,28 +106,6 @@ func TestPriority(t *testing.T) {
 	}
 }
 
-// TestAging is scenario 4: a low lease gets the slot before a newer normal
-// lease after the aging time.
-func TestAging(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, &fixtureOpts{serverKeys: "aging = \"3s\"\n"})
-	f.acquire()
-	f.e.newRepoNamed("low", defaultRepoFiles())
-	low := f.queued("--priority", "low")
-	created := time.Now()
-	// After 2 × aging, the low lease has the effective priority high; a new
-	// normal lease has normal.
-	f.e.waitFor("low lease aged", time.Minute, func() bool { return time.Since(created) > 7*time.Second })
-	f.e.newRepoNamed("normal", defaultRepoFiles())
-	normal := f.queued()
-	f.useRepo("repo")
-	f.e.mustHostel("release")
-	f.e.waitFor("low lease ready", time.Minute, func() bool { return f.lease(low).State == protocol.LeaseReady })
-	if l := f.lease(normal); l.State != protocol.LeaseQueued {
-		t.Fatalf("normal lease = %s, want queued", l.State)
-	}
-}
-
 // TestBlockedMachines is scenario 5: a lease that waits for a full machine
 // does not block a lease for another machine.
 func TestBlockedMachines(t *testing.T) {

@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,11 +46,51 @@ func (e *env) writePlatform(name string, files map[string]string) {
 
 // TestStaticRoom: a static room is probed, gets the helper, mise, and the
 // platform scripts, and is ready for its platforms at server start (scenario 22,
-// static part). A restart does not provision again; changed scripts do.
+// static part). A restart does not provision again; changed scripts do. Init
+// rejects a server name, TLS mode, listen address, or public address that the
+// server would reject at start, and init and invite reject an invalid user name.
+// The schema that init writes has no aging. server invite checks the
+// addresses that go into the code.
 func TestStaticRoom(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
+	for _, c := range []struct{ args, want []string }{
+		{[]string{"--server-id", "ip-test"}, []string{`"ip-test" must be 1 to 20 lowercase letters and digits`}},
+		{[]string{"--tls", "selfsigned"}, []string{"--tls:", `"selfsigned" must be "self-signed"`}},
+		{[]string{"--url", "http://100.80.1.2:7410"}, []string{"--url:", `"http://100.80.1.2:7410" must start with https://`}},
+		{[]string{"--url", "https://100.80.1.2:7410/?x"}, []string{"--url:", `"https://100.80.1.2:7410/?x" is not a server address`}},
+		{[]string{"--url", "https://100.80.1.2:7410#"}, []string{"--url:", `"https://100.80.1.2:7410#" is not a server address`}},
+		{[]string{"--user", "a/b"}, []string{"--user:", `"a/b" is not a valid name`}},
+		{[]string{"--listen", "localhost"}, []string{"--listen:", `"localhost" is not a host:port address`}},
+		{[]string{"--tls", "off", "--url", "http://100.80.1.2:7410"}, []string{"--url:", `"http://100.80.1.2:7410" must start with https://`}},
+		{[]string{"--tls", "off", "--listen", "0.0.0.0:7410"}, []string{"--url: give the address that clients use"}},
+	} {
+		r := e.hostel(append([]string{"server", "init", "--user", "admin"}, c.args...)...)
+		for _, w := range c.want {
+			if r.code != 1 || !strings.Contains(r.stderr, w) {
+				t.Fatalf("server init %v: want exit code 1 and %q: %s", c.args, w, r)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(e.configDir(), "server.toml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("server init %v wrote server.toml (err %v)", c.args, err)
+		}
+	}
 	e.init()
+	if r := e.hostel("server", "invite", "--name", "a/b"); r.code != 1 || !strings.Contains(r.stderr, `"a/b" is not a valid name`) {
+		t.Fatalf("server invite with an invalid name: %s", r)
+	}
+	// server invite checks the addresses that go into the code (tls = "off":
+	// https:// only, http:// only on loopback).
+	e.writeConfig(strings.Replace(serverHeader(), `tls = "self-signed"`+"\n"+`public_urls = ["https://127.0.0.1:0"]`,
+		`tls = "off"`+"\n"+`public_urls = ["http://100.80.1.2:7410"]`, 1) + staticMachine)
+	if r := e.hostel("server", "invite"); r.code != 1 || !strings.Contains(r.stderr, `public_urls[0]: "http://100.80.1.2:7410" must start with https://`) {
+		t.Fatalf("server invite with an http:// public URL: %s", r)
+	}
+	// The schema that init writes has the M8 keys, and not aging (removed).
+	schema, err := os.ReadFile(filepath.Join(e.configDir(), "hostel.schema.json"))
+	if err != nil || !strings.Contains(string(schema), `"public_urls"`) || strings.Contains(string(schema), `"aging"`) {
+		t.Fatalf("hostel.schema.json (err %v): want public_urls and no aging", err)
+	}
 	c := e.startStaticRoom("box")
 	e.writePlatform("linux", map[string]string{"health.linux.sh": "#!/bin/sh\n"})
 	e.writePlatform("fakedevice", map[string]string{
@@ -180,36 +221,44 @@ func TestProvisionFailure(t *testing.T) {
 	}
 }
 
-// TestTokens: admins create and revoke tokens; guest tokens cannot.
+// TestTokens: admins create and revoke room tokens; members cannot, and user
+// tokens come only from invite codes (M8).
 func TestTokens(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	admin := e.initServer(serverHeader() + staticMachine)
-	s := e.startServer(admin)
+	e.initServer(serverHeader() + staticMachine)
+	s := e.startServer("")
+	admin := e.admin
 
-	r := e.hostel("admin", "token", "create", "--name", "agent-1")
+	r := e.hostel("admin", "token", "create", "--name", "box", "--role", "room", "--machine", "home/box")
 	if r.code != 0 || !strings.HasPrefix(r.stdout, "hostel_") {
-		t.Fatalf("token create: %s", r)
+		t.Fatalf("room token create: %s", r)
 	}
-	guest := strings.TrimSpace(r.stdout)
-	if code := s.get("/v1/info", guest, nil); code != 200 {
-		t.Fatalf("guest token: GET /v1/info HTTP %d", code)
+	room := strings.TrimSpace(r.stdout)
+	if code := s.get("/v1/info", room, nil); code != 200 {
+		t.Fatalf("room token: GET /v1/info HTTP %d", code)
 	}
-	e.vars["HOSTEL_TOKEN"] = guest
-	if r := e.hostel("status"); r.code != 0 {
-		t.Fatalf("status with a guest token: %s", r)
+	if code := s.get("/v1/status", room, nil); code != 401 {
+		t.Fatalf("room token: GET /v1/status HTTP %d, want 401", code)
 	}
-	if r := e.hostel("admin", "token", "create", "--name", "x"); r.code != 1 || !strings.Contains(r.stderr, "needs an admin token") {
-		t.Fatalf("token create with a guest token: %s", r)
+	if r := e.hostel("admin", "token", "create", "--name", "agent", "--role", "guest"); r.code != 1 || !strings.Contains(r.stderr, "hostel config users invite") {
+		t.Fatalf("user token create: %s, want a refusal that names invites", r)
 	}
-	e.vars["HOSTEL_TOKEN"] = admin
 	if r := e.hostel("admin", "token", "create", "--name", "r", "--role", "room", "--machine", "home/nothing"); r.code != 1 || !strings.Contains(r.stderr, "static machine") {
 		t.Fatalf("room token for an unknown machine: %s", r)
 	}
+	e.useGuestToken()
+	if r := e.hostel("status"); r.code != 0 {
+		t.Fatalf("status with a member token: %s", r)
+	}
+	if r := e.hostel("admin", "token", "create", "--name", "x", "--role", "room", "--machine", "home/box"); r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
+		t.Fatalf("token create with a member token: %s", r)
+	}
+	e.vars["HOSTEL_TOKEN"] = admin
 	if r := e.hostel("admin", "token", "revoke", "2"); r.code != 0 {
 		t.Fatalf("token revoke: %s", r)
 	}
-	if code := s.get("/v1/info", guest, nil); code != 401 {
+	if code := s.get("/v1/info", room, nil); code != 401 {
 		t.Fatalf("revoked token: GET /v1/info HTTP %d, want 401", code)
 	}
 	if r := e.hostel("admin", "pubkey"); r.code != 0 || !strings.HasPrefix(r.stdout, "ssh-ed25519 ") {

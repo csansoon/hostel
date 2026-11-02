@@ -2,10 +2,8 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,11 +13,15 @@ import (
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
+// Token is a token with its effective role: for a user token, Name and Role
+// are the user's (admin or member); for a room token, Role is RoleRoom.
 type Token struct {
 	ID        int64
 	Name      string
 	Role      string
 	Machine   string
+	UserID    int64
+	Computer  string
 	CreatedAt time.Time
 }
 
@@ -28,17 +30,17 @@ func hashSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// CreateToken stores a new token and returns it with its secret. Only the
-// SHA-256 of the secret is stored, so the secret is shown only once.
-func (s *Store) CreateToken(ctx context.Context, name, role, machine string, now time.Time) (Token, string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+// CreateRoomToken stores a new room token for a machine and returns it with
+// its secret. Only the SHA-256 of the secret is stored, so the secret is shown
+// only once.
+func (s *Store) CreateRoomToken(ctx context.Context, name, machine string, now time.Time) (Token, string, error) {
+	secret, err := newSecret()
+	if err != nil {
 		return Token{}, "", err
 	}
-	secret := "hostel_" + base64.RawURLEncoding.EncodeToString(b)
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO tokens (name, role, machine, sha256, created_at) VALUES (?, ?, ?, ?, ?)`,
-		name, role, machine, hashSecret(secret), now.UnixMilli())
+		name, RoleRoom, machine, hashSecret(secret), now.UnixMilli())
 	if err != nil {
 		return Token{}, "", fmt.Errorf("insert token: %w", err)
 	}
@@ -46,16 +48,20 @@ func (s *Store) CreateToken(ctx context.Context, name, role, machine string, now
 	if err != nil {
 		return Token{}, "", err
 	}
-	return Token{ID: id, Name: name, Role: role, Machine: machine, CreatedAt: now}, secret, nil
+	return Token{ID: id, Name: name, Role: RoleRoom, Machine: machine, CreatedAt: now}, secret, nil
 }
 
 // TokenBySecret returns the token with this secret if it is not revoked.
 func (s *Store) TokenBySecret(ctx context.Context, secret string) (Token, error) {
 	var t Token
 	var created int64
+	var userID sql.NullInt64
+	var userName, userRole sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, role, machine, created_at FROM tokens WHERE sha256 = ? AND revoked_at IS NULL`,
-		hashSecret(secret)).Scan(&t.ID, &t.Name, &t.Role, &t.Machine, &created)
+		`SELECT t.id, t.name, t.role, t.machine, t.computer, t.created_at, u.id, u.name, u.role
+		FROM tokens t LEFT JOIN users u ON u.id = t.user_id AND u.removed_at IS NULL
+		WHERE t.sha256 = ? AND t.revoked_at IS NULL`,
+		hashSecret(secret)).Scan(&t.ID, &t.Name, &t.Role, &t.Machine, &t.Computer, &created, &userID, &userName, &userRole)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Token{}, ErrNotFound
 	}
@@ -63,6 +69,12 @@ func (s *Store) TokenBySecret(ctx context.Context, secret string) (Token, error)
 		return Token{}, fmt.Errorf("read token: %w", err)
 	}
 	t.CreatedAt = time.UnixMilli(created)
+	if t.Role == tokenUser {
+		if !userID.Valid {
+			return Token{}, ErrNotFound
+		}
+		t.UserID, t.Name, t.Role = userID.Int64, userName.String, userRole.String
+	}
 	return t, nil
 }
 

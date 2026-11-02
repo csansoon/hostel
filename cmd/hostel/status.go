@@ -19,7 +19,7 @@ func apiClient() (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client.New(g), nil
+	return client.New(g)
 }
 
 func statusCmd(args []string, stdout, stderr io.Writer) int {
@@ -38,7 +38,7 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "LEASE\tSTATE\tPLATFORM\tDEVICES\tPRIORITY\tGUEST\tROOM\tAGE\tEXPIRES\tTASK")
+	fmt.Fprintln(tw, "LEASE\tSTATE\tPLATFORM\tDEVICES\tPRIORITY\tUSER\tGUEST\tROOM\tAGE\tEXPIRES\tTASK")
 	for _, l := range st.Leases {
 		state := l.State
 		if l.State == protocol.LeaseQueued {
@@ -51,8 +51,12 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 		if !l.ExpiresAt.IsZero() {
 			expires = l.ExpiresAt.Local().Format(time.TimeOnly)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l.ID, state, l.Platform, strings.Join(l.Devices, ","),
-			l.Priority, l.Guest+":"+l.Repo, room, time.Since(l.CreatedAt).Round(time.Second), expires, l.Task)
+		user := l.User
+		if user == "" {
+			user = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l.ID, state, l.Platform, strings.Join(l.Devices, ","),
+			l.Priority, user, l.Guest+":"+l.Repo, room, time.Since(l.CreatedAt).Round(time.Second), expires, l.Task)
 	}
 	tw.Flush()
 	fmt.Fprintln(stdout)

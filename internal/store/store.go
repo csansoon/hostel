@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -12,12 +13,36 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
+
+// hostel_fold(name) is equal for two names exactly when strings.EqualFold
+// says so; SQLite's NOCASE folds ASCII letters only.
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("hostel_fold", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		s, _ := args[0].(string)
+		return foldName(s), nil
+	})
+}
+
+// foldName maps each rune to the smallest rune of its case-fold orbit, the
+// equivalence that strings.EqualFold uses.
+func foldName(s string) string {
+	return strings.Map(func(r rune) rune {
+		min := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < min {
+				min = f
+			}
+		}
+		return min
+	}, s)
+}
 
 // Store is the server database.
 type Store struct {

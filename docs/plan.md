@@ -297,7 +297,64 @@ starts it, reads its accessibility snapshot, clicks and types in it, and takes a
 screenshot; after the release, the app is gone and the desktop is clean. The
 Windows part gets its own done-when when the owner selects the machine.
 
-## M8. Hardening against backdoors (later; not required for version 1)
+## M8. Users and connection
+
+Owner decisions, 2026-10-30; design: `multiplayer.md`, sections 3 to 6 and 9.
+
+- Users with a unique name and a role (`admin`, `member`); tokens belong to a user
+  and a computer. Existing guest and admin tokens become users.
+- `hostel server init` asks for the server name, the public addresses, and the
+  owner's name, and prints the first admin invite code.
+- HTTPS on the API with the server's own certificate (TLS mode `self-signed`) or
+  none behind a proxy (`off`); the gateway reachable over the same address
+  (`/v1/gateway`).
+- Invite codes; `hostel connect <code>` with the pinned key; `hostel disconnect`;
+  a client without a connection accepts only `connect`.
+- `hostel config users` (`invite`, `code`, `set`, `remove`), with the rule of the
+  last admin.
+- The user on leases, queue entries, events, and in `hostel status`.
+- Queues: lanes `high`, `normal`, `low`, first in, first out; no aging. Admin
+  actions: release any lease, move a queued lease, change its lane; the user's
+  client prints who did it.
+
+Done when: the owner invites a coworker; the coworker connects with the code to the
+exe.dev server and to a test server that has only an IP address (TLS
+`self-signed`); `hostel status` shows the leases of both users; the owner ends the
+coworker's lease with `hostel release <lease>`, and the coworker's client says so.
+(Moving queue entries has its API and E2E test in M8 and its command in M10.)
+
+## M9. Remote configuration
+
+Design: `multiplayer.md`, section 7.
+
+- The configuration (providers, machines, settings) in the database with
+  revisions; the import from `server.toml`; changes apply without a restart.
+- Platforms in the database: the defaults (`ios`, `android`, `macos`, `windows`)
+  embedded in the binary; own platforms; `config platforms new|pull|push|reset|remove`.
+- `hostel config`, `config edit`, `config apply`, `config history`,
+  `config rooms`, `config providers`, `config settings`.
+- `hostel machine join <code>` (macOS, Linux, Windows) and `hostel machine
+  connect` (the former `hostel room connect`); provider login through the client.
+
+Done when: from the owner's computer, without a shell on the server, the owner
+adds a new machine with one command on it, adds a platform of their own and a
+lease for it runs on that machine, changes the machine's labels, and removes it.
+
+## M10. Status view
+
+Design: `multiplayer.md`, section 8.
+
+- `hostel status` (aliases `ls`, `rooms`): interactive and inline in a terminal,
+  plain text otherwise; updates on change (long poll on a status revision).
+- Room and queue details; `hostel room <name>` as plain text; the lease's jobs
+  from the room; hardware from the probe.
+- Admin actions in the view, with a confirmation.
+
+Done when: the owner sees a coworker's lease, opens its details with its running
+job, moves a queue entry, and ends a lease from the view; the same command in a
+pipe prints plain text.
+
+## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the

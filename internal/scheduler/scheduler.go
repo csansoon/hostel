@@ -81,13 +81,15 @@ type Slot struct {
 type Lease struct {
 	ID string
 	Request
-	Priority  int
-	CreatedAt time.Time
+	Priority int
+	// ManualPosition > 0: an admin placed the lease; it goes before the
+	// others, in this order.
+	ManualPosition int
+	CreatedAt      time.Time
 }
 
 type Input struct {
 	Now       time.Time
-	Aging     time.Duration
 	Machines  []Machine // configuration order
 	Providers []Provider
 	Rooms     []Room
@@ -144,13 +146,53 @@ type Output struct {
 	Waiting []Waiting
 }
 
-// EffectivePriority is min(high, priority + floor(wait / aging)).
-func EffectivePriority(priority int, created, now time.Time, aging time.Duration) int {
-	p := priority
-	if aging > 0 && now.After(created) {
-		p += int(now.Sub(created) / aging)
+// Order sorts queued leases (multiplayer.md, section 9). Each platform has
+// its own queue: leases that an admin placed first (by their manual position),
+// then the priority lane (high first), then the request time; there is no
+// aging. The queues are merged by their first leases (lane, then request
+// time), so an admin's placement never passes leases of another platform.
+func Order(leases []Lease) {
+	queues := map[string][]Lease{}
+	var platforms []string
+	for _, l := range leases {
+		if _, ok := queues[l.Platform]; !ok {
+			platforms = append(platforms, l.Platform)
+		}
+		queues[l.Platform] = append(queues[l.Platform], l)
 	}
-	return min(p, protocol.PriorityHigh)
+	for _, q := range queues {
+		sort.SliceStable(q, func(i, j int) bool {
+			a, b := q[i], q[j]
+			if (a.ManualPosition > 0) != (b.ManualPosition > 0) {
+				return a.ManualPosition > 0
+			}
+			if a.ManualPosition != b.ManualPosition {
+				return a.ManualPosition < b.ManualPosition
+			}
+			return before(a, b)
+		})
+	}
+	sort.Strings(platforms)
+	for i := range leases {
+		best := ""
+		for _, p := range platforms {
+			if len(queues[p]) > 0 && (best == "" || before(queues[p][0], queues[best][0])) {
+				best = p
+			}
+		}
+		leases[i], queues[best] = queues[best][0], queues[best][1:]
+	}
+}
+
+// before is the order without placements: lane, then request time.
+func before(a, b Lease) bool {
+	if a.Priority != b.Priority {
+		return a.Priority > b.Priority
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.ID < b.ID
 }
 
 // Serves reports whether the machine can ever satisfy the request.
@@ -216,20 +258,7 @@ func Schedule(in Input) Output {
 	sort.SliceStable(p.rooms, func(i, j int) bool { return p.rooms[i].ID < p.rooms[j].ID })
 
 	leases := slices.Clone(in.Leases)
-	eff := make(map[string]int, len(leases))
-	for _, l := range leases {
-		eff[l.ID] = EffectivePriority(l.Priority, l.CreatedAt, in.Now, in.Aging)
-	}
-	sort.SliceStable(leases, func(i, j int) bool {
-		a, b := leases[i], leases[j]
-		if eff[a.ID] != eff[b.ID] {
-			return eff[a.ID] > eff[b.ID]
-		}
-		if !a.CreatedAt.Equal(b.CreatedAt) {
-			return a.CreatedAt.Before(b.CreatedAt)
-		}
-		return a.ID < b.ID
-	})
+	Order(leases)
 
 	var out Output
 	positions := map[string]int{}

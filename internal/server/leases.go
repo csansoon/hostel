@@ -225,11 +225,21 @@ func (s *Server) leaseFor(w http.ResponseWriter, r *http.Request) (store.Lease, 
 		return l, false
 	}
 	tok := requestToken(r)
-	if tok.Role != protocol.RoleAdmin && tok.ID != l.TokenID {
-		writeError(w, http.StatusForbidden, "", "this lease belongs to another token")
+	if tok.Role != protocol.RoleAdmin && !s.ownLease(r, tok, l) {
+		writeError(w, http.StatusForbidden, "", "this lease belongs to another user; only an admin can change it")
 		return l, false
 	}
 	return l, true
+}
+
+// ownLease reports whether the lease belongs to the token's user (from any
+// of the user's computers).
+func (s *Server) ownLease(r *http.Request, tok store.Token, l store.Lease) bool {
+	if tok.ID == l.TokenID {
+		return true
+	}
+	owner, err := s.store.TokenUserID(r.Context(), l.TokenID)
+	return err == nil && tok.UserID != 0 && owner == tok.UserID
 }
 
 func (s *Server) handleGetLease(w http.ResponseWriter, r *http.Request) {
@@ -297,8 +307,9 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reason := "released by the guest"
-	if tok := requestToken(r); tok.ID != l.TokenID {
-		reason = "released by an admin (" + tok.Name + ")"
+	if tok := requestToken(r); !s.ownLease(r, tok, l) {
+		reason = "released by " + tok.Name + " (admin)"
+		s.store.AddEventBy(r.Context(), time.Now(), l.ID, 0, "lease", reason, tok.UserID)
 	}
 	if err := s.endLease(r.Context(), l.ID, reason); err != nil {
 		s.internalError(w, "release lease", err)

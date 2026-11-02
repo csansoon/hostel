@@ -37,7 +37,7 @@ func apiClient() (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client.New(g), nil
+	return client.New(g)
 }
 
 // openLease selects the lease of the worktree and records guest activity.

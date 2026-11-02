@@ -4,7 +4,9 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/tlspin"
 )
 
 // requestTimeout bounds each request; long polls set their own deadline.
@@ -24,10 +27,33 @@ type Client struct {
 	http  *http.Client
 }
 
-// New returns a client for the guest configuration.
-func New(g *config.Guest) *Client {
-	return &Client{base: strings.TrimSuffix(g.Server, "/"), token: g.Token, http: &http.Client{Timeout: requestTimeout}}
+// New returns a client for the connection. With a pinned key, it accepts
+// only a server with that TLS key.
+func New(g *config.Guest) (*Client, error) {
+	tlsConfig, err := TLSConfig(g)
+	if err != nil {
+		return nil, err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	return &Client{base: g.URL(), token: g.Token, http: &http.Client{Timeout: requestTimeout, Transport: transport}}, nil
 }
+
+// TLSConfig returns the TLS configuration of the connection (pinned key or
+// the system roots).
+func TLSConfig(g *config.Guest) (*tls.Config, error) {
+	if g.Key == "" {
+		return tlspin.ClientConfig(nil), nil
+	}
+	hash, err := tlspin.ParseFingerprint(g.Key)
+	if err != nil {
+		return nil, fmt.Errorf("the connection's key: %w; run \"hostel connect\" again", err)
+	}
+	return tlspin.ClientConfig(hash), nil
+}
+
+// Base is the server address of the client.
+func (c *Client) Base() string { return c.base }
 
 // APIError is an error response of the server.
 type APIError struct {
@@ -58,6 +84,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := c.http.Do(req)
+	if errors.Is(err, tlspin.ErrMismatch) {
+		return fmt.Errorf("the server at %s has another TLS key than the one that this computer pinned: it is not your Hostel server, or the server was set up again. Ask an admin; to trust the new server, run \"hostel connect\" with a new invite code", c.base)
+	}
 	if err != nil {
 		return fmt.Errorf("cannot reach the Hostel server at %s: %w", c.base, err)
 	}

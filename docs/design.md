@@ -50,9 +50,10 @@ One Go binary, `hostel`, for darwin, linux, and windows on amd64 and arm64.
 
 | Mode | Commands | Runs on |
 |---|---|---|
-| Guest | `hostel platforms`, `hostel acquire`, `hostel run`, ... | agent machines |
-| Admin | `hostel admin ...` | any machine with an admin token; `config` commands run locally |
-| Server | `hostel server init`, `hostel server run` | the owner's Mac, later a VPS |
+| Guest | `hostel connect`, `hostel platforms`, `hostel acquire`, `hostel run`, ... | agent machines (a user's computer) |
+| Config | `hostel config users ...` | any connected computer; changes need an admin (M8; `multiplayer.md`) |
+| Admin | `hostel admin ...` | room tokens, room control; `config check|schema` run locally |
+| Server | `hostel server init`, `hostel server invite`, `hostel server run` | the server machine |
 | Helper | `hostel room ...` (hidden from help) | rooms; the server uploads it |
 
 Rooms need no permanent daemon. Exception: a static room behind NAT runs
@@ -138,10 +139,12 @@ database stores runtime state.
 | `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
 | `room_platforms` | room_id, platform, scripts_sha256, provisioned_at |
 | `slots` | room_id, name, state, lease_id, cleanup_data, home |
-| `leases` | id, token_id, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
+| `leases` | id, token_id, manual_position, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
 | `lease_tunnels` | lease_id, name, room_port |
-| `tokens` | id, name, role, machine (for `room` tokens), sha256, created_at, revoked_at |
-| `events` | id, time, lease_id, room_id, kind, message |
+| `users` | id, name (unique, not case-sensitive), role (`admin` or `member`), created_at, removed_at (M8) |
+| `tokens` | id, name, role (`user` or `room`), machine (for `room` tokens), sha256, created_at, revoked_at, user_id, computer |
+| `invites` | id, kind (`user` or `computer`), secret_sha256, role, name, user_id, created_by, created_at, expires_at, used_at (M8) |
+| `events` | id, time, lease_id, room_id, kind, message, user_id (who caused it; 0: the server) |
 
 `rooms.home` is the room user's home directory from the probe. `leases.end_state`
 is the final state that a lease in `cleaning` goes to. `leases.tunnels`
@@ -240,11 +243,14 @@ after the pass. When an action fails in a way that changes the options (for exam
 a resume that returns "not found"), the worker updates the state and starts a new
 pass at once. A unit test is allowed for the scheduler (see `AGENTS.md`).
 
-**Effective priority.** `low` = 0, `normal` = 1 (default), `high` = 2. Effective
-priority = `min(2, priority + floor(wait time / aging))`, with `aging` default 10
-minutes. Order: effective priority (highest first), then request time. So an old
-`low` lease can pass a newer `high` lease. This is intended: it prevents
-starvation.
+**Order** (M8, owner decision 2026-10-30). Each lease has a lane: `low` = 0,
+`normal` = 1 (default), `high` = 2; an agent sets a lane only when the user asks
+for it. Order: leases that an admin placed (`manual_position` > 0, in that
+order), then the lane (high first), then the request time. There is no aging: an
+old `low` lease stays behind a new `normal` one. An admin places a queued lease
+first or before another lease of its platform (`POST /v1/leases/{id}/move`): the
+lease and the leases before it get manual positions, so they keep that order
+until they start. An admin can also change a queued lease's lane.
 
 **Candidate machines.** A machine is a candidate for a lease if all of these are
 true:
@@ -749,11 +755,15 @@ another relative path is relative to the directory of `server.toml`.
 
 ### Server (`server.toml`)
 
-`hostel server init` writes a commented template, a gateway host key, the server's
-own SSH key pair (`data_dir/server_ed25519`), and an empty `platforms_dir`. It
-creates the first admin token in the database and prints it once. If the guest
-config does not exist on the same machine, it writes it with this admin token (the
-owner's own machine). `hostel admin pubkey` prints the server's public key.
+`hostel server init` asks for the server name, the public addresses, and the
+owner's name (or takes `--server-id`, `--url`, `--user`, `--listen`, `--tls`), and
+writes a commented template with `tls = "self-signed"`, a gateway host key, the
+server's own SSH key pair (`data_dir/server_ed25519`), the TLS certificate, and an
+empty `platforms_dir`. When the server has no users, it makes the first admin
+invite and prints `hostel connect <code>` (M8). `hostel server invite [--role
+admin|member] [--name n]` makes an invite on the server machine without the API
+(for example when nobody can sign in as admin). `hostel admin pubkey` prints the
+server's public key.
 
 ```toml
 #:schema ./hostel.schema.json
@@ -797,11 +807,13 @@ Server-level keys and defaults:
 | Key | Default |
 |---|---|
 | `listen` | `127.0.0.1:7410` (HTTP API) |
-| `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen`; `gateway_public` can also be a `wss://<host>/v1/gateway` URL (section 13) |
+| `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen`, or `/v1/gateway` with `tls = "self-signed"` (the client adds the server address that it uses and its pinned key); `gateway_public` can also be a `wss://<host>/v1/gateway` URL (section 13) |
 | `data_dir` | `~/.local/share/hostel` |
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
 | `platforms_dir` | `~/.config/hostel/platforms` |
-| `idle_timeout`, `aging`, `poll_timeout`, `limit_retry` | `10m`, `10m`, `5m`, `2m` |
+| `idle_timeout`, `poll_timeout`, `limit_retry` | `10m`, `5m`, `2m` (`aging` was removed in M8; the key is an error) |
+| `tls` | `off`; `hostel server init` writes `self-signed` (the server's own certificate in `data_dir/tls_cert.pem`, `tls_key.pem`; clients pin its key) |
+| `public_urls` | `[]`: the addresses that clients use, in invite codes; port 0 becomes the listen port; empty: the listen address. Each is `https://` (also with `tls = "off"`: the proxy has TLS); `http://` only on loopback with `tls = "off"`, because clients send the invite secret and their token to it |
 | `port_process_offline` | `10m` (section 14) |
 | `intervals` | `{ scheduler = "10s", reconcile = "5m", tunnel_check = "30s" }` (short values in tests) |
 | `[mise]` | `idiomatic_tools = ["node", "python"]` (also when `[mise]` sets only other keys; `[]` turns idiomatic files off); `github_token` unset; `agent_device = true` |
@@ -1033,12 +1045,19 @@ and Hostel does not use another mise that the room has.
 
 ### Guest (`~/.config/hostel/config.toml`)
 
+`hostel connect` writes it (mode 0600):
+
 ```toml
-server = "http://127.0.0.1:7410"
+server_id = "acme"
+addresses = ["https://100.80.1.2:7410"]
+key = "sha256:q3J1...e8Q"      # the pinned TLS key; absent for a server behind a TLS proxy
 token = "..."
 ```
 
-`HOSTEL_SERVER` and `HOSTEL_TOKEN` override the file.
+The form before M8 (`server = "..."`, `token = "..."`) still works.
+
+`HOSTEL_SERVER`, `HOSTEL_TOKEN`, and `HOSTEL_SERVER_KEY` override the file. Without
+a connection, commands that need the server exit with 78 and print how to connect.
 
 ## 10. Guest flow
 
@@ -1118,7 +1137,12 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel agent-guide` | Prints short usage instructions for coding agents. |
 | `hostel screenshot [--device d] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
 
-Admin commands: `hostel admin token create|revoke`, `admin pubkey`,
+Connection and users (M8, `multiplayer.md`): `hostel connect <invite code>`,
+`hostel disconnect`, `hostel config users [invite|code|set|remove]` (`remove
+<name> --computer <computer>` removes one computer only), and
+`hostel release <lease>` (another user's lease: admins only).
+
+Admin commands: `hostel admin token create --role room|revoke`, `admin pubkey`,
 `admin lease release <lease-id>`, `admin room drain|undrain|repair|destroy <room>`,
 `admin config check|schema`. `hostel status` shows lease and room IDs.
 
@@ -1163,9 +1187,10 @@ Progress goes to stderr. The final result goes to stdout.
 
 ## 11. Server API
 
-All requests use `Authorization: Bearer <token>`. JSON in and out. A guest token
-can read and change only the leases that it created. An admin token can do
-everything. Any token can read `status` and `platforms`.
+All requests except `POST /v1/connect` use `Authorization: Bearer <token>`. JSON
+in and out. A user can read and change only their own leases (from any of their
+computers); an admin can do everything. Any user can read `status`, `platforms`,
+and `users`. Room tokens can only read `GET /v1/info`.
 
 | Method and path | Effect |
 |---|---|
@@ -1175,8 +1200,13 @@ everything. Any token can read `status` and `platforms`.
 | `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait` (at most 60 s and half of `poll_timeout`, so the guest polls again before the timeout). Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). |
 | `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
-| `POST /v1/leases/{id}/release` | Releases or cancels. |
-| `GET /v1/status` | Leases, rooms, queue. |
+| `POST /v1/leases/{id}/release` | Releases or cancels. For another user's lease (admin), the end reason is "released by <admin> (admin)". |
+| `POST /v1/leases/{id}/move`, `/priority` (admin) | Queue control (section 5): `{"first": true}` or `{"before": "<lease id>"}`; `{"priority": "low|normal|high"}`. HTTP 409 for a lease that is not queued. |
+| `GET /v1/status` | Leases (with their user), rooms, queue. |
+| `POST /v1/connect` (no token) | `{"secret", "name", "computer"}` from an invite code; returns `{"server_id", "user", "role", "token"}` once. HTTP 403 for an invalid code, 409 `name_taken`, 429 after 10 failures per minute. |
+| `GET /v1/me`, `DELETE /v1/me` | The token's user, role, and computer; `DELETE` revokes the token (`hostel disconnect`). |
+| `GET /v1/users`, `PATCH /v1/users/{name}`, `DELETE /v1/users/{name}`, `DELETE /v1/users/{name}/computers/{computer}` (admin to change) | Users with their computers; `{"role"}`; removal (tokens revoked, leases ended); removal of one computer (its tokens revoked; the user stays). The server keeps at least one admin (HTTP 409 `last_admin`). |
+| `POST /v1/invites` | `{"role", "name"}` (admin) or `{"self": true}` (a code for the caller's other computer); returns the code, the key fingerprint, and the expiry (24 hours). |
 | `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. `repair` takes `{"accept_host_key": bool}` and is for broken static rooms; `destroy` is for on-demand rooms without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "machine"}` (`machine` = `<provider>/<machine>`, only for `room`). A new token is returned once. |
 
@@ -1602,14 +1632,21 @@ Warm policy after cleanup:
 
 ## 18. Security
 
-- **Tokens.** Stored in the `tokens` table as SHA-256 only. Roles: `admin`,
-  `guest`, and `room` (only for `hostel room connect`). `HOSTEL_TOKEN` or the guest
-  config file holds the token.
+- **Users and tokens** (M8). A user has a unique name and a role, `admin` or
+  `member` (`multiplayer.md`, section 6). A user token belongs to a user and a
+  computer; it comes only from an invite code (`hostel connect`). Room tokens
+  (only for `hostel room connect`) have no user. Tokens and invite secrets are
+  stored as SHA-256 only. The client's connection file
+  (`~/.config/hostel/config.toml`, mode 0600) or `HOSTEL_TOKEN` holds the token.
+  `POST /v1/connect` allows 10 failed attempts per source address and minute.
 - **Lease keys.** The guest generates a key pair for each lease. The private key
   never leaves the guest.
 - **Provider credentials.** Only the server has them.
-- **Transport.** On a Mac, the server listens on `127.0.0.1` only. On a VPS, the
-  HTTP API needs TLS (a reverse proxy such as Caddy, or Go's `autocert`). Both SSH
+- **Transport.** With `tls = "self-signed"`, the API and the WebSocket gateway are
+  HTTPS with the server's own certificate; clients check its key against the
+  key that they pinned from the invite code (`internal/tlspin`), not the name or a
+  chain. With `tls = "off"`, the server is behind a proxy with TLS (exe.dev,
+  Caddy), and clients use the system roots. Both SSH
   legs (guest to gateway, gateway to room) are encrypted. The gateway sees the
   plaintext.
 - **Revocation.** Guests have no room credentials. Ending a lease closes its
@@ -1642,7 +1679,7 @@ What a guest can still do in version 1:
 - Put a changed binary in a shared cache (`hostel/cache`, mise tools, package
   stores). The next lease runs it.
 
-Planned hardening (milestone M8):
+Planned hardening (milestone M11):
 
 1. **One OS user for each lease.** `prepare` creates a new user without
    administrator rights; cleanup stops all its processes (`pkill -u`), removes its

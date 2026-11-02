@@ -3,6 +3,7 @@ package guest
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/csansoon/hostel/internal/client"
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
@@ -45,9 +47,13 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse the gateway host key: %w", err)
 	}
-	nc, err := gateway.Dial(ctx, st.Access.GatewayAddress, dialTimeout)
+	addr, tlsConfig, err := gatewayTarget(st.Access.GatewayAddress)
 	if err != nil {
-		return nil, fmt.Errorf("%w: connect to the Hostel gateway at %s: %v", ErrConnLost, st.Access.GatewayAddress, err)
+		return nil, err
+	}
+	nc, err := gateway.Dial(ctx, addr, tlsConfig, dialTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("%w: connect to the Hostel gateway at %s: %v", ErrConnLost, addr, err)
 	}
 	nc.SetDeadline(time.Now().Add(dialTimeout))
 	c, chans, reqs, err := ssh.NewClientConn(nc, st.Access.GatewayAddress, &ssh.ClientConfig{
@@ -65,6 +71,22 @@ func Dial(ctx context.Context, st *State, purpose string) (*Conn, error) {
 }
 
 func (c *Conn) Close() error { return c.client.Close() }
+
+// gatewayTarget resolves the gateway address against the connection's server
+// and returns the TLS configuration: the pinned key when the gateway is on
+// the server, else the system roots.
+func gatewayTarget(addr string) (string, *tls.Config, error) {
+	g, err := config.LoadGuest()
+	if err != nil {
+		return "", nil, err
+	}
+	addr, same := gateway.Resolve(addr, g.URL())
+	if !same {
+		return addr, nil, nil
+	}
+	tlsConfig, err := client.TLSConfig(g)
+	return addr, tlsConfig, err
+}
 
 // helperCmd returns the command line of a helper command for the lease slot.
 // The gateway wraps it in the helper, which runs it with sh, or with

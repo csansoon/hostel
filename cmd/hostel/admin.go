@@ -110,7 +110,7 @@ func adminTokenCreate(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel admin token create", stderr)
 	req := protocol.CreateTokenRequest{}
 	fs.StringVar(&req.Name, "name", "", "token name (required), for example the agent machine")
-	fs.StringVar(&req.Role, "role", protocol.RoleGuest, "guest, admin, or room")
+	fs.StringVar(&req.Role, "role", protocol.RoleRoom, "room (users connect with invite codes)")
 	fs.StringVar(&req.Machine, "machine", "", "for a room token: <provider>/<machine>")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return 2

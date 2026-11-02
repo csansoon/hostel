@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,10 +94,15 @@ type env struct {
 	vars map[string]string
 	// cwd is the directory of guest commands (the test repository, if any).
 	cwd string
-	// admin is the admin token from "server init".
+	// admin is the token of the first admin user, made when the server first
+	// starts ("hostel server invite" and "hostel connect"); key is the
+	// server's pinned TLS key ("" for a server without its own TLS).
 	admin string
+	key   string
 	// slotUsers are extra users of static room containers (slot users).
 	slotUsers []string
+	// guests counts the member users of useGuestToken.
+	guests int
 }
 
 func newEnv(t *testing.T) *env {
@@ -162,23 +168,64 @@ func (e *env) hostel(args ...string) result {
 	return result{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 
-var adminTokenRE = regexp.MustCompile(`admin token \(shown only once\): (\S+)`)
+var (
+	inviteRE = regexp.MustCompile(`hostel connect (hostel1-\S+)`)
+	tokenRE  = regexp.MustCompile(`(?m)^token = '?"?([^'"\n]+)`)
+	keyRE    = regexp.MustCompile(`(?m)^key = '?"?([^'"\n]+)`)
+)
 
-// init runs "hostel server init" and returns the admin token. Guest commands
-// use the admin token unless a test sets HOSTEL_TOKEN.
+// init runs "hostel server init". The first admin connects when the server
+// first starts (startServer); guest commands use the admin's token unless a
+// test sets HOSTEL_TOKEN. It returns "" (the token does not exist yet).
 func (e *env) init() string {
 	e.t.Helper()
-	r := e.hostel("server", "init")
+	r := e.hostel("server", "init", "--user", "admin")
 	if r.code != 0 {
 		e.t.Fatalf("server init: %s", r)
 	}
-	m := adminTokenRE.FindStringSubmatch(r.stdout)
-	if m == nil {
-		e.t.Fatalf("server init printed no admin token: %s", r)
+	return ""
+}
+
+// connect runs "hostel connect" with the code on a new computer (its own home)
+// and returns the token and the pinned key from its connection file.
+func (e *env) connect(code, name string) (string, string) {
+	e.t.Helper()
+	home := e.t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, hostelBin, "connect", code, "--name", name)
+	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir()}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		e.t.Fatalf("hostel connect as %s: %v\n%s", name, err, out)
 	}
-	e.vars["HOSTEL_TOKEN"] = m[1]
-	e.admin = m[1]
-	return m[1]
+	data, err := os.ReadFile(filepath.Join(home, ".config", "hostel", "config.toml"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	tok, key := tokenRE.FindSubmatch(data), keyRE.FindSubmatch(data)
+	if tok == nil {
+		e.t.Fatalf("the connection file has no token:\n%s", data)
+	}
+	if key == nil {
+		return string(tok[1]), ""
+	}
+	return string(tok[1]), string(key[1])
+}
+
+// newUser invites a user (as the admin) and connects it; it returns its token.
+func (e *env) newUser(name, role string) string {
+	e.t.Helper()
+	saved := e.vars["HOSTEL_TOKEN"]
+	e.vars["HOSTEL_TOKEN"] = e.admin
+	r := e.mustHostel("config", "users", "invite", "--name", name, "--role", role)
+	e.vars["HOSTEL_TOKEN"] = saved
+	m := inviteRE.FindStringSubmatch(r.stdout)
+	if m == nil {
+		e.t.Fatalf("users invite printed no code: %s", r)
+	}
+	tok, _ := e.connect(m[1], name)
+	return tok
 }
 
 // writeConfig replaces server.toml.
@@ -214,6 +261,7 @@ func serverHeaderWith(agentDevice bool) string {
 	rand.Read(b)
 	id := fmt.Sprintf("e2e%x", b)
 	return fmt.Sprintf("server_id = %q\nlisten = \"127.0.0.1:0\"\ngateway_listen = \"127.0.0.1:0\"\nhelper_dir = %q\n"+
+		"tls = \"self-signed\"\npublic_urls = [\"https://127.0.0.1:0\"]\n"+
 		"intervals = { scheduler = \"1s\", reconcile = \"2s\", tunnel_check = \"1s\" }\nmise = { agent_device = %t }\n", id, helperDir, agentDevice)
 }
 
@@ -222,6 +270,7 @@ type serverProc struct {
 	cmd     *exec.Cmd
 	addr    string
 	gateway string
+	url     string
 	token   string
 	done    chan struct{}
 	log     *syncBuffer
@@ -278,10 +327,25 @@ func (e *env) startServer(token string) *serverProc {
 		if json.Unmarshal(data, &a) != nil {
 			return false
 		}
-		s.addr, s.gateway = a.Listen, a.Gateway
+		s.addr, s.gateway, s.url = a.Listen, a.Gateway, a.URL
 		return true
 	})
-	e.vars["HOSTEL_SERVER"] = "http://" + s.addr
+	e.vars["HOSTEL_SERVER"] = s.url
+	if e.admin == "" {
+		r := e.mustHostel("server", "invite", "--role", "admin", "--name", "admin")
+		m := inviteRE.FindStringSubmatch(r.stdout)
+		if m == nil {
+			e.t.Fatalf("server invite printed no code: %s", r)
+		}
+		e.admin, e.key = e.connect(m[1], "admin")
+	}
+	s.token = e.admin
+	if e.key != "" {
+		e.vars["HOSTEL_SERVER_KEY"] = e.key
+	}
+	if e.vars["HOSTEL_TOKEN"] == "" {
+		e.vars["HOSTEL_TOKEN"] = e.admin
+	}
 	return s
 }
 
@@ -321,14 +385,17 @@ func (s *serverProc) do(method, path, token string, out any) int {
 
 func (s *serverProc) send(method, path, token string, body io.Reader, out any) int {
 	s.e.t.Helper()
-	req, err := http.NewRequest(method, "http://"+s.addr+path, body)
+	req, err := http.NewRequest(method, s.url+path, body)
 	if err != nil {
 		s.e.t.Fatal(err)
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// The test reaches its own server; the client commands check the pinned key.
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		s.e.t.Fatalf("GET %s: %v", path, err)
@@ -427,13 +494,16 @@ func (s *serverProc) restart() *serverProc {
 	return s.e.startServer(s.token)
 }
 
-// useGuestToken creates a guest token and makes guest commands use it. The
-// server's admin token stays in serverProc.token.
+// useGuestToken makes a member user and makes guest commands use its token.
+// The admin's token stays in serverProc.token. Each call makes a new user.
 func (e *env) useGuestToken() string {
 	e.t.Helper()
-	e.vars["HOSTEL_TOKEN"] = e.admin
-	r := e.mustHostel("admin", "token", "create", "--name", "guest")
-	e.vars["HOSTEL_TOKEN"] = strings.TrimSpace(r.stdout)
+	e.guests++
+	name := "guest"
+	if e.guests > 1 {
+		name = fmt.Sprintf("guest%d", e.guests)
+	}
+	e.vars["HOSTEL_TOKEN"] = e.newUser(name, "member")
 	return e.vars["HOSTEL_TOKEN"]
 }
 

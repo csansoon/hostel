@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/csansoon/hostel/internal/provider"
 	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/store"
+	"github.com/csansoon/hostel/internal/tlspin"
 	"github.com/csansoon/hostel/internal/version"
 )
 
@@ -44,6 +46,12 @@ type Server struct {
 	rooms *gateway.RoomConns
 	// gatewayAddr is the gateway address for guests.
 	gatewayAddr string
+	// tlsKeyHash is the hash of the own TLS key (TLS self-signed), for invites.
+	tlsKeyHash []byte
+	// publicURLs are the public_urls with the real listen port.
+	publicURLs []string
+	// connectLimit limits failed POST /v1/connect attempts.
+	connectLimit connectLimiter
 	// uploads has the platform files and hashes for each platform and OS.
 	uploads map[string]map[string]roomops.Platform
 	// lastReconcile is used only by the loop goroutine.
@@ -119,12 +127,37 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.Listen, err)
 	}
+	if cfg.TLS == config.TLSSelfSigned {
+		if err := tlspin.EnsureCert(cfg.DataDir); err != nil {
+			ln.Close()
+			return err
+		}
+		cert, hash, err := tlspin.Load(cfg.DataDir)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		s.tlsKeyHash = hash
+		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+	}
 	gwLn, err := net.Listen("tcp", cfg.GatewayListen)
 	if err != nil {
 		ln.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.GatewayListen, err)
 	}
-	s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr(), ln.Addr())
+	listenURL := "http://" + ln.Addr().String()
+	if cfg.TLS == config.TLSSelfSigned {
+		listenURL = "https://" + ln.Addr().String()
+	}
+	s.publicURLs = ResolveURLs(cfg.PublicURLs, ln.Addr().String())
+	if len(s.publicURLs) == 0 {
+		log.Warn("server.toml has no public_urls; invite codes have only the listen address", "url", listenURL)
+		s.publicURLs = []string{listenURL}
+	}
+	s.gatewayAddr = cfg.GatewayPublic
+	if cfg.GatewayPublic != config.GatewayPath {
+		s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr(), ln.Addr())
+	}
 	s.gateway = gateway.New(gatewayKey, gwBackend{s}, rooms, log)
 	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 2)
@@ -133,7 +166,7 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 	defer gwLn.Close()
 
 	if err := writeJSONFile(filepath.Join(cfg.DataDir, "server.json"),
-		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String()}); err != nil {
+		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String(), URL: listenURL}); err != nil {
 		httpServer.Close()
 		return err
 	}
@@ -178,6 +211,16 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/rooms/{id}/undrain", s.auth(s.admin(s.handleRoomDrain(false))))
 	mux.HandleFunc("POST /v1/rooms/{id}/repair", s.auth(s.admin(s.handleRoomRepair)))
 	mux.HandleFunc("POST /v1/rooms/{id}/destroy", s.auth(s.admin(s.handleRoomDestroy)))
+	mux.HandleFunc("POST /v1/connect", s.handleConnect)
+	mux.HandleFunc("GET /v1/me", s.auth(s.handleMe))
+	mux.HandleFunc("DELETE /v1/me", s.auth(s.handleDisconnect))
+	mux.HandleFunc("GET /v1/users", s.auth(s.handleUsers))
+	mux.HandleFunc("POST /v1/invites", s.auth(s.handleInvite))
+	mux.HandleFunc("PATCH /v1/users/{name}", s.auth(s.admin(s.handleSetUser)))
+	mux.HandleFunc("DELETE /v1/users/{name}", s.auth(s.admin(s.handleRemoveUser)))
+	mux.HandleFunc("DELETE /v1/users/{name}/computers/{computer}", s.auth(s.admin(s.handleRemoveComputer)))
+	mux.HandleFunc("POST /v1/leases/{id}/move", s.auth(s.admin(s.handleMove)))
+	mux.HandleFunc("POST /v1/leases/{id}/priority", s.auth(s.admin(s.handlePriority)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	// The gateway's SSH over a WebSocket; SSH authenticates inside.

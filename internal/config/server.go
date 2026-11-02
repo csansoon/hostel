@@ -32,18 +32,56 @@ var (
 // slot, or tunnel name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
+// TLSProblem describes what is wrong with a tls value, or returns "".
+func TLSProblem(mode string) string {
+	if mode == TLSOff || mode == TLSSelfSigned {
+		return ""
+	}
+	return fmt.Sprintf("%q must be %q (the server's own certificate, pinned by clients) or %q (behind a proxy with TLS)", mode, TLSSelfSigned, TLSOff)
+}
+
+// PublicURLProblem describes what is wrong with a public_urls entry for the
+// tls mode, or returns "". With tls = "off" the server is behind a proxy with
+// TLS, so the addresses are https:// too, except on loopback.
+func PublicURLProblem(u, tlsMode string) string {
+	pu, err := url.Parse(u)
+	switch {
+	case err != nil || pu.Host == "" || (pu.Path != "" && pu.Path != "/") || pu.User != nil || strings.ContainsAny(u, "?#"):
+		return fmt.Sprintf("%q is not a server address such as https://hostel.example.com or https://100.80.1.2:7410", u)
+	case pu.Scheme != "https" && !(pu.Scheme == "http" && tlsMode == TLSOff && isLoopback(pu.Hostname())):
+		// Clients send the invite secret and their token to this address: in
+		// clear text only on this computer.
+		return fmt.Sprintf("%q must start with https:// (http:// only for a local server on 127.0.0.1 or localhost)", u)
+	}
+	return ""
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ValidServerID reports whether s is a valid server_id.
+func ValidServerID(s string) bool { return serverIDRE.MatchString(s) }
+
 // Server is server.toml. After LoadServer, all defaults are set and each machine
 // has the values that it inherits from its provider.
 type Server struct {
-	ServerID           string               `toml:"server_id"`
-	Listen             string               `toml:"listen"`
-	GatewayListen      string               `toml:"gateway_listen"`
-	GatewayPublic      string               `toml:"gateway_public"`
-	DataDir            string               `toml:"data_dir"`
-	HelperDir          string               `toml:"helper_dir"`
-	PlatformsDir       string               `toml:"platforms_dir"`
-	IdleTimeout        *Duration            `toml:"idle_timeout"`
-	Aging              *Duration            `toml:"aging"`
+	ServerID      string    `toml:"server_id"`
+	Listen        string    `toml:"listen"`
+	GatewayListen string    `toml:"gateway_listen"`
+	GatewayPublic string    `toml:"gateway_public"`
+	TLS           string    `toml:"tls"`
+	PublicURLs    []string  `toml:"public_urls"`
+	DataDir       string    `toml:"data_dir"`
+	HelperDir     string    `toml:"helper_dir"`
+	PlatformsDir  string    `toml:"platforms_dir"`
+	IdleTimeout   *Duration `toml:"idle_timeout"`
+	// Aging is read only to reject it (removed in M8); the schema omits it.
+	Aging              *Duration            `toml:"aging" schema:"-"`
 	PollTimeout        *Duration            `toml:"poll_timeout"`
 	LimitRetry         *Duration            `toml:"limit_retry"`
 	PortProcessOffline *Duration            `toml:"port_process_offline"`
@@ -55,6 +93,15 @@ type Server struct {
 	ProviderOrder []string             `toml:"-"`
 	Platforms     map[string]*Platform `toml:"-"`
 }
+
+// GatewayPath is the gateway (SSH in a WebSocket) on the API listener.
+const GatewayPath = "/v1/gateway"
+
+// TLS modes of the API listener.
+const (
+	TLSOff        = "off"
+	TLSSelfSigned = "self-signed"
+)
 
 type Intervals struct {
 	Scheduler   *Duration `toml:"scheduler"`
@@ -213,13 +260,21 @@ func (s *Server) resolve() error {
 	}
 	if s.ServerID == "" {
 		el.add("server_id", "required; for example \"%s\"", "mymac")
-	} else if !serverIDRE.MatchString(s.ServerID) {
+	} else if !ValidServerID(s.ServerID) {
 		el.add("server_id", "%q must match %s", s.ServerID, serverIDRE)
 	}
 	setStr(&s.Listen, "127.0.0.1:7410")
 	setStr(&s.GatewayListen, "127.0.0.1:7422")
+	// With its own TLS, the server gives guests the gateway on the API address
+	// that they use (the path only; the client adds its server address).
+	if s.TLS == TLSSelfSigned {
+		setStr(&s.GatewayPublic, GatewayPath)
+	}
 	setStr(&s.GatewayPublic, s.GatewayListen)
 	for _, a := range []struct{ key, v string }{{"listen", s.Listen}, {"gateway_listen", s.GatewayListen}, {"gateway_public", s.GatewayPublic}} {
+		if a.key == "gateway_public" && a.v == GatewayPath {
+			continue
+		}
 		if a.key == "gateway_public" && IsWebSocketURL(a.v) {
 			if u, err := url.Parse(a.v); err != nil || u.Host == "" {
 				el.add(a.key, "%q is not a ws:// or wss:// URL", a.v)
@@ -240,7 +295,20 @@ func (s *Server) resolve() error {
 	s.PlatformsDir = absPath(s.PlatformsDir, base, home)
 
 	setDur(&s.IdleTimeout, 10*time.Minute)
-	setDur(&s.Aging, 10*time.Minute)
+	// Queues have no aging since M8 (owner decision, 2026-10-30).
+	if s.Aging != nil {
+		el.add("aging", "removed in M8: each queue is first in, first out inside its priority lane; delete the key")
+	}
+	if s.TLS == "" {
+		s.TLS = TLSOff
+	} else if p := TLSProblem(s.TLS); p != "" {
+		el.add("tls", "%s", p)
+	}
+	for i, u := range s.PublicURLs {
+		if p := PublicURLProblem(u, s.TLS); p != "" {
+			el.add(fmt.Sprintf("public_urls[%d]", i), "%s", p)
+		}
+	}
 	setDur(&s.PollTimeout, 5*time.Minute)
 	setDur(&s.LimitRetry, 2*time.Minute)
 	setDur(&s.PortProcessOffline, 10*time.Minute)
@@ -254,7 +322,7 @@ func (s *Server) resolve() error {
 		key string
 		v   *Duration
 	}{
-		{"idle_timeout", s.IdleTimeout}, {"aging", s.Aging}, {"poll_timeout", s.PollTimeout},
+		{"idle_timeout", s.IdleTimeout}, {"poll_timeout", s.PollTimeout},
 		{"limit_retry", s.LimitRetry}, {"port_process_offline", s.PortProcessOffline},
 		{"intervals.scheduler", s.Intervals.Scheduler}, {"intervals.reconcile", s.Intervals.Reconcile},
 		{"intervals.tunnel_check", s.Intervals.TunnelCheck},

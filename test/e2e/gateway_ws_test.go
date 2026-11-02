@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestGatewayWebSocket: with a ws:// gateway_public, guests reach the gateway
+// TestGatewayWebSocket: with a wss:// gateway_public, guests reach the gateway
 // over a WebSocket on the API listener (a server that only HTTPS reaches, for
 // example on exe.dev): commands, the port process (a tunnel), and the system
 // ssh through "hostel gateway-proxy".
@@ -17,7 +17,7 @@ func TestGatewayWebSocket(t *testing.T) {
 	t.Parallel()
 	free := freePort(t)
 	f := newFixture(t, &fixtureOpts{
-		serverKeys: "gateway_public = \"ws://127.0.0.1:0/v1/gateway\"\n",
+		serverKeys: "gateway_public = \"wss://127.0.0.1:0/v1/gateway\"\n",
 		files: map[string]string{
 			"hostel.toml": tunnelRepoConfig,
 			".gitignore":  ".env\n",
@@ -34,7 +34,7 @@ func TestGatewayWebSocket(t *testing.T) {
 	}
 	r := f.e.mustHostel("ssh-config")
 	cfg, err := os.ReadFile(strings.TrimSpace(r.stdout))
-	if err != nil || !strings.Contains(string(cfg), "ProxyCommand ") || !strings.Contains(string(cfg), " gateway-proxy 'ws://127.0.0.1:") {
+	if err != nil || !strings.Contains(string(cfg), "ProxyCommand ") || !strings.Contains(string(cfg), " gateway-proxy 'wss://127.0.0.1:") {
 		t.Fatalf("ssh_config for a WebSocket gateway: %q, %v", cfg, err)
 	}
 	if r := f.e.mustHostel("ssh", "--", "echo $HOSTEL_SLOT"); strings.TrimSpace(r.stdout) != "a" {

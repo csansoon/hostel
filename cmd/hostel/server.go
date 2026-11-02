@@ -1,51 +1,133 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/config"
-	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/server"
 	"github.com/csansoon/hostel/internal/store"
+	"github.com/csansoon/hostel/internal/tlspin"
 )
 
 func serverCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) >= 1 {
 		switch args[0] {
 		case "init":
-			return serverInit(args[1:], stdout, stderr)
+			return serverInit(args[1:], os.Stdin, stdout, stderr)
+		case "invite":
+			return serverInvite(args[1:], stdout, stderr)
 		case "run":
 			return serverRun(args[1:], stderr)
 		}
 	}
-	fmt.Fprintln(stderr, "hostel: usage: hostel server init|run [--config server.toml]")
+	fmt.Fprintln(stderr, "hostel: usage: hostel server init|invite|run [--config server.toml]")
 	return 2
 }
 
-func serverInit(args []string, stdout, stderr io.Writer) int {
+// initOptions are the answers of "hostel server init" (flags, or questions
+// in a terminal).
+type initOptions struct {
+	serverID string
+	listen   string
+	tls      string
+	urls     []string
+	user     string
+}
+
+func serverInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel server init", stderr)
 	path := serverConfigFlag(fs)
+	var o initOptions
+	var urls cli.StringList
+	fs.StringVar(&o.serverID, "server-id", "", "the server's name, [a-z0-9]{1,20} (default: from the host name)")
+	fs.StringVar(&o.listen, "listen", "", "the API address (default 127.0.0.1:7410)")
+	fs.StringVar(&o.tls, "tls", config.TLSSelfSigned, "self-signed (own certificate) or off (behind a proxy with TLS)")
+	fs.Var(&urls, "url", "an address that clients use, for example https://100.80.1.2:7410 (more than once for several)")
+	fs.StringVar(&o.user, "user", "", "your name, for the first admin")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return 2
 	}
-	if err := initServer(*path, stdout); err != nil {
+	o.urls = urls
+	if isTerminal(stdin) {
+		ask(stdin, stdout, &o)
+	}
+	if err := initServer(*path, o, stdout); err != nil {
 		fmt.Fprintln(stderr, "hostel: server init:", err)
 		return 1
 	}
 	return 0
 }
 
-func initServer(path string, stdout io.Writer) error {
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// ask asks for the values that the flags did not give.
+func ask(stdin io.Reader, stdout io.Writer, o *initOptions) {
+	in := bufio.NewScanner(stdin)
+	line := func(prompt, def string) string {
+		if def != "" {
+			prompt += " [" + def + "]"
+		}
+		fmt.Fprintf(stdout, "  %s: ", prompt)
+		if !in.Scan() {
+			return def
+		}
+		if v := strings.TrimSpace(in.Text()); v != "" {
+			return v
+		}
+		return def
+	}
+	fmt.Fprintln(stdout, "Hostel server setup")
+	fmt.Fprintln(stdout)
+	if o.serverID == "" {
+		o.serverID = line("Name of this server", config.DefaultServerID())
+	}
+	if len(o.urls) == 0 {
+		fmt.Fprintln(stdout, "  Addresses that clients use, one per line, empty line to end")
+		fmt.Fprintln(stdout, "  (for example https://hostel.example.com or https://100.80.1.2:7410):")
+		for {
+			fmt.Fprint(stdout, "  > ")
+			if !in.Scan() || strings.TrimSpace(in.Text()) == "" {
+				break
+			}
+			o.urls = append(o.urls, strings.TrimSpace(in.Text()))
+		}
+	}
+	if o.user == "" {
+		o.user = line("Your name", gitUserName())
+	}
+	fmt.Fprintln(stdout)
+}
+
+func gitUserName() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "config", "user.name").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func initServer(path string, o initOptions, stdout io.Writer) error {
 	file, err := resolveServerConfig(path)
 	if err != nil {
 		return err
@@ -54,7 +136,43 @@ func initServer(path string, stdout io.Writer) error {
 		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(file, []byte(config.Template(config.DefaultServerID())), 0o644); err != nil {
+		if o.serverID == "" {
+			o.serverID = config.DefaultServerID()
+		}
+		if o.user = strings.TrimSpace(o.user); o.user != "" {
+			if p := server.NameProblem(o.user); p != "" {
+				return fmt.Errorf("--user: %s", p)
+			}
+		}
+		if !config.ValidServerID(o.serverID) {
+			return fmt.Errorf("the server name %q must be 1 to 20 lowercase letters and digits, for example %q", o.serverID, config.DefaultServerID())
+		}
+		if o.listen == "" {
+			o.listen = "127.0.0.1:7410"
+		}
+		if _, _, err := net.SplitHostPort(o.listen); err != nil {
+			return fmt.Errorf("--listen: %q is not a host:port address, for example 0.0.0.0:7410", o.listen)
+		}
+		if p := config.TLSProblem(o.tls); p != "" {
+			return fmt.Errorf("--tls: %s", p)
+		}
+		if len(o.urls) == 0 {
+			scheme := "https"
+			if o.tls == config.TLSOff {
+				scheme = "http"
+			}
+			u := scheme + "://" + o.listen
+			if config.PublicURLProblem(u, o.tls) != "" {
+				return fmt.Errorf("--url: give the address that clients use, for example --url https://hostel.example.com (the proxy with TLS)")
+			}
+			o.urls = []string{u}
+		}
+		for _, u := range o.urls {
+			if p := config.PublicURLProblem(u, o.tls); p != "" {
+				return fmt.Errorf("--url: %s", p)
+			}
+		}
+		if err := os.WriteFile(file, []byte(config.Template(o.serverID, o.listen, o.tls, o.urls)), 0o644); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "wrote %s\n", file)
@@ -90,6 +208,11 @@ func initServer(path string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "created %s\n", filepath.Join(paths.DataDir, k.file))
 		}
 	}
+	if paths.TLS == config.TLSSelfSigned {
+		if err := tlspin.EnsureCert(paths.DataDir); err != nil {
+			return err
+		}
+	}
 	pub, err := os.ReadFile(filepath.Join(paths.DataDir, server.ServerKeyFile+".pub"))
 	if err != nil {
 		return err
@@ -102,36 +225,62 @@ func initServer(path string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
-	n, err := st.CountTokens(ctx)
+	users, err := st.Users(ctx)
+	st.Close()
 	if err != nil {
 		return err
 	}
-	if n > 0 {
-		fmt.Fprintln(stdout, "the database already has tokens; no new admin token")
+	if len(users) > 0 {
+		fmt.Fprintln(stdout, "the server has users already; \"hostel server invite\" makes a new admin invite")
 		return nil
 	}
-	_, secret, err := st.CreateToken(ctx, "admin", protocol.RoleAdmin, "", time.Now())
+	code, fingerprint, err := server.LocalInvite(ctx, paths, store.Invite{Kind: store.InviteUser, Role: store.RoleAdmin, Name: o.user})
 	if err != nil {
-		return err
+		fmt.Fprintf(stdout, "no admin invite yet: %v\nAfter that, run \"hostel server invite\".\n", err)
+		return nil
 	}
-	fmt.Fprintf(stdout, "admin token (shown only once): %s\n", secret)
-
-	guestFile, err := config.GuestPath()
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(guestFile); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(guestFile), 0o755); err != nil {
-			return err
-		}
-		body := fmt.Sprintf("server = %q\ntoken = %q\n", "http://"+paths.Listen, secret)
-		if err := os.WriteFile(guestFile, []byte(body), 0o600); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "wrote %s with the admin token\n", guestFile)
-	}
+	printInvite(stdout, "Connect your computer as the first admin. Run this on your computer:", code, fingerprint)
 	return nil
+}
+
+func printInvite(w io.Writer, intro, code, fingerprint string) {
+	fmt.Fprintf(w, "\n%s\n\n  hostel connect %s\n\n", intro, code)
+	if fingerprint != "" {
+		fmt.Fprintf(w, "Server key: %s\n", fingerprint)
+	}
+	fmt.Fprintln(w, "The code works once, for 24 hours.")
+}
+
+// serverInvite is "hostel server invite" on the server machine: an invite
+// without the API (for example when nobody can sign in as admin).
+func serverInvite(args []string, stdout, stderr io.Writer) int {
+	fs := cli.NewFlagSet("hostel server invite", stderr)
+	path := serverConfigFlag(fs)
+	role := fs.String("role", store.RoleAdmin, "admin or member")
+	name := fs.String("name", "", "the user's name (default: the name that the user gives at connect)")
+	if _, err := cli.Parse(fs, args); err != nil {
+		return 2
+	}
+	if *role != store.RoleAdmin && *role != store.RoleMember {
+		fmt.Fprintln(stderr, "hostel: --role must be admin or member")
+		return 2
+	}
+	file, err := resolveServerConfig(*path)
+	if err == nil {
+		var paths config.Paths
+		if paths, err = config.ReadPaths(file); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			var code, fingerprint string
+			code, fingerprint, err = server.LocalInvite(ctx, paths, store.Invite{Kind: store.InviteUser, Role: *role, Name: *name})
+			if err == nil {
+				printInvite(stdout, "Run this on the user's computer:", code, fingerprint)
+				return 0
+			}
+		}
+	}
+	fmt.Fprintln(stderr, "hostel: server invite:", err)
+	return 1
 }
 
 func serverRun(args []string, stderr io.Writer) int {

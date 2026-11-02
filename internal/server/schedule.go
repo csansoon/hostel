@@ -102,7 +102,7 @@ func (s *Server) schedule(ctx context.Context) error {
 		}
 		byID[l.ID] = l
 		p := s.cfg.Platforms[l.Platform]
-		queued = append(queued, scheduler.Lease{ID: l.ID, Priority: l.Priority, CreatedAt: l.CreatedAt,
+		queued = append(queued, scheduler.Lease{ID: l.ID, Priority: l.Priority, ManualPosition: l.ManualPosition, CreatedAt: l.CreatedAt,
 			Request: scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS, Labels: l.RequiredLabels,
 				PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh, Exclusive: exclusive(p, l.RequiredLabels)}})
 	}
@@ -143,7 +143,7 @@ func (s *Server) schedule(ctx context.Context) error {
 		srooms = append(srooms, sr)
 	}
 	now := time.Now()
-	out := scheduler.Schedule(scheduler.Input{Now: now, Aging: s.cfg.Aging.D(), Machines: s.schedMachines(),
+	out := scheduler.Schedule(scheduler.Input{Now: now, Machines: s.schedMachines(),
 		Providers: s.schedProviders(), Rooms: srooms, Leases: queued, Full: s.full.current(s.cfg.LimitRetry.D())})
 	for _, id := range out.Evict {
 		s.log.Info("evict an idle room to make space", "room_id", id)

@@ -21,7 +21,7 @@ func requestToken(r *http.Request) store.Token {
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if requestToken(r).Role != protocol.RoleAdmin {
-			writeError(w, http.StatusForbidden, "", "this request needs an admin token")
+			writeError(w, http.StatusForbidden, "", "only an admin can do this; ask an admin of the server")
 			return
 		}
 		next(w, r)
@@ -82,10 +82,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read leases", err)
 		return
 	}
+	users, err := s.store.TokenUserNames(ctx)
+	if err != nil {
+		s.internalError(w, "read users", err)
+		return
+	}
 	out.Leases = []protocol.LeaseStatus{}
 	for _, l := range leases {
 		out.Leases = append(out.Leases, protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
-			Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), Guest: l.GuestHost,
+			Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
 			Repo: l.Repo, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
 			ExpiresAt: l.ExpiresAt})
 	}
@@ -101,23 +106,17 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "name is required")
 		return
 	}
-	switch req.Role {
-	case protocol.RoleAdmin, protocol.RoleGuest:
-		if req.Machine != "" {
-			writeError(w, http.StatusBadRequest, "", "machine is only for room tokens")
-			return
-		}
-	case protocol.RoleRoom:
-		m := s.cfg.Machine(req.Machine)
-		if m == nil || m.Kind != config.ProviderStatic {
-			writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a room token needs machine = <provider>/<machine> of a static machine; %q is not one", req.Machine))
-			return
-		}
-	default:
-		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("unknown role %q; use admin, guest, or room", req.Role))
+	// Users get their tokens with invite codes (hostel connect).
+	if req.Role != protocol.RoleRoom {
+		writeError(w, http.StatusBadRequest, "", "only room tokens are created here; invite users with \"hostel config users invite\"")
 		return
 	}
-	tok, secret, err := s.store.CreateToken(r.Context(), req.Name, req.Role, req.Machine, time.Now())
+	m := s.cfg.Machine(req.Machine)
+	if m == nil || m.Kind != config.ProviderStatic {
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a room token needs machine = <provider>/<machine> of a static machine; %q is not one", req.Machine))
+		return
+	}
+	tok, secret, err := s.store.CreateRoomToken(r.Context(), req.Name, req.Machine, time.Now())
 	if err != nil {
 		s.internalError(w, "create token", err)
 		return

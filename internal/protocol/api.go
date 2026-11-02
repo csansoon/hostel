@@ -2,11 +2,12 @@ package protocol
 
 import "time"
 
-// Token roles (design, section 18).
+// Roles: users are admins or members (multiplayer.md, section 6); room
+// tokens have RoleRoom.
 const (
-	RoleAdmin = "admin"
-	RoleGuest = "guest"
-	RoleRoom  = "room"
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+	RoleRoom   = "room"
 )
 
 // Info is the response of GET /v1/info.
@@ -27,6 +28,8 @@ type Error struct {
 type Addresses struct {
 	Listen  string `json:"listen"`
 	Gateway string `json:"gateway"`
+	// URL is the API on the listener: https:// with the server's own TLS.
+	URL string `json:"url"`
 }
 
 // Status is the response of GET /v1/status.
@@ -45,6 +48,7 @@ type LeaseStatus struct {
 	Devices   []string  `json:"devices"`
 	Task      string    `json:"task"`
 	Priority  string    `json:"priority"`
+	User      string    `json:"user"`
 	Guest     string    `json:"guest"`
 	Repo      string    `json:"repo"`
 	Provider  string    `json:"provider,omitempty"`
@@ -187,4 +191,68 @@ func PriorityName(p int) string {
 		}
 	}
 	return "normal"
+}
+
+// ConnectRequest is the body of POST /v1/connect (no bearer token).
+type ConnectRequest struct {
+	Secret   []byte `json:"secret"`
+	Name     string `json:"name"`
+	Computer string `json:"computer"`
+}
+
+// ConnectResponse returns the new token once.
+type ConnectResponse struct {
+	ServerID string `json:"server_id"`
+	User     string `json:"user"`
+	Role     string `json:"role"`
+	Token    string `json:"token"`
+}
+
+// Me is the response of GET /v1/me.
+type Me struct {
+	ServerID string `json:"server_id"`
+	User     string `json:"user"`
+	Role     string `json:"role"`
+	Computer string `json:"computer"`
+}
+
+// User is one entry of GET /v1/users.
+type User struct {
+	Name      string    `json:"name"`
+	Role      string    `json:"role"`
+	Computers []string  `json:"computers"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// InviteRequest is the body of POST /v1/invites: a new user with Role and an
+// optional Name (admin), or with Self a code that adds a computer for the
+// caller (any user).
+type InviteRequest struct {
+	Role string `json:"role,omitempty"`
+	Name string `json:"name,omitempty"`
+	Self bool   `json:"self,omitempty"`
+}
+
+// InviteResponse has the code once.
+type InviteResponse struct {
+	Code        string    `json:"code"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// SetUserRequest is the body of PATCH /v1/users/{name}.
+type SetUserRequest struct {
+	Role string `json:"role"`
+}
+
+// MoveRequest is the body of POST /v1/leases/{id}/move (admin): the lease goes
+// first, or before another queued lease of its platform.
+type MoveRequest struct {
+	First  bool   `json:"first,omitempty"`
+	Before string `json:"before,omitempty"`
+}
+
+// PriorityRequest is the body of POST /v1/leases/{id}/priority (admin).
+type PriorityRequest struct {
+	Priority string `json:"priority"`
 }

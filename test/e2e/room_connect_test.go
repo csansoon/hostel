@@ -58,7 +58,8 @@ func (r *roomConnect) stop() {
 
 // TestRoomConnect: a static room behind NAT (connect = true). The server
 // reaches the room's SSH server only through the room's outbound connection to
-// the gateway, here over the WebSocket gateway. A guest token and a token of
+// the gateway, here over the WebSocket gateway on the server's own HTTPS (the
+// pinned key). A user token and a token of
 // another machine cannot connect, and a revoked token loses its connection. The room is unreachable without the
 // connection; when the room connects, the server probes it at once (here
 // reconcile runs only at the start).
@@ -69,7 +70,7 @@ func TestRoomConnect(t *testing.T) {
 	c := e.startStaticRoom("box")
 	e.usePlatform("fakedevice")
 	header := strings.Replace(serverHeader(), `reconcile = "2s"`, `reconcile = "1h"`, 1)
-	e.writeConfig(header + `gateway_public = "ws://127.0.0.1:0/v1/gateway"
+	e.writeConfig(header + `
 
 [providers.home]
 kind = "static"
@@ -87,7 +88,7 @@ platforms = ["fakedevice"]
 connect = true
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	server := "http://" + s.addr
+	server := s.url
 	sshAddr := fmt.Sprintf("127.0.0.1:%d", c.port)
 	s.waitRoom("home/box", protocol.RoomBroken, roomReady)
 
@@ -99,8 +100,12 @@ connect = true
 		}
 		return f
 	}
-	// A guest token is not a room token.
-	guest := e.startRoomConnect(server, tokenFile("--name", "not-a-room"), sshAddr)
+	// A user token is not a room token.
+	userFile := filepath.Join(e.home, "user-token")
+	if err := os.WriteFile(userFile, []byte(e.admin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guest := e.startRoomConnect(server, userFile, sshAddr)
 	e.waitFor("the guest token refused", time.Minute, func() bool {
 		return strings.Contains(guest.output(), "the gateway refused the connection")
 	})
@@ -116,7 +121,7 @@ connect = true
 	boxToken := tokenFile("--name", "box", "--role", "room", "--machine", "home/box")
 	room := e.startRoomConnect(server, boxToken, sshAddr)
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if !strings.Contains(room.output(), "connected to the gateway at ws://127.0.0.1:") {
+	if !strings.Contains(room.output(), "connected to the gateway at wss://127.0.0.1:") {
 		t.Fatalf("room connect output: %s", room.output())
 	}
 	e.useGuestToken()
@@ -143,11 +148,11 @@ connect = true
 		t.Fatalf("lease after the connection came back: %s", l.State)
 	}
 
-	// Revoking the room token (ID 4: after the admin token and the tokens
-	// above) closes its live connection at once.
+	// Revoking the room token (ID 3: after the admin's token and the room
+	// token of home/other) closes its live connection at once.
 	guestToken := e.vars["HOSTEL_TOKEN"]
 	e.vars["HOSTEL_TOKEN"] = e.admin
-	e.mustHostel("admin", "token", "revoke", "4")
+	e.mustHostel("admin", "token", "revoke", "3")
 	e.vars["HOSTEL_TOKEN"] = guestToken
 	e.waitFor("the revoked token's connection closed", time.Minute, func() bool {
 		return strings.Contains(room.output(), "the server refused the room token")
