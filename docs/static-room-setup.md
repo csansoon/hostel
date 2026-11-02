@@ -16,6 +16,11 @@ Mac.
 In M2, the server reaches the room Mac over the local network. A room behind NAT
 that a remote server uses needs `hostel room connect` (M5).
 
+Since M9, `hostel machine join` does the user, the server key, and the
+connection service for you (`deploy-vps.md`, section 6). The sections below
+describe the same steps by hand, and the steps that only a person can do
+(Remote Login, Xcode, the desktop session).
+
 ## 1. Requirements
 
 - Apple silicon. macOS 26.

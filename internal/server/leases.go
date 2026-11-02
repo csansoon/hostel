@@ -79,7 +79,11 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	p := s.cfg.Platforms[req.Platform]
+	// A configuration or platform change takes schedMu for its checks and its
+	// swap: the checks of the lease and its insert see one configuration.
+	s.schedMu.Lock()
+	defer s.schedMu.Unlock()
+	p := s.config().Platforms[req.Platform]
 	if p == nil {
 		writeError(w, http.StatusUnprocessableEntity, protocol.CodeUnknownPlatform,
 			fmt.Sprintf("unknown platform %q; run \"hostel platforms\" for the list", req.Platform))
@@ -251,7 +255,7 @@ func (s *Server) handleGetLease(w http.ResponseWriter, r *http.Request) {
 	wait, _ := time.ParseDuration(r.URL.Query().Get("wait"))
 	// last_poll_at is set at the start of the poll, so a poll must end before
 	// poll_timeout; the guest then polls again.
-	wait = min(wait, maxWait, s.cfg.PollTimeout.D()/2)
+	wait = min(wait, maxWait, s.config().PollTimeout.D()/2)
 	// Only the owner's polls keep a queued lease alive; an admin can look
 	// without that effect.
 	if requestToken(r).ID == l.TokenID {
@@ -364,11 +368,11 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 		TunnelPorts:        ports,
 		RoomOS:             room.OS,
 		RoomArch:           room.Arch,
-		TunnelCheck:        s.cfg.Intervals.TunnelCheck.D().String(),
-		PortProcessOffline: s.cfg.PortProcessOffline.D().String(),
+		TunnelCheck:        s.config().Intervals.TunnelCheck.D().String(),
+		PortProcessOffline: s.config().PortProcessOffline.D().String(),
 		ReadyAt:            l.ReadyAt,
 		ExpiresAt:          l.ExpiresAt,
-		IdleExpiresAt:      l.LastActivityAt.Add(s.cfg.IdleTimeout.D()),
+		IdleExpiresAt:      l.LastActivityAt.Add(s.config().IdleTimeout.D()),
 	}
 	return out
 }

@@ -42,9 +42,11 @@ func nscMain(args []string) {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "auth":
-		if os.Getenv("FAKE_LOGGED_OUT") == "1" {
+		if loggedOut() {
 			nscFail("You are not logged in. Run `nsc login`.")
 		}
+	case "login":
+		fakeLogin("nsc")
 	case "create":
 		nscCreate(rest)
 	case "list":
@@ -373,4 +375,34 @@ func nscPortForward(args []string) {
 			<-done
 		}()
 	}
+}
+
+// loggedOut: FAKE_LOGGED_OUT is "1" and no login completed
+// (FAKE_STATE_DIR/logged-in).
+func loggedOut() bool {
+	if os.Getenv("FAKE_LOGGED_OUT") != "1" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(os.Getenv("FAKE_STATE_DIR"), "logged-in"))
+	return err != nil
+}
+
+// fakeLogin is "login --browser=false": it prints an address, as the real
+// CLIs do, and ends when the test approves the login (the file
+// FAKE_STATE_DIR/login-approved), or after 2 minutes.
+func fakeLogin(cli string) {
+	dir := os.Getenv("FAKE_STATE_DIR")
+	fmt.Printf("Visit https://cloud.namespace.so/login/fake-%s to log in.\n", cli)
+	end := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(end) {
+		if _, err := os.Stat(filepath.Join(dir, "login-approved")); err == nil {
+			if err := os.WriteFile(filepath.Join(dir, "logged-in"), nil, 0o644); err != nil {
+				nscFail(err.Error())
+			}
+			fmt.Println("Logged in.")
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	nscFail("login timed out")
 }

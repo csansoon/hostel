@@ -274,9 +274,9 @@ The server runs the provider's login and passes the address to the client
 | Change | Effect |
 |---|---|
 | New machine, provider, or platform | Available to the scheduler at once. |
-| Changed labels, platforms, env, tools, limits | New leases use the new values. A room provisions again after its current lease when its tools or platforms changed. |
-| Changed `spec` of an on-demand machine | Its rooms are destroyed when they have no lease. |
-| Removed machine or provider | Its rooms get no new leases. Active leases continue; then the room is destroyed (on-demand) or forgotten (static). |
+| Changed machine settings, platforms, or `mise` settings | New leases use the new values. When a room is free, a static room provisions again and an on-demand room is destroyed (a new one starts when a lease needs it). |
+| Removed machine | Static: refused while its room has an active lease (drain the room first: a removed machine has no settings left for the lease's cleanup); a free room is retired. On demand: refused while the machine has rooms (the provider destroys a room through its machine's settings); destroy them first with `hostel config rooms destroy <room>`. |
+| Removed provider | Refused while it has on-demand rooms: remove its machines first. |
 
 ## 8. The status view (M10)
 

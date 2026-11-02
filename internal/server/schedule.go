@@ -32,26 +32,26 @@ func platformFiles(p *config.Platform, osName string) []string {
 	return files
 }
 
-// loadPlatformUploads hashes each platform directory for each OS once at start.
-// Configuration changes, including platform scripts, need a restart.
-func (s *Server) loadPlatformUploads() error {
-	s.uploads = map[string]map[string]roomops.Platform{}
-	for name, p := range s.cfg.Platforms {
-		s.uploads[name] = map[string]roomops.Platform{}
+// platformUploads hashes each platform directory for each OS.
+func platformUploads(cfg *config.Server) (map[string]map[string]roomops.Platform, error) {
+	out := map[string]map[string]roomops.Platform{}
+	for name, p := range cfg.Platforms {
+		out[name] = map[string]roomops.Platform{}
 		for _, osName := range config.OSNames {
 			up, err := roomops.PlatformUpload(p.Dir, platformFiles(p, osName), osName)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			s.uploads[name][osName] = up
+			out[name][osName] = up
 		}
 	}
-	return nil
+	return out, nil
 }
 
 func (s *Server) schedMachines() []scheduler.Machine {
 	var out []scheduler.Machine
-	for _, m := range s.cfg.Machines() {
+	lc := s.live.Load()
+	for _, m := range lc.cfg.Machines() {
 		pool := -1
 		for _, sl := range m.Slots {
 			if pool < 0 || len(sl.Ports) < pool {
@@ -60,7 +60,7 @@ func (s *Server) schedMachines() []scheduler.Machine {
 		}
 		out = append(out, scheduler.Machine{
 			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), OS: m.OS, Platforms: m.Platforms,
-			CanResume: s.providers[m.Provider].Capabilities(m.Name).CanStop,
+			CanResume: lc.providers[m.Provider].Capabilities(m.Name).CanStop,
 			Labels:    m.Labels, PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
 			MaxLease: m.MaxLease.D(), MaxLifetime: m.MaxLifetime.D(),
 		})
@@ -70,8 +70,8 @@ func (s *Server) schedMachines() []scheduler.Machine {
 
 func (s *Server) schedProviders() []scheduler.Provider {
 	var out []scheduler.Provider
-	for _, name := range s.cfg.ProviderOrder {
-		p := s.cfg.Providers[name]
+	for _, name := range s.config().ProviderOrder {
+		p := s.config().Providers[name]
 		sp := scheduler.Provider{Name: name}
 		if p.MaxRooms != nil {
 			sp.MaxRooms = *p.MaxRooms
@@ -90,6 +90,8 @@ func (s *Server) schedProviders() []scheduler.Provider {
 
 // schedule runs one scheduler pass and applies its assignments.
 func (s *Server) schedule(ctx context.Context) error {
+	s.schedMu.Lock()
+	defer s.schedMu.Unlock()
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
 		return err
@@ -100,8 +102,11 @@ func (s *Server) schedule(ctx context.Context) error {
 		if l.State != protocol.LeaseQueued {
 			continue
 		}
+		p := s.config().Platforms[l.Platform]
+		if p == nil {
+			continue // removed while the lease was queued; it waits for the platform
+		}
 		byID[l.ID] = l
-		p := s.cfg.Platforms[l.Platform]
 		queued = append(queued, scheduler.Lease{ID: l.ID, Priority: l.Priority, ManualPosition: l.ManualPosition, CreatedAt: l.CreatedAt,
 			Request: scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS, Labels: l.RequiredLabels,
 				PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh, Exclusive: exclusive(p, l.RequiredLabels)}})
@@ -123,15 +128,19 @@ func (s *Server) schedule(ctx context.Context) error {
 	}
 	roomByID := map[int64]store.Room{}
 	var srooms []scheduler.Room
+	lc := s.live.Load()
 	for _, r := range rooms {
 		roomByID[r.ID] = r
-		m := s.cfg.Machine(r.Provider + "/" + r.Machine)
+		m := lc.cfg.Machine(r.Provider + "/" + r.Machine)
 		if m == nil {
 			continue
 		}
-		sr := scheduler.Room{ID: r.ID, Machine: m.Key(), State: r.State, Drained: r.Drained, CreatedAt: r.CreatedAt, Ready: map[string]bool{}}
+		// A room whose machine settings changed gets no new lease; it
+		// provisions again when it is free (refreshRooms).
+		stale := r.ConfigSHA256 != "" && r.ConfigSHA256 != machineHash(lc, m)
+		sr := scheduler.Room{ID: r.ID, Machine: m.Key(), State: r.State, Drained: r.Drained || stale, CreatedAt: r.CreatedAt, Ready: map[string]bool{}}
 		for _, rp := range rps {
-			if rp.RoomID == r.ID && rp.ScriptsSHA256 == s.uploads[rp.Platform][m.OS].Hash {
+			if rp.RoomID == r.ID && rp.ScriptsSHA256 == s.platformUploads()[rp.Platform][m.OS].Hash {
 				sr.Ready[rp.Platform] = true
 			}
 		}
@@ -144,7 +153,7 @@ func (s *Server) schedule(ctx context.Context) error {
 	}
 	now := time.Now()
 	out := scheduler.Schedule(scheduler.Input{Now: now, Machines: s.schedMachines(),
-		Providers: s.schedProviders(), Rooms: srooms, Leases: queued, Full: s.full.current(s.cfg.LimitRetry.D())})
+		Providers: s.schedProviders(), Rooms: srooms, Leases: queued, Full: s.full.current(s.config().LimitRetry.D())})
 	for _, id := range out.Evict {
 		s.log.Info("evict an idle room to make space", "room_id", id)
 		if _, err := s.store.SetRoomState(ctx, id, []string{protocol.RoomRunning, protocol.RoomStopped}, protocol.RoomDestroying,
@@ -154,7 +163,7 @@ func (s *Server) schedule(ctx context.Context) error {
 	}
 	for _, a := range out.Assignments {
 		l := byID[a.LeaseID]
-		m := s.cfg.Machine(a.Machine)
+		m := s.config().Machine(a.Machine)
 		// The ports come first: a lease whose tunnels cannot be placed fails
 		// before any room is resumed or created for it.
 		ports, err := tunnelPorts(l.Tunnels, slotConfig(m, a.Slots[0]).Ports)
@@ -192,7 +201,7 @@ func (s *Server) schedule(ctx context.Context) error {
 			// The room row exists before the provider call, with the name that
 			// the provider gets (design, section 7, ownership).
 			room, err = s.store.InsertRoom(ctx, store.Room{Provider: m.Provider, Machine: m.Name, State: protocol.RoomCreating, OS: m.OS},
-				s.cfg.ServerID, slotNames(m), now)
+				s.config().ServerID, slotNames(m), now)
 			if err != nil {
 				return err
 			}
@@ -265,7 +274,10 @@ func fileExists(path string) bool {
 // brokenReason tells a waiting guest why: if every room of its candidate
 // machines is broken, the reason names the room's broken reason (R7).
 func (s *Server) brokenReason(l store.Lease, rooms []store.Room, fallback string) string {
-	p := s.cfg.Platforms[l.Platform]
+	p := s.config().Platforms[l.Platform]
+	if p == nil {
+		return fmt.Sprintf("the platform %s was removed from the server", l.Platform)
+	}
 	cands := scheduler.Candidates(s.schedMachines(), scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS,
 		Labels: l.RequiredLabels, PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh})
 	reason := ""

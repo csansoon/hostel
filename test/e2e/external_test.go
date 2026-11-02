@@ -102,7 +102,7 @@ func TestExternalProvider(t *testing.T) {
 	f.waitSlotFreeOn(room)
 	// Changed platform scripts: provision runs again when the next lease uses the room.
 	f.e.writePlatform("fakedevice", map[string]string{"provision.linux.sh": "#!/bin/sh\necho \"provision linux changed\" >> \"$HOSTEL_CACHE_DIR/fakedevice.log\"\n"})
-	f.s = f.s.restart()
+	f.e.pushPlatform("fakedevice")
 	f.acquire()
 	if got := f.roomSh(room, "grep -c '^provision linux changed' "+log); got != "1" {
 		t.Fatalf("provision after a script change ran %s times, want 1", got)
@@ -148,6 +148,28 @@ func TestWarmDestroy(t *testing.T) {
 	f.acquire()
 	f.e.mustHostel("release")
 	f.waitNoCloudRooms()
+}
+
+// TestRemoveOnDemandMachine (M9): an on-demand machine with a room cannot be
+// removed (the provider destroys a room through its machine's settings); the
+// admin destroys the free room, and then removes the machine.
+func TestRemoveOnDemandMachine(t *testing.T) {
+	t.Parallel()
+	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
+	f.acquire()
+	room := f.cloudRooms()[0].Name
+	f.e.mustHostel("release")
+	f.waitSlotFreeOn(room)
+	if r := f.e.adminHostel("config", "rooms", "remove", "cloud/small"); r.code != 1 || !strings.Contains(r.stderr, "destroy it first (hostel config rooms destroy "+room) {
+		t.Fatalf("remove an on-demand machine with a room: %s", r)
+	}
+	if r := f.e.adminHostel("config", "rooms", "destroy", room); r.code != 0 {
+		t.Fatalf("destroy the room: %s", r)
+	}
+	f.waitNoCloudRooms()
+	if r := f.e.adminHostel("config", "rooms", "remove", "cloud/small"); r.code != 0 {
+		t.Fatalf("remove the machine without rooms: %s", r)
+	}
 }
 
 // TestStopResume: a room of a provider that can stop is stopped after

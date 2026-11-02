@@ -41,11 +41,12 @@ var commands = []command{
 	{name: "status", summary: "Show all leases, rooms, and the queue", run: statusCmd},
 	{name: "release", summary: "End the lease", run: guest.Release},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents", run: guest.AgentGuide},
-	{name: "config", summary: "The server configuration: users (admins change it)", run: configCmd},
+	{name: "config", summary: "The server configuration: machines, providers, settings, users (admins change it)", run: configCmd},
 	{name: "admin", summary: "Admin commands: room tokens, leases, rooms, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
 	{name: "ports", hidden: true, run: guest.Ports},
 	{name: "gateway-proxy", hidden: true, run: guest.GatewayProxy},
+	{name: "machine", summary: "On a room machine: join a server (hostel machine join <code>)", run: machineCmd},
 	{name: "room", hidden: true, run: roomCmd},
 }
 
@@ -86,7 +87,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func needsConnection(name string, args []string) bool {
 	switch name {
 	// The others report the missing connection themselves.
-	case "connect", "disconnect", "server", "room", "agent-guide", "ports", "gateway-proxy":
+	case "connect", "disconnect", "server", "room", "machine", "agent-guide", "ports", "gateway-proxy":
 		return false
 	case "admin":
 		// "admin config check|schema" is local; without a subcommand, admin

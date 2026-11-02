@@ -193,6 +193,7 @@ func initServer(path string, o initOptions, stdout io.Writer) error {
 	if err := os.MkdirAll(paths.DataDir, 0o700); err != nil {
 		return err
 	}
+	// "hostel admin config check" of a server.toml from before M9 reads it.
 	if err := os.MkdirAll(paths.PlatformsDir, 0o755); err != nil {
 		return err
 	}
@@ -294,16 +295,13 @@ func serverRun(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
-	cfg, err := config.LoadServer(file)
-	if err != nil {
-		fmt.Fprintln(stderr, "hostel: the server does not start: configuration errors:")
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
-	if err := server.Run(ctx, cfg, log); err != nil {
+	if err := server.Run(ctx, file, log); errors.Is(err, server.ErrConfig) {
+		fmt.Fprintln(stderr, "hostel: the server does not start:", err)
+		return 1
+	} else if err != nil {
 		fmt.Fprintln(stderr, "hostel: server:", err)
 		return 1
 	}

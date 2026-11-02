@@ -77,8 +77,9 @@ func Template(serverID, listen, tlsMode string, publicURLs []string) string {
 		urls[i] = fmt.Sprintf("%q", u)
 	}
 	return `#:schema ./hostel.schema.json
-# Hostel server configuration. Check it with "hostel admin config check".
-# docs/design.md, section 9, describes all keys.
+# Hostel server: the keys that the server needs on this machine. Check the
+# file with "hostel admin config check"; docs/design.md, section 9, describes
+# all keys.
 
 server_id = "` + serverID + `"   # [a-z0-9]{1,20}; part of the names of created rooms
 listen = "` + listen + `"
@@ -90,18 +91,9 @@ public_urls = [` + strings.Join(urls, ", ") + `]
 
 # gateway_listen = "127.0.0.1:7422"  # SSH gateway
 # data_dir = "~/.local/share/hostel"
-# platforms_dir = "~/.config/hostel/platforms"
 
-# Add at least one provider. A static machine is a real host. Give its user the
-# server's public key (data_dir/server_ed25519.pub) in authorized_keys.
-#
-# [providers.home]
-# kind = "static"
-#
-# [providers.home.machines.macbook]
-# address = "hostel@macbook.local"
-# os = "macos"
-# platforms = ["ios"]
-# labels = ["xcode-26.5"]
+# The providers, machines, settings, and platforms are in the server's
+# database: an admin changes them from a client with "hostel config edit" and
+# "hostel config platforms" (docs/design.md, sections 8 and 9).
 `
 }

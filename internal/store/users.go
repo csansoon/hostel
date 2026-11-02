@@ -45,12 +45,15 @@ type User struct {
 const (
 	InviteUser     = "user"
 	InviteComputer = "computer"
+	InviteMachine  = "machine"
 )
 
 type Invite struct {
-	Kind      string
-	Role      string
-	Name      string
+	Kind string
+	Role string
+	Name string
+	// Machine is the machine of a machine invite (JSON).
+	Machine   string
 	UserID    int64
 	CreatedBy int64
 	ExpiresAt time.Time
@@ -131,9 +134,9 @@ func (s *Store) CreateInvite(ctx context.Context, inv Invite, now time.Time) ([]
 	if _, err := rand.Read(secret); err != nil {
 		return nil, err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO invites (kind, secret_sha256, role, name, user_id, created_by, created_at, expires_at)
-		VALUES (?, ?, ?, ?, NULLIF(?, 0), NULLIF(?, 0), ?, ?)`,
-		inv.Kind, hashSecret(string(secret)), inv.Role, inv.Name, inv.UserID, inv.CreatedBy, now.UnixMilli(), inv.ExpiresAt.UnixMilli())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO invites (kind, secret_sha256, role, name, user_id, created_by, created_at, expires_at, machine)
+		VALUES (?, ?, ?, ?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?)`,
+		inv.Kind, hashSecret(string(secret)), inv.Role, inv.Name, inv.UserID, inv.CreatedBy, now.UnixMilli(), inv.ExpiresAt.UnixMilli(), inv.Machine)
 	if err != nil {
 		return nil, fmt.Errorf("insert invite: %w", err)
 	}
@@ -152,7 +155,7 @@ func (s *Store) UseInvite(ctx context.Context, secret []byte, name, computer str
 		var kind, role, invName string
 		var userID sql.NullInt64
 		err := tx.QueryRowContext(ctx, `SELECT id, kind, role, name, user_id FROM invites
-			WHERE secret_sha256 = ? AND used_at IS NULL AND expires_at > ?`, hashSecret(string(secret)), now.UnixMilli()).
+			WHERE secret_sha256 = ? AND used_at IS NULL AND expires_at > ? AND kind != 'machine'`, hashSecret(string(secret)), now.UnixMilli()).
 			Scan(&id, &kind, &role, &invName, &userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrInviteInvalid
@@ -194,6 +197,40 @@ func (s *Store) UseInvite(ctx context.Context, secret []byte, name, computer str
 	}
 	tok.Name, tok.Role, tok.UserID, tok.Computer, tok.CreatedAt = u.Name, u.Role, u.ID, computer, now
 	return u, tok, tokSecret, nil
+}
+
+// MachineInvite returns a valid machine invite (without using it): its ID,
+// its machine (JSON), and its creator. ErrInviteInvalid if there is none.
+func (s *Store) MachineInvite(ctx context.Context, secret []byte, now time.Time) (int64, string, int64, error) {
+	var id int64
+	var machine string
+	var createdBy sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT id, machine, created_by FROM invites
+		WHERE secret_sha256 = ? AND used_at IS NULL AND expires_at > ? AND kind = 'machine'`, hashSecret(string(secret)), now.UnixMilli()).
+		Scan(&id, &machine, &createdBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", 0, ErrInviteInvalid
+	}
+	return id, machine, createdBy.Int64, err
+}
+
+// ReopenMachineInvite makes a machine invite usable again after a join that
+// failed (compare-and-set on the time that UseMachineInvite set).
+func (s *Store) ReopenMachineInvite(ctx context.Context, id int64, usedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE invites SET used_at = NULL WHERE id = ? AND used_at = ?`, id, usedAt.UnixMilli())
+	return err
+}
+
+// UseMachineInvite marks a machine invite used (compare-and-set).
+func (s *Store) UseMachineInvite(ctx context.Context, id int64, now time.Time) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL`, now.UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrInviteInvalid
+	}
+	return nil
 }
 
 // Users returns the users that are not removed, by name, with the computers
@@ -278,8 +315,8 @@ func (s *Store) SetUserRole(ctx context.Context, id int64, role string) error {
 // closeInvites ends the open user invites that an admin made, when the admin
 // is demoted or removed: they must not let anybody in later.
 func closeInvites(ctx context.Context, tx *sql.Tx, adminID int64, now time.Time) error {
-	_, err := tx.ExecContext(ctx, `UPDATE invites SET used_at = ? WHERE created_by = ? AND kind = ? AND used_at IS NULL`,
-		now.UnixMilli(), adminID, InviteUser)
+	_, err := tx.ExecContext(ctx, `UPDATE invites SET used_at = ? WHERE created_by = ? AND kind IN (?, ?) AND used_at IS NULL`,
+		now.UnixMilli(), adminID, InviteUser, InviteMachine)
 	return err
 }
 

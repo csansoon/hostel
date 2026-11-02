@@ -42,9 +42,11 @@ func devboxMain(args []string) {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "auth":
-		if os.Getenv("FAKE_LOGGED_OUT") == "1" {
+		if loggedOut() {
 			devboxFail("not logged in; run devbox login")
 		}
+	case "login":
+		fakeLogin("devbox")
 	case "create":
 		devboxCreate(rest)
 	case "list":

@@ -256,3 +256,98 @@ type MoveRequest struct {
 type PriorityRequest struct {
 	Priority string `json:"priority"`
 }
+
+// ConfigDocument is the server's configuration document (M9): providers,
+// machines, and settings, in TOML. For members, secret values are hidden.
+type ConfigDocument struct {
+	Revision int    `json:"revision"`
+	Document string `json:"document"`
+	Hidden   bool   `json:"hidden,omitempty"`
+}
+
+// PutConfigRequest changes the document; base_revision must be the latest.
+type PutConfigRequest struct {
+	BaseRevision int    `json:"base_revision"`
+	Document     string `json:"document"`
+}
+
+// ConfigRevision is an entry of the configuration history.
+type ConfigRevision struct {
+	Revision  int       `json:"revision"`
+	User      string    `json:"user"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// CodeConflict: the configuration changed since the base revision.
+const CodeConflict = "conflict"
+
+// ConfigPlatform is a platform of the server's configuration (M9).
+type ConfigPlatform struct {
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Description string `json:"description,omitempty"`
+	// Source is default, changed (a default with own files), or own.
+	Source    string    `json:"source"`
+	Revision  int       `json:"revision,omitempty"`
+	User      string    `json:"user,omitempty"`
+	ChangedAt time.Time `json:"changed_at,omitzero"`
+	Machines  []string  `json:"machines"`
+}
+
+// PlatformFiles are the files of a platform: file name → content.
+type PlatformFiles struct {
+	Name  string            `json:"name"`
+	Files map[string]string `json:"files"`
+}
+
+// MachineInviteRequest makes a machine invite (M9): "hostel machine join" on
+// the machine adds it to the configuration.
+type MachineInviteRequest struct {
+	Name      string   `json:"name"`
+	Provider  string   `json:"provider,omitempty"`
+	Platforms []string `json:"platforms,omitempty"`
+	Labels    []string `json:"labels,omitempty"`
+}
+
+// MachineInviteResponse has the code and the commands to run on the machine.
+type MachineInviteResponse struct {
+	Machine   string    `json:"machine"`
+	Code      string    `json:"code"`
+	Unix      string    `json:"unix"`
+	Windows   string    `json:"windows"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// MachineJoinRequest uses a machine invite (no bearer token).
+type MachineJoinRequest struct {
+	Secret   []byte `json:"secret"`
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+	Hostname string `json:"hostname"`
+}
+
+// MachineJoinResponse returns the room token once.
+type MachineJoinResponse struct {
+	ServerID        string `json:"server_id"`
+	Machine         string `json:"machine"`
+	Token           string `json:"token"`
+	ServerPublicKey string `json:"server_public_key"`
+}
+
+// Login is a provider CLI login on the server (M9): the address that the admin
+// opens, and the state (waiting, done, failed).
+type Login struct {
+	CLI   string `json:"cli"`
+	State string `json:"state"`
+	URL   string `json:"url,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Already: the CLI was logged in; no login ran.
+	Already bool `json:"already,omitempty"`
+}
+
+// Login states.
+const (
+	LoginWaiting = "waiting"
+	LoginDone    = "done"
+	LoginFailed  = "failed"
+)

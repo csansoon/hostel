@@ -99,6 +99,20 @@ func ScriptExt(osName string) string {
 
 func isOS(name string) bool { return slices.Contains(OSNames, name) }
 
+// IsOSName reports whether name is an OS (linux, macos, windows).
+func IsOSName(name string) bool { return isOS(name) }
+
+// IsPlatformFile reports whether a file name belongs in a platform:
+// platform.toml, README.md, or a script (LoadPlatforms checks the script
+// names).
+func IsPlatformFile(name string) bool {
+	if name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+		return false
+	}
+	ext := filepath.Ext(name)
+	return name == "platform.toml" || name == "README.md" || ext == ".sh" || ext == ".ps1"
+}
+
 // LoadPlatforms reads all platform directories in dir. The three OS platforms
 // always exist, with or without a directory.
 func LoadPlatforms(dir string) (map[string]*Platform, error) {

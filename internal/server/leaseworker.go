@@ -127,7 +127,7 @@ func (s *Server) endLease(ctx context.Context, id, reason string) error {
 }
 
 func (s *Server) machineOf(r store.Room) (*config.Machine, error) {
-	m := s.cfg.Machine(r.Provider + "/" + r.Machine)
+	m := s.config().Machine(r.Provider + "/" + r.Machine)
 	if m == nil {
 		return nil, fmt.Errorf("machine %s/%s is not in the configuration", r.Provider, r.Machine)
 	}
@@ -159,7 +159,7 @@ func (s *Server) openSlot(ctx context.Context, roomID int64, slot string) (*room
 	if err != nil {
 		return nil, r, err
 	}
-	conn, err := s.connectAs(ctx, r, slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot))
+	conn, err := s.connectAs(ctx, r, slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot))
 	if err != nil {
 		return nil, r, err
 	}
@@ -172,7 +172,7 @@ func (s *Server) readyFor(ctx context.Context, r store.Room, m *config.Machine, 
 		return false, err
 	}
 	have, ok := ready[platform]
-	return ok && have == s.uploads[platform][m.OS].Hash, nil
+	return ok && have == s.platformUploads()[platform][m.OS].Hash, nil
 }
 
 func (s *Server) stepAssigned(ctx context.Context, l store.Lease) error {
@@ -227,7 +227,13 @@ func (s *Server) stepProvisioning(ctx context.Context, l store.Lease) error {
 }
 
 func (s *Server) provisionPlatform(ctx context.Context, l store.Lease) error {
-	p := s.cfg.Platforms[l.Platform]
+	// One configuration for the whole step: the script that runs and the hash
+	// that the room records must be of the same platform version.
+	lc := s.live.Load()
+	p := lc.cfg.Platforms[l.Platform]
+	if p == nil {
+		return fmt.Errorf("platform %s: not in the configuration", l.Platform)
+	}
 	ctx, cancel := context.WithTimeout(ctx, leaseStepTimeout+p.ScriptTimeout(config.StepProvision))
 	defer cancel()
 	room, r, err := s.openRoom(ctx, l.RoomID)
@@ -239,17 +245,18 @@ func (s *Server) provisionPlatform(ctx context.Context, l store.Lease) error {
 	if err != nil {
 		return err
 	}
-	if ready, err := s.readyFor(ctx, r, m, l.Platform); err != nil {
+	up := lc.uploads[l.Platform][m.OS]
+	if ready, err := s.readyPlatforms(ctx, r.ID); err != nil {
 		return err
-	} else if !ready {
-		upload, err := s.roomUpload(room, m)
+	} else if ready[l.Platform] != up.Hash || up.Hash == "" {
+		upload, err := s.roomUpload(lc, room, m)
 		if err != nil {
 			return err
 		}
+		upload.Platforms[l.Platform] = up
 		if _, err := room.Sync(ctx, upload); err != nil {
 			return err
 		}
-		up := s.uploads[l.Platform][m.OS]
 		if err := s.runProvision(ctx, room, r.ID, m.OS, p, up); err != nil {
 			return err
 		}
@@ -264,7 +271,7 @@ func (s *Server) provisionPlatform(ctx context.Context, l store.Lease) error {
 // stepPreparing checks the helper and scripts by hash, writes the lease data
 // on the room, and runs the platform prepare script.
 func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
-	p := s.cfg.Platforms[l.Platform]
+	p := s.config().Platforms[l.Platform]
 	ctx, cancel := context.WithTimeout(ctx, leaseStepTimeout+p.ScriptTimeout(config.StepPrepare))
 	defer cancel()
 	if err := s.store.SetSlots(ctx, l.ID, protocol.SlotPreparing); err != nil {
@@ -279,7 +286,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err != nil {
 		return err
 	}
-	upload, err := s.roomUpload(room, m)
+	upload, err := s.roomUpload(s.live.Load(), room, m)
 	if err != nil {
 		return err
 	}
@@ -293,7 +300,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err := s.store.SetBegan(ctx, l.ID, time.Now()); err != nil {
 		return err
 	}
-	if s.uploads[l.Platform][m.OS].Hash != "" {
+	if s.platformUploads()[l.Platform][m.OS].Hash != "" {
 		timeout := p.ScriptTimeout(config.StepPrepare)
 		env := platformEnv(p)
 		env["HOSTEL_LEASE_ID"] = l.ID
@@ -324,7 +331,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 // extendDeadline moves the provider deadline of a machine that cannot stop to
 // ready_at + max_lease + warm_running + 10 minutes, if that is later.
 func (s *Server) extendDeadline(ctx context.Context, r store.Room, m *config.Machine, readyAt time.Time) {
-	p := s.providers[r.Provider]
+	p := s.providerMap()[r.Provider]
 	if !p.Capabilities(r.Machine).CanExtend {
 		return
 	}
@@ -394,7 +401,7 @@ func (s *Server) stepCleaning(ctx context.Context, l store.Lease) error {
 
 func (s *Server) healthTimeout() time.Duration {
 	var d time.Duration
-	for _, p := range s.cfg.Platforms {
+	for _, p := range s.config().Platforms {
 		d += p.ScriptTimeout(config.StepHealth) + p.ScriptTimeout(config.StepReset)
 	}
 	return d
@@ -404,7 +411,7 @@ func (s *Server) healthTimeout() time.Duration {
 // repeated cleanup does not need lease.json.
 func (s *Server) cleanupRequest(ctx context.Context, l store.Lease) protocol.CleanupRequest {
 	req := protocol.CleanupRequest{LeaseID: l.ID, Platform: l.Platform, Devices: l.Devices}
-	if p := s.cfg.Platforms[l.Platform]; p != nil {
+	if p := s.config().Platforms[l.Platform]; p != nil {
 		req.Exclusive = exclusive(p, l.RequiredLabels)
 	}
 	if r, err := s.store.Room(ctx, l.RoomID); err == nil {
@@ -448,7 +455,7 @@ func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int6
 	}
 	// Health checks the machine, whose provision ran as the machine user: a
 	// slot with its own user runs it as the machine user after the cleanup.
-	ownUser := slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot) != ""
+	ownUser := slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot) != ""
 	if !ownUser {
 		req.Health = health
 	}

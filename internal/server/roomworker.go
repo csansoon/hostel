@@ -79,8 +79,14 @@ func (s *Server) runRoom(ctx context.Context, id int64) {
 			s.log.Error("read room", "room_id", id, "err", err)
 			return
 		}
-		m := s.cfg.Machine(r.Provider + "/" + r.Machine)
+		m := s.config().Machine(r.Provider + "/" + r.Machine)
 		if m == nil {
+			// A machine removed from the configuration: its on-demand room is
+			// destroyed (refreshRooms).
+			if r.State == protocol.RoomDestroying && s.providerMap()[r.Provider] != nil {
+				s.stepDestroying(ctx, r)
+				s.kickScheduler()
+			}
 			return
 		}
 		switch r.State {
@@ -109,12 +115,12 @@ func (s *Server) runRoom(ctx context.Context, id int64) {
 // the warm time.
 func (s *Server) creationDeadline(m *config.Machine) time.Time {
 	d := 10 * time.Minute
-	if p := s.cfg.Providers[m.Provider]; p.Timeouts != nil {
+	if p := s.config().Providers[m.Provider]; p.Timeouts != nil {
 		d = p.Timeouts.Provision.D()
 	}
 	var scripts time.Duration
 	for _, name := range m.Platforms {
-		p := s.cfg.Platforms[name]
+		p := s.config().Platforms[name]
 		scripts = max(scripts, p.ScriptTimeout(config.StepProvision)+p.ScriptTimeout(config.StepPrepare))
 	}
 	return time.Now().Add(d + scripts + m.MaxLease.D() + m.WarmRunning.D() + 10*time.Minute)
@@ -123,7 +129,7 @@ func (s *Server) creationDeadline(m *config.Machine) time.Time {
 // stepCreating calls the provider (idempotent by name). Other errors are retried
 // with backoff, three attempts in total.
 func (s *Server) stepCreating(ctx context.Context, r store.Room, m *config.Machine) {
-	p := s.providers[r.Provider]
+	p := s.providerMap()[r.Provider]
 	deadline := s.creationDeadline(m)
 	req := provider.ProvisionRequest{Name: r.Name, Machine: r.Machine, Spec: m.Spec, Deadline: deadline,
 		ServerKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.serverKey.PublicKey())))}
@@ -229,7 +235,7 @@ func (s *Server) idleRooms(ctx context.Context, rooms []store.Room) (map[int64]b
 	}
 	out := map[int64]bool{}
 	for _, r := range rooms {
-		m := s.cfg.Machine(r.Provider + "/" + r.Machine)
+		m := s.config().Machine(r.Provider + "/" + r.Machine)
 		if m == nil || !m.OnDemand() || busy[r.ID] {
 			continue
 		}
@@ -247,6 +253,7 @@ func (s *Server) idleRooms(ctx context.Context, rooms []store.Room) (map[int64]b
 func (s *Server) stepRoomProvisioning(ctx context.Context, r store.Room, m *config.Machine) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout+miseInstallTimeout+s.maxProvisionTimeout()+s.healthTimeout())
 	defer cancel()
+	hash := machineHash(s.live.Load(), m)
 	err := s.doProvision(ctx, r, m)
 	if ctx.Err() != nil {
 		return
@@ -258,6 +265,7 @@ func (s *Server) stepRoomProvisioning(ctx context.Context, r store.Room, m *conf
 	}
 	if ok, _ := s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomProvisioning}, protocol.RoomRunning, "", time.Now()); ok {
 		s.store.SetWarmUntil(ctx, r.ID, time.Time{})
+		s.store.SetConfigSHA256(ctx, r.ID, hash)
 	}
 }
 
@@ -289,7 +297,7 @@ func (s *Server) roomFailed(ctx context.Context, r store.Room, m *config.Machine
 
 func (s *Server) stepResuming(ctx context.Context, r store.Room) {
 	cctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
-	err := s.providers[r.Provider].Resume(cctx, s.ref(r))
+	err := s.providerMap()[r.Provider].Resume(cctx, s.ref(r))
 	cancel()
 	switch {
 	case ctx.Err() != nil:
@@ -306,7 +314,7 @@ func (s *Server) stepResuming(ctx context.Context, r store.Room) {
 
 func (s *Server) stepStopping(ctx context.Context, r store.Room, m *config.Machine) {
 	cctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
-	err := s.providers[r.Provider].Stop(cctx, s.ref(r))
+	err := s.providerMap()[r.Provider].Stop(cctx, s.ref(r))
 	cancel()
 	switch {
 	case ctx.Err() != nil:
@@ -324,7 +332,7 @@ func (s *Server) stepStopping(ctx context.Context, r store.Room, m *config.Machi
 
 func (s *Server) stepDestroying(ctx context.Context, r store.Room) {
 	cctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
-	err := s.providers[r.Provider].Destroy(cctx, s.ref(r))
+	err := s.providerMap()[r.Provider].Destroy(cctx, s.ref(r))
 	cancel()
 	if ctx.Err() != nil {
 		return
@@ -373,7 +381,7 @@ func (s *Server) cleanDirtySlot(ctx context.Context, room *roomops.Room, roomID 
 	if err != nil {
 		return err
 	}
-	if slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot) != "" {
+	if slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot) != "" {
 		sr, _, err := s.openSlot(ctx, roomID, slot)
 		if err != nil {
 			return err

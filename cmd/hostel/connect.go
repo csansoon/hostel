@@ -171,15 +171,6 @@ func revokeToken(g *config.Guest, stderr io.Writer) {
 	}
 }
 
-// configCmd is "hostel config": the server configuration. M8 has the users.
-func configCmd(args []string, stdout, stderr io.Writer) int {
-	if len(args) >= 1 && args[0] == "users" {
-		return usersCmd(args[1:], stdout, stderr)
-	}
-	fmt.Fprintln(stderr, "hostel: usage: hostel config users [invite|code|set|remove]")
-	return 2
-}
-
 func usersCmd(args []string, stdout, stderr io.Writer) int {
 	c, err := apiClient()
 	if err != nil {

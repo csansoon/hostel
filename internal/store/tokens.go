@@ -95,6 +95,31 @@ func (s *Store) CountTokens(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// RevokeMachineTokens revokes the room tokens of a machine
+// ("<provider>/<machine>") and returns their IDs.
+func (s *Store) RevokeMachineTokens(ctx context.Context, machine string, now time.Time) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tokens WHERE role = ? AND machine = ? AND revoked_at IS NULL`, RoleRoom, machine)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err := s.db.ExecContext(ctx, `UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now.UnixMilli(), id); err != nil {
+			return nil, err
+		}
+	}
+	return ids, rows.Err()
+}
+
 // RevokeToken revokes a token. It returns ErrNotFound if no active token has the ID.
 func (s *Store) RevokeToken(ctx context.Context, id int64, now time.Time) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now.UnixMilli(), id)

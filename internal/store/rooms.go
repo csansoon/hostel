@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type Room struct {
 	Shell            string
 	SSHHostKey       string
 	HelperSHA256     string
+	ConfigSHA256     string
 	ProviderDeadline time.Time
 	WarmUntil        time.Time
 	Drained          bool
@@ -46,14 +48,14 @@ type RoomPlatform struct {
 }
 
 const roomColumns = `id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key,
-	helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at`
+	helper_sha256, config_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at`
 
 func scanRoom(row interface{ Scan(...any) error }) (Room, error) {
 	var r Room
 	var deadline, warm sql.NullInt64
 	var created, changed int64
 	err := row.Scan(&r.ID, &r.Name, &r.Provider, &r.Machine, &r.ProviderRef, &r.State, &r.OS, &r.Arch, &r.Home, &r.Shell,
-		&r.SSHHostKey, &r.HelperSHA256, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed)
+		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed)
 	r.ProviderDeadline, r.WarmUntil = fromMS(deadline), fromMS(warm)
 	r.CreatedAt, r.StateChangedAt = time.UnixMilli(created), time.UnixMilli(changed)
 	return r, err
@@ -100,6 +102,57 @@ func (s *Store) EnsureSlots(ctx context.Context, roomID int64, slots []string) e
 	for _, sl := range slots {
 		if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO slots (room_id, name, state) VALUES (?, ?, 'free')`, roomID, sl); err != nil {
 			return fmt.Errorf("insert slot: %w", err)
+		}
+	}
+	return nil
+}
+
+// ResetRetiredRoom forgets the host key and the provisioned platforms of the
+// retired room of a machine: a machine that joins again with a code can be a
+// new host (the code proves it).
+func (s *Store) ResetRetiredRoom(ctx context.Context, provider, machine string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var id int64
+		err := tx.QueryRowContext(ctx, `SELECT id FROM rooms WHERE provider = ? AND machine = ? AND state = 'retired'`, provider, machine).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET ssh_host_key = '', helper_sha256 = '', config_sha256 = '' WHERE id = ?`, id); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM room_platforms WHERE room_id = ?`, id)
+		return err
+	})
+}
+
+// RemoveFreeSlots deletes the free slots of a room that are not in keep (slots
+// removed from the configuration).
+func (s *Store) RemoveFreeSlots(ctx context.Context, roomID int64, keep []string) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM slots WHERE room_id = ? AND state = 'free'`, roomID)
+	if err != nil {
+		return err
+	}
+	var gone []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		if !slices.Contains(keep, name) {
+			gone = append(gone, name)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, name := range gone {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM slots WHERE room_id = ? AND name = ? AND state = 'free'`, roomID, name); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -177,6 +230,12 @@ func (s *Store) PinHostKey(ctx context.Context, id int64, key string) error {
 
 func (s *Store) SetHelperSHA256(ctx context.Context, id int64, sum string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET helper_sha256 = ? WHERE id = ?`, sum, id)
+	return err
+}
+
+// SetConfigSHA256 records the hash of the machine settings that a room has.
+func (s *Store) SetConfigSHA256(ctx context.Context, id int64, sum string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET config_sha256 = ? WHERE id = ?`, sum, id)
 	return err
 }
 

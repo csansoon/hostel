@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -85,13 +84,12 @@ func TestMise(t *testing.T) {
 	// provisioning removes the command.
 	f.e.mustHostel("release")
 	f.waitSlotFree()
-	cfg, err := os.ReadFile(filepath.Join(f.e.configDir(), "server.toml"))
-	if err != nil {
-		t.Fatal(err)
+	// The change applies without a restart: the free room provisions again.
+	doc := f.s.configDoc().Document
+	off := strings.Replace(doc, "agent_device = true", "agent_device = false", 1)
+	if r := f.e.applyDoc(strings.Replace(off, machineKeys, "", 1)); r.code != 0 {
+		t.Fatalf("apply: %s", r)
 	}
-	off := strings.Replace(string(cfg), "agent_device = true", "agent_device = false", 1)
-	f.e.writeConfig(strings.Replace(off, machineKeys, "", 1))
-	f.s = f.s.restart()
 	f.e.waitFor("agent-device removed", time.Minute, func() bool {
 		return f.c.sh("test -e /home/hostel/hostel/bin/agent-device && echo found || echo removed") == "removed"
 	})

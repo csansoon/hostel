@@ -68,7 +68,7 @@ func (c *connectLimiter) blocked(addr string, now time.Time) bool {
 // the client address that the proxy added last to X-Forwarded-For (a client
 // can write the earlier entries itself); else the connection's address.
 func (s *Server) clientAddr(r *http.Request) string {
-	if s.cfg.TLS == config.TLSOff {
+	if s.config().TLS == config.TLSOff {
 		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
 			parts := strings.Split(xff[len(xff)-1], ",")
 			if a := strings.TrimSpace(parts[len(parts)-1]); a != "" {
@@ -126,12 +126,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.AddEventBy(r.Context(), now, "", 0, "user", fmt.Sprintf("%s connected from %s", u.Name, req.Computer), u.ID)
-	writeJSON(w, http.StatusOK, protocol.ConnectResponse{ServerID: s.cfg.ServerID, User: u.Name, Role: u.Role, Token: secret})
+	writeJSON(w, http.StatusOK, protocol.ConnectResponse{ServerID: s.config().ServerID, User: u.Name, Role: u.Role, Token: secret})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	tok := requestToken(r)
-	writeJSON(w, http.StatusOK, protocol.Me{ServerID: s.cfg.ServerID, User: tok.Name, Role: tok.Role, Computer: tok.Computer})
+	writeJSON(w, http.StatusOK, protocol.Me{ServerID: s.config().ServerID, User: tok.Name, Role: tok.Role, Computer: tok.Computer})
 }
 
 // handleDisconnect revokes the caller's token (hostel disconnect).

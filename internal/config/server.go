@@ -89,7 +89,9 @@ type Server struct {
 	Mise               *Mise                `toml:"mise"`
 	Providers          map[string]*Provider `toml:"providers"`
 
-	File          string               `toml:"-"`
+	File string `toml:"-"`
+	// DocName names the configuration document in errors ("" before M9).
+	DocName       string               `toml:"-"`
 	ProviderOrder []string             `toml:"-"`
 	Platforms     map[string]*Platform `toml:"-"`
 }
@@ -210,12 +212,49 @@ func DefaultServerPath() (string, error) {
 	return filepath.Join(home, ".config", "hostel", "server.toml"), nil
 }
 
-// LoadServer reads and validates server.toml and all platform directories.
-func LoadServer(path string) (*Server, error) {
-	s := &Server{}
-	data, err := decodeFile(path, s)
+// LoadServer reads and validates a server.toml with all keys (the form before
+// M9) and all platform directories.
+func LoadServer(path string) (*Server, error) { return load(path, nil) }
+
+// LoadServerFile is LoadServer with the platforms of platformsDir, not those of
+// platforms_dir: the import of a server.toml from before M9 checks it with the
+// platforms of the database.
+func LoadServerFile(path, platformsDir string) (*Server, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	return loadData(path, data, &Document{PlatformsDir: platformsDir, legacy: true})
+}
+
+// LoadServerDocument validates server.toml (local keys only; data is its
+// content, path its name) with the configuration document from the database.
+func LoadServerDocument(path string, data []byte, doc Document) (*Server, error) {
+	return loadData(path, data, &doc)
+}
+
+func load(path string, doc *Document) (*Server, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return loadData(path, data, doc)
+}
+
+func loadData(path string, data []byte, doc *Document) (*Server, error) {
+	s := &Server{}
+	if err := decodeData(path, data, s); err != nil {
+		return nil, err
+	}
+	if doc != nil && !doc.legacy {
+		if err := checkParts(path, data, *doc); err != nil {
+			return nil, err
+		}
+		if err := decodeData(doc.Name(), doc.Data, s); err != nil {
+			return nil, err
+		}
+		data = doc.Data
+		s.DocName = doc.Name()
 	}
 	order, err := keyOrder(data)
 	if err != nil {
@@ -229,6 +268,9 @@ func LoadServer(path string) (*Server, error) {
 		}
 	}
 	resolveErr := s.resolve()
+	if doc != nil && doc.PlatformsDir != "" {
+		s.PlatformsDir = doc.PlatformsDir
+	}
 	platforms, err := LoadPlatforms(s.PlatformsDir)
 	if err != nil {
 		return nil, errors.Join(resolveErr, err)
@@ -240,19 +282,49 @@ func LoadServer(path string) (*Server, error) {
 	return s, nil
 }
 
+// checkParts reports keys of the document in server.toml and local keys in the
+// document.
+func checkParts(path string, file []byte, doc Document) error {
+	var errs []error
+	keys, err := topKeys(file)
+	if err != nil {
+		return positioned(path, err)
+	}
+	for _, k := range keys {
+		if documentKeys[k] {
+			errs = append(errs, fmt.Errorf("%s: %s: is in the configuration in the database since M9; change it with \"hostel config edit\" and delete it here", path, k))
+		}
+	}
+	if keys, err = topKeys(doc.Data); err != nil {
+		return positioned(doc.Name(), err)
+	}
+	for _, k := range keys {
+		if localKeys[k] {
+			errs = append(errs, fmt.Errorf("%s: %s: belongs in server.toml on the server machine, not in the configuration", doc.Name(), k))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 type errList struct {
 	file string
+	// doc names the configuration document, the source of its keys.
+	doc  string
 	errs []error
 }
 
 func (l *errList) add(key, format string, args ...any) {
-	l.errs = append(l.errs, fmt.Errorf("%s: %s: %s", l.file, key, fmt.Sprintf(format, args...)))
+	file := l.file
+	if top, _, _ := strings.Cut(key, "."); l.doc != "" && documentKeys[strings.SplitN(top, "[", 2)[0]] {
+		file = l.doc
+	}
+	l.errs = append(l.errs, fmt.Errorf("%s: %s: %s", file, key, fmt.Sprintf(format, args...)))
 }
 
 func (l *errList) err() error { return errors.Join(l.errs...) }
 
 func (s *Server) resolve() error {
-	el := &errList{file: s.File}
+	el := &errList{file: s.File, doc: s.DocName}
 	base := filepath.Dir(s.File)
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -339,9 +411,6 @@ func (s *Server) resolve() error {
 		s.Mise.IdiomaticTools = []string{"node", "python"}
 	}
 
-	if len(s.Providers) == 0 {
-		el.add("providers", "no providers; add at least one, for example [providers.home] with kind = \"static\"")
-	}
 	for _, pn := range s.ProviderOrder {
 		if p := s.Providers[pn]; p != nil {
 			s.resolveProvider(el, pn, p)
@@ -389,9 +458,6 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 	setDur(&p.MaxLease, 2*time.Hour)
 	if p.MaxRooms != nil && *p.MaxRooms < 1 {
 		el.add(key+".max_rooms", "must be at least 1")
-	}
-	if len(p.Machines) == 0 {
-		el.add(key+".machines", "no machines; add at least one, for example [%s.machines.<name>]", key)
 	}
 	for i, l := range p.Limits {
 		lk := fmt.Sprintf("%s.limits[%d]", key, i)
@@ -572,7 +638,7 @@ func namespaceOS(el *errList, key string, spec map[string]any) string {
 }
 
 func (s *Server) validatePlatforms() error {
-	el := &errList{file: s.File}
+	el := &errList{file: s.File, doc: s.DocName}
 	for _, m := range s.Machines() {
 		key := "providers." + m.Provider + ".machines." + m.Name
 		seen := map[string]bool{}
@@ -583,12 +649,19 @@ func (s *Server) validatePlatforms() error {
 			case seen[pn]:
 				el.add(pk, "platform %q is listed twice", pn)
 			case p == nil:
-				el.add(pk, "unknown platform %q; platforms_dir %s has no directory with this name", pn, s.PlatformsDir)
+				if s.DocName != "" {
+					el.add(pk, "unknown platform %q; \"hostel config platforms\" lists the platforms", pn)
+				} else {
+					el.add(pk, "unknown platform %q; platforms_dir %s has no directory with this name", pn, s.PlatformsDir)
+				}
 			case p.Kind == KindOS:
 				el.add(pk, "%q is an OS platform; a machine gets its OS platform automatically, so remove it", pn)
 			case m.OS != "" && p.Script(m.OS, StepPrepare) == "":
-				el.add(pk, "platform %q has no prepare script for %s; add %s", pn, m.OS,
-					filepath.Join(p.Dir, StepPrepare+"."+m.OS+ScriptExt(m.OS)))
+				where := filepath.Join(p.Dir, StepPrepare+"."+m.OS+ScriptExt(m.OS))
+				if s.DocName != "" {
+					where = StepPrepare + "." + m.OS + ScriptExt(m.OS) + " (hostel config platforms push)"
+				}
+				el.add(pk, "platform %q has no prepare script for %s; add %s", pn, m.OS, where)
 			}
 			seen[pn] = true
 		}

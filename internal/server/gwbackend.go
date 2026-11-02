@@ -126,7 +126,7 @@ func (b gwBackend) AuthorizeRoom(ctx context.Context, token string) (string, int
 	if err != nil || tok.Role != protocol.RoleRoom {
 		return "", 0, errors.New("invalid or revoked room token")
 	}
-	m := b.s.cfg.Machine(tok.Machine)
+	m := b.s.config().Machine(tok.Machine)
 	if m == nil || !m.Connect {
 		return "", 0, fmt.Errorf("machine %s does not have connect = true", tok.Machine)
 	}

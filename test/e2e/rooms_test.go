@@ -44,6 +44,15 @@ func (e *env) writePlatform(name string, files map[string]string) {
 	}
 }
 
+// pushPlatform saves the platform directory that writePlatform wrote as the
+// server's platform (M9: the server reads platforms_dir only at the import).
+func (e *env) pushPlatform(name string) {
+	e.t.Helper()
+	if r := e.adminHostel("config", "platforms", "push", filepath.Join(e.configDir(), "platforms", name)); r.code != 0 {
+		e.t.Fatalf("push the platform %s: %s", name, r)
+	}
+}
+
 // TestStaticRoom: a static room is probed, gets the helper, mise, and the
 // platform scripts, and is ready for its platforms at server start (scenario 22,
 // static part). A restart does not provision again; changed scripts do. Init
@@ -150,18 +159,18 @@ func TestStaticRoom(t *testing.T) {
 		t.Fatalf("linux platform files on the room: %q", got)
 	}
 
-	// Changed platform scripts: provision runs again at the next start. Removed
-	// OS platform scripts are removed on the room.
+	// Changed platform scripts (M9: pushed, without a restart): the free room
+	// provisions again. Removed OS platform scripts are removed on the room.
 	e.writePlatform("fakedevice", map[string]string{"provision.linux.sh": provisionScript + "# changed\n"})
 	if err := os.Remove(filepath.Join(e.configDir(), "platforms", "linux", "health.linux.sh")); err != nil {
 		t.Fatal(err)
 	}
-	s.stop()
-	s = e.startServer(s.token)
+	e.pushPlatform("fakedevice")
+	e.pushPlatform("linux")
+	e.waitFor("provision runs again", roomReady, func() bool {
+		return c.sh("wc -l < /home/hostel/hostel/cache/provision.log") == "2"
+	})
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if got := c.sh("wc -l < /home/hostel/hostel/cache/provision.log"); got != "2" {
-		t.Fatalf("provision ran %s times after a script change, want 2", got)
-	}
 	if got := c.sh("test -e /home/hostel/hostel/platforms/linux && echo exists || echo removed"); got != "removed" {
 		t.Fatalf("old linux platform scripts on the room: %s", got)
 	}

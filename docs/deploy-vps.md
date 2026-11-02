@@ -2,7 +2,7 @@
 
 This guide puts the Hostel server on a Linux VPS (milestone M5). The reference
 deployment is an exe.dev VM; section 8 shows the changes for another VPS. Rooms
-behind NAT (the home MacBook) connect to the server with `hostel room connect`
+behind NAT (the home MacBook) connect to the server with `hostel machine connect` (before M9: `hostel room connect`)
 (section 6).
 
 ## 1. What you need
@@ -75,7 +75,7 @@ use `--tls off`; on a machine without a proxy or a domain (an IP address or a
 Tailscale name), leave the default `self-signed`: the server then serves HTTPS
 with its own certificate, and clients pin its key.
 
-Edit `~/.config/hostel/server.toml`:
+`server.toml` keeps only the keys of the server machine:
 
 ```toml
 server_id = "exe"
@@ -85,24 +85,21 @@ public_urls = ["https://hostel.example.com"]
 gateway_listen = "127.0.0.1:7422"
 gateway_public = "wss://hostel.example.com/v1/gateway"
 helper_dir = "/opt/hostel/helpers"
-platforms_dir = "/opt/hostel/platforms"
-
-[providers.home]
-kind = "static"
-
-# The home MacBook behind NAT: it runs "hostel room connect" (section 6).
-[providers.home.machines.macbook]
-address = "hostel@localhost"
-os = "macos"
-platforms = ["ios"]
-labels = ["xcode-26.5", "desktop"]
-connect = true
 ```
 
 - `listen` is the port that the HTTPS proxy sends to.
 - `gateway_listen` stays on `127.0.0.1`: guests and rooms use the WebSocket in
   `gateway_public`.
-- For `connect = true`, only the user of `address` is used.
+- `helper_dir` has the binaries for the rooms (`hostel-*`, `mise-*`); the server
+  also serves them to machines that join (section 6).
+
+Since M9, the providers, machines, settings, and platforms are in the server's
+database: an admin changes them from their own computer (section 4.1) with
+`hostel config edit`, `hostel config rooms`, `hostel config providers`,
+`hostel config settings`, and `hostel config platforms`. A server from before
+M9 imports them from `server.toml` at its first start (a copy stays in
+`server.toml.pre-m9`). After that import, each room provisions once more (the
+platform scripts get the same file modes on all servers).
 
 Check the file with `hostel admin config check` (it prints each problem).
 
@@ -162,25 +159,61 @@ people.
 
 ## 5. Namespace login (optional)
 
-Only for `namespace` providers. As the server user on the VM:
+Only for `namespace` providers. Install the Namespace CLIs as the server user on
+the VM:
 
 ```sh
-curl -fsSL https://get.namespace.so/cloud/install.sh | sh
-nsc login --browser=false
-devbox login --browser=false
+curl -fsSL https://get.namespace.so/cloud/install.sh | sh        # nsc (instances)
+curl -fsSL get.namespace.so/devbox/install.sh | bash             # devbox (macOS devboxes)
 ```
 
-Each `login` prints a URL. Open it in a browser on any machine, and select the
-workspace. The command ends when the login is complete. `nsc auth check-login`
-and `devbox auth check-login` exit with code 0 when the login is valid. The server
-does not start without a valid login for each configured product. A login lasts
-days (the owner's `nsc` login of 2026-10-20 was still valid on 2026-10-29); when
-it ends, the provider calls fail, and you must log in again.
+Both go to `~/.local/bin`. The server service must find them there:
+
+```sh
+sudo mkdir -p /etc/systemd/system/hostel.service.d
+printf '[Service]\nEnvironment=PATH=%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n' "$HOME" \
+  | sudo tee /etc/systemd/system/hostel.service.d/path.conf
+sudo systemctl daemon-reload && sudo systemctl restart hostel
+```
+
+Then log the server in from your own computer:
+
+```sh
+hostel config providers login namespace
+hostel config providers add ns --kind namespace
+```
+
+The server runs `devbox login --browser=false` and `nsc login --browser=false`;
+the client prints each URL. Open it in a browser, and select the workspace. The
+command ends when the login is complete; the credentials stay on the server.
+`--cli nsc` or `--cli devbox` logs in one CLI only. The server refuses a
+Namespace provider without a valid login for each product that its machines
+use. A login lasts days (the owner's `nsc` login of 2026-10-20 was still valid
+on 2026-10-29); when it ends, the provider calls fail, and you must log in
+again.
 
 ## 6. A static room behind NAT
 
 The room (for example the home MacBook) keeps an outbound connection to the
-gateway. It needs no inbound SSH from the internet. Prepare the room first with
+gateway. It needs no inbound SSH from the internet.
+
+**With a code (M9).** On your own computer:
+
+```sh
+hostel config rooms add studio-mac --platform ios --label xcode-26.5 --label desktop
+```
+
+It prints one command for macOS and Linux and one for Windows. Run it on the
+new machine as an administrator. `hostel machine join` creates the user
+`hostel`, installs the server's key for it, adds the machine to the
+configuration (`connect = true`), and starts the service that runs `hostel
+machine connect` (a systemd unit as `hostel-connect`, a LaunchDaemon as root,
+or a scheduled task as `LOCAL SERVICE`; the token is in `/etc/hostel` or
+`C:\ProgramData\hostel`, which the room user cannot read). Then do the steps
+that it prints (Remote Login, Xcode, the desktop: `docs/static-room-setup.md`).
+If a step fails, fix it, and run the same command again: it continues.
+
+**By hand** (the steps that `machine join` does). Prepare the room first with
 `docs/static-room-setup.md`. Then:
 
 1. Put the server's public key (`hostel admin pubkey`) into the room user's

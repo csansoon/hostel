@@ -57,7 +57,7 @@ One Go binary, `hostel`, for darwin, linux, and windows on amd64 and arm64.
 | Helper | `hostel room ...` (hidden from help) | rooms; the server uploads it |
 
 Rooms need no permanent daemon. Exception: a static room behind NAT runs
-`hostel room connect` as a service (launchd, systemd, or a Windows service).
+`hostel machine connect` (before M9: `hostel room connect`) as a service (launchd, systemd, or a Windows service).
 
 Distribution. A tag `v*` makes a GitHub release (`make release`): the binary for
 each OS and architecture, the pinned `mise` binaries, `hostel-platforms.tar.gz`,
@@ -645,9 +645,30 @@ The `ready` lease data contains the absolute helper path, so the guest can call 
 
 ### Platform directories
 
-The server reads platforms from `platforms_dir` (default
-`~/.config/hostel/platforms`). Each device platform has one directory; OS platforms
-can have one.
+Since M9, the platforms are in the server's database (`platform_revisions`).
+The binary embeds the default platforms (`ios`, `android`, `macos`, `windows`,
+from `platforms/` of the repository); each default applies until an admin
+replaces it with their own files or removes it. Admins add their own platforms
+from a client:
+
+```
+hostel config platforms                     # name, kind, machines, source (default, changed, own)
+hostel config platforms new tvos ./tvos     # a folder with a template (--os linux|macos|windows)
+hostel config platforms pull ios ./ios      # the current files into a new folder
+hostel config platforms push ./tvos         # check and save the folder (the name is the folder name)
+hostel config platforms reset ios           # a default back to the version of this release
+hostel config platforms remove tvos         # refused while a machine lists it
+```
+
+A push sends only platform files (`platform.toml`, `README.md`, and scripts);
+the server checks it with the whole configuration (the same rules as below) and
+applies it at once. The server writes the effective platforms to
+`data_dir/platforms/<hash>/` and uses them as before. A free room whose
+platforms changed provisions again (an on-demand room: when a lease uses the
+device platform). At the first start of M9, the platforms in `platforms_dir`
+that differ from the defaults are imported as revision 1; after that,
+`platforms_dir` is not read. Each device platform has one directory; OS
+platforms can have one.
 
 ```
 platforms/
@@ -765,9 +786,84 @@ admin|member] [--name n]` makes an invite on the server machine without the API
 (for example when nobody can sign in as admin). `hostel admin pubkey` prints the
 server's public key.
 
+**Two parts (M9).** `server.toml` has only the keys that the server needs on
+its machine before it opens its database: `server_id`, `listen`,
+`gateway_listen`, `gateway_public`, `tls`, `public_urls`, `data_dir`,
+`helper_dir`, `platforms_dir`. Everything else (the providers with their
+machines, and the settings `idle_timeout`, `poll_timeout`, `limit_retry`,
+`port_process_offline`, `intervals`, `mise`) is the **configuration document**:
+TOML with the same keys, kept in the database with a revision for each change
+(`config_revisions`). The server validates the two parts together; a key in
+the wrong part is an error with its key path. Errors in the document name its
+revision ("configuration revision 4: providers.home.machines.box.os: ...").
+
+- **Import.** At the first start of M9, a `server.toml` with document keys is
+  split: the document keys become revision 1 (with their comments and order),
+  the old file stays as `server.toml.pre-m9`, and `server.toml` keeps the local
+  keys. Later, a document key in `server.toml` stops the server with a message.
+- **Changes.** An admin changes the document from a client: `hostel config
+  edit` (in `$EDITOR`), `hostel config apply <file>`, or the targeted commands:
+  `hostel config settings set <key>=<value>`; `hostel config rooms` (the
+  machines with their rooms), `rooms set <machine> <key>=<value>` (`platforms`
+  and `labels` as comma lists), `rooms remove <machine>`, `rooms drain|undrain|
+  repair|destroy <machine|room>` (the same as `hostel admin room`, by name);
+  `hostel config providers` (list), `providers add <name> --kind <kind>`,
+  `providers remove <name>`. The client sends the whole
+  document with its base revision; the server refuses it if another revision
+  came in the meantime (HTTP 409) or if it is invalid (HTTP 422 with each key
+  path). The targeted commands change the text in place, so comments and the
+  machine order (the scheduler's order) stay.
+- **Apply.** A valid revision applies at once, without a restart: the server
+  builds the providers again (only the changed ones: a Namespace provider
+  checks its login, an external provider loads its capabilities), hashes the
+  platforms, adds rooms for new static machines, and wakes the scheduler. A
+  room records the hash of its machine settings, its platforms, and the `mise`
+  settings when it is provisioned. When it is free and the hash changed, a
+  static room provisions again and an on-demand room is destroyed. A machine
+  with an active lease cannot be removed (drain its room, and remove it when
+  the lease ends); an on-demand machine cannot be removed while it has rooms
+  (destroy them first: `hostel config rooms destroy <room>`); a provider
+  cannot be removed while it has on-demand rooms. The room of a removed static
+  machine is retired.
+  The local keys still need a restart.
+- **Machines that join.** `hostel config rooms add <name> [--platform p]
+  [--label l] [--provider p]` makes a machine invite (24 hours, once) and prints
+  one command for macOS and Linux (`curl ... /v1/install.sh | sudo sh -s --
+  <code>`) and one for Windows (`curl.exe ... /v1/download/hostel-windows-<arch>.exe`,
+  then `hostel.exe machine join <code>`). With TLS `self-signed`, curl pins the
+  server's key (`--pinnedpubkey`). `hostel machine join <code>`, as an
+  administrator on the machine: (1) creates the user `hostel` without
+  administrator rights if it is missing; (2) sends the OS, architecture, and
+  host name with the code (`POST /v1/machines/join`, no token, the rate limit
+  of `connect`); the server adds the machine to the document (`connect = true`,
+  in the static provider `home` unless the invite names another, which it adds
+  if it is missing) and returns a room token and its SSH public key; (3) puts
+  the key into `authorized_keys` and `hostel/authorized_keys.base` of `hostel`;
+  (4) writes the token, the result of the join (`join.json`: a second run
+  after a failure continues with it), and a copy of the binary into a
+  directory that only administrators can write (`/etc/hostel`, or
+  `C:\\ProgramData\\hostel` with its owner and rules set by security IDs), and
+  installs the service that runs `hostel machine connect` from there (Linux:
+  systemd unit as `hostel-connect`, which owns the token; macOS: LaunchDaemon as
+  root, which is not the room user; Windows: scheduled task as `LOCAL SERVICE`
+  that runs `machine-connect.cmd`); (5) prints the steps that only a person can
+  do. The server key goes into the room user's files as that user (a lease can
+  leave links there). The server refuses a join for a machine that exists, and
+  revokes the old room tokens of the name; removing a machine revokes its room
+  tokens. `--no-service` skips the service. `hostel machine connect` is the
+  former `hostel room connect` (still accepted).
+- **Provider login.** `hostel config providers login namespace [--cli
+  devbox|nsc]`: the server runs `<cli> login --browser=false` (deadline 10
+  minutes, one at a time for each CLI) and gives the client the address that it
+  prints; the client prints it and waits until the login ends. The credentials
+  stay on the server. A logged-in CLI is reported, and no login runs.
+- **Reading.** Members and admins read the document (`hostel config`,
+  `hostel config settings`, `hostel config history`); for members, the values
+  of `env`, `command_env`, and `github_token` are `***`.
+
+The document, as in `server.toml` before M9:
+
 ```toml
-#:schema ./hostel.schema.json
-server_id = "sansmac"               # [a-z0-9]{1,20}; part of provider resource names
 
 [providers.home]
 kind = "static"
@@ -810,7 +906,7 @@ Server-level keys and defaults:
 | `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen`, or `/v1/gateway` with `tls = "self-signed"` (the client adds the server address that it uses and its pinned key); `gateway_public` can also be a `wss://<host>/v1/gateway` URL (section 13) |
 | `data_dir` | `~/.local/share/hostel` |
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
-| `platforms_dir` | `~/.config/hostel/platforms` |
+| `platforms_dir` | `~/.config/hostel/platforms`; read only at the import (M9) |
 | `idle_timeout`, `poll_timeout`, `limit_retry` | `10m`, `5m`, `2m` (`aging` was removed in M8; the key is an error) |
 | `tls` | `off`; `hostel server init` writes `self-signed` (the server's own certificate in `data_dir/tls_cert.pem`, `tls_key.pem`; clients pin its key) |
 | `public_urls` | `[]`: the addresses that clients use, in invite codes; port 0 becomes the listen port; empty: the listen address. Each is `https://` (also with `tls = "off"`: the proxy has TLS); `http://` only on loopback with `tls = "off"`, because clients send the invite secret and their token to it |
@@ -1206,6 +1302,10 @@ and `users`. Room tokens can only read `GET /v1/info`.
 | `POST /v1/connect` (no token) | `{"secret", "name", "computer"}` from an invite code; returns `{"server_id", "user", "role", "token"}` once. HTTP 403 for an invalid code, 409 `name_taken`, 429 after 10 failures per minute. |
 | `GET /v1/me`, `DELETE /v1/me` | The token's user, role, and computer; `DELETE` revokes the token (`hostel disconnect`). |
 | `GET /v1/users`, `PATCH /v1/users/{name}`, `DELETE /v1/users/{name}`, `DELETE /v1/users/{name}/computers/{computer}` (admin to change) | Users with their computers; `{"role"}`; removal (tokens revoked, leases ended); removal of one computer (its tokens revoked; the user stays). The server keeps at least one admin (HTTP 409 `last_admin`). |
+| `GET /v1/config`, `PUT /v1/config`, `GET /v1/config/history` (admin to change) | The configuration document `{revision, document}`; a change `{base_revision, document}` gives the new revision, HTTP 409 (`conflict`) if `base_revision` is not the latest, or HTTP 422 with the errors (M9) |
+| `GET /v1/config/platforms`, `GET/PUT/DELETE /v1/config/platforms/{name}`, `POST /v1/config/platforms/{name}/reset` (admin to change) | The platforms with their source and machines; a platform's files `{name, files}`; a new version; removal (HTTP 409 while a machine lists it); a default back to the release's version (M9) |
+| `POST /v1/machines/invites` (admin), `POST /v1/machines/join` (the code, no token), `GET /v1/install.sh`, `GET /v1/download/hostel-<os>-<arch>[.exe]` (no token) | A machine code with the commands to run; the join (adds the machine, returns a room token and the server's SSH key); the install script and the binaries of `helper_dir` (M9) |
+| `POST /v1/logins/{cli}`, `GET /v1/logins/{cli}[?wait=1]` (admin; `cli` is `devbox` or `nsc`) | Starts a provider CLI login on the server and returns its address (or `already`); the state (`waiting`, `done`, `failed`) (M9) |
 | `POST /v1/invites` | `{"role", "name"}` (admin) or `{"self": true}` (a code for the caller's other computer); returns the code, the key fingerprint, and the expiry (24 hours). |
 | `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. `repair` takes `{"accept_host_key": bool}` and is for broken static rooms; `destroy` is for on-demand rooms without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "machine"}` (`machine` = `<provider>/<machine>`, only for `room`). A new token is returned once. |

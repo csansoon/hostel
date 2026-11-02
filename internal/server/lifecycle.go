@@ -28,11 +28,11 @@ func (s *Server) expire(ctx context.Context, leases []store.Lease) error {
 			switch {
 			case !l.ExpiresAt.IsZero() && now.After(l.ExpiresAt):
 				endState, reason = protocol.LeaseExpired, reasonMaxLease
-			case s.gateway.CmdConns(l.ID) == 0 && now.Sub(l.LastActivityAt) > s.cfg.IdleTimeout.D():
+			case s.gateway.CmdConns(l.ID) == 0 && now.Sub(l.LastActivityAt) > s.config().IdleTimeout.D():
 				endState, reason = protocol.LeaseExpired, reasonIdle
 			}
 		case protocol.LeaseQueued, protocol.LeaseAssigned, protocol.LeaseProvisioning, protocol.LeasePreparing:
-			if now.Sub(l.LastPollAt) > s.cfg.PollTimeout.D() {
+			if now.Sub(l.LastPollAt) > s.config().PollTimeout.D() {
 				endState, reason = protocol.LeaseCancelled, reasonPollTimeout
 			}
 		}

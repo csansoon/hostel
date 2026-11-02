@@ -36,7 +36,7 @@ func (s *Server) capacity(req scheduler.Request, rooms []store.Room, slots []sto
 		}
 	}
 	for key := range cands {
-		m := s.cfg.Machine(key)
+		m := s.config().Machine(key)
 		if m.OnDemand() && perMachine[key] < *m.MaxRooms {
 			newRoom = true
 			total += len(m.Slots)
@@ -63,8 +63,8 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []protocol.Platform{}
-	for _, name := range config.PlatformNames(s.cfg.Platforms) {
-		p := s.cfg.Platforms[name]
+	for _, name := range config.PlatformNames(s.config().Platforms) {
+		p := s.config().Platforms[name]
 		req := scheduler.Request{Platform: name, PlatformOS: p.Kind == config.KindOS, Labels: p.Requires}
 		if len(scheduler.Candidates(s.schedMachines(), req)) == 0 {
 			continue
@@ -103,7 +103,7 @@ func (s *Server) leaseWait(ctx context.Context, l store.Lease) int {
 	if err != nil {
 		return 0
 	}
-	p := s.cfg.Platforms[l.Platform]
+	p := s.config().Platforms[l.Platform]
 	req := scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS, Labels: l.RequiredLabels}
 	_, total, _ := s.capacity(req, rooms, slots)
 	return int(s.estimatedWait(ctx, l.Platform, l.Position, total).Seconds())

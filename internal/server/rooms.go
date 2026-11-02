@@ -31,10 +31,13 @@ func slotNames(m *config.Machine) []string {
 	return names
 }
 
-// ensureStaticRooms gives each static machine a room row and marks rooms of
-// machines that left the configuration as retired. At start, each static room is
-// probed again (state provisioning), except rooms that only the owner can repair.
-func (s *Server) ensureStaticRooms(ctx context.Context) error {
+// ensureStaticRooms gives each static machine a room row. At start, it marks
+// rooms of machines that left the configuration as retired, and each static
+// room is probed again (state provisioning), except rooms that only the owner
+// can repair. After a configuration change (start false), it only adds rooms
+// and probes a retired room whose machine is back; refreshRooms does the rest
+// when the rooms are free.
+func (s *Server) ensureStaticRooms(ctx context.Context, start bool) error {
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return err
@@ -42,11 +45,11 @@ func (s *Server) ensureStaticRooms(ctx context.Context) error {
 	now := time.Now()
 	byMachine := map[string]store.Room{}
 	for _, r := range rooms {
-		if p := s.cfg.Providers[r.Provider]; (p != nil && p.Kind == config.ProviderStatic) || r.State == protocol.RoomRetired {
+		if p := s.config().Providers[r.Provider]; (p != nil && p.Kind == config.ProviderStatic) || r.State == protocol.RoomRetired {
 			byMachine[r.Provider+"/"+r.Machine] = r
 		}
 	}
-	for _, m := range s.cfg.Machines() {
+	for _, m := range s.config().Machines() {
 		if m.Kind != config.ProviderStatic {
 			continue
 		}
@@ -54,9 +57,12 @@ func (s *Server) ensureStaticRooms(ctx context.Context) error {
 		delete(byMachine, m.Key())
 		if !ok {
 			if _, err := s.store.InsertRoom(ctx, store.Room{Name: m.Key(), Provider: m.Provider, Machine: m.Name,
-				State: protocol.RoomProvisioning, OS: m.OS}, s.cfg.ServerID, slotNames(m), now); err != nil {
+				State: protocol.RoomProvisioning, OS: m.OS}, s.config().ServerID, slotNames(m), now); err != nil {
 				return err
 			}
+			continue
+		}
+		if !start && r.State != protocol.RoomRetired {
 			continue
 		}
 		if err := s.store.EnsureSlots(ctx, r.ID, slotNames(m)); err != nil {
@@ -71,7 +77,7 @@ func (s *Server) ensureStaticRooms(ctx context.Context) error {
 		}
 	}
 	for _, r := range byMachine {
-		if r.State != protocol.RoomRetired {
+		if start && r.State != protocol.RoomRetired {
 			if _, err := s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomRetired, "machine removed from the configuration", now); err != nil {
 				return err
 			}
@@ -91,7 +97,7 @@ func (s *Server) connect(ctx context.Context, r store.Room) (*roomops.Conn, erro
 // connectAs connects to a room as user (a slot's own user), or as the
 // provider's user if user is empty.
 func (s *Server) connectAs(ctx context.Context, r store.Room, user string) (*roomops.Conn, error) {
-	p := s.providers[r.Provider]
+	p := s.providerMap()[r.Provider]
 	if p == nil {
 		return nil, fmt.Errorf("provider %q is not in the configuration", r.Provider)
 	}
@@ -117,7 +123,7 @@ func (s *Server) connectAs(ctx context.Context, r store.Room, user string) (*roo
 
 func (s *Server) maxProvisionTimeout() time.Duration {
 	var d time.Duration
-	for _, p := range s.cfg.Platforms {
+	for _, p := range s.config().Platforms {
 		d += p.ScriptTimeout(config.StepProvision)
 	}
 	return d
@@ -127,6 +133,11 @@ func (s *Server) maxProvisionTimeout() time.Duration {
 // slots, runs the provision scripts that are not up to date (static rooms
 // only), and the health scripts.
 func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machine) error {
+	// One configuration for the whole step: the scripts that run and the
+	// hashes that the room records are of one version (the next provisioning
+	// follows a newer configuration).
+	lc := s.live.Load()
+	platforms := lc.cfg.Platforms
 	conn, err := s.connect(ctx, r)
 	if err != nil {
 		return err
@@ -145,7 +156,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if err := s.store.SetRoomProbe(ctx, r.ID, room.OS, room.Arch, room.Home, room.Shell); err != nil {
 		return err
 	}
-	upload, err := s.roomUpload(room, m)
+	upload, err := s.roomUpload(lc, room, m)
 	if err != nil {
 		return err
 	}
@@ -169,7 +180,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	// tools and without agent-device, because it removes an agent-device
 	// command that an earlier configuration installed.
 	var resp protocol.RunScriptResponse
-	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.cfg.Mise.AgentDeviceEnabled()}
+	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.config().Mise.AgentDeviceEnabled()}
 	if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
 		return err
 	}
@@ -188,10 +199,11 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		}
 		// On-demand rooms run a platform provision script when a lease for the
 		// platform first uses the room (design, section 7).
-		if m.OnDemand() && s.cfg.Platforms[name].Kind == config.KindDevice {
+		pl := platforms[name]
+		if pl == nil || (m.OnDemand() && pl.Kind == config.KindDevice) {
 			continue
 		}
-		if err := s.runProvision(ctx, room, r.ID, m.OS, s.cfg.Platforms[name], p); err != nil {
+		if err := s.runProvision(ctx, room, r.ID, m.OS, pl, p); err != nil {
 			return err
 		}
 		if err := s.store.SetRoomPlatform(ctx, r.ID, name, p.Hash, time.Now()); err != nil {
@@ -232,7 +244,7 @@ func (s *Server) provisionSlotUser(ctx context.Context, r store.Room, m *config.
 	if err := s.store.SetSlotHome(ctx, r.ID, sl.Name, room.Home); err != nil {
 		return err
 	}
-	upload, err := s.roomUpload(room, m)
+	upload, err := s.roomUpload(s.live.Load(), room, m)
 	if err != nil {
 		return err
 	}
@@ -240,7 +252,7 @@ func (s *Server) provisionSlotUser(ctx context.Context, r store.Room, m *config.
 		return err
 	}
 	var resp protocol.RunScriptResponse
-	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.cfg.Mise.AgentDeviceEnabled()}
+	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.config().Mise.AgentDeviceEnabled()}
 	if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
 		return err
 	}
@@ -267,7 +279,7 @@ func slotUser(m *config.Machine, slot string) string {
 // slotHome returns the home directory of a slot's user: its own user's, or
 // the machine user's.
 func (s *Server) slotHome(ctx context.Context, r store.Room, slot string) (string, error) {
-	if slotUser(s.cfg.Machine(r.Provider+"/"+r.Machine), slot) == "" {
+	if slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot) == "" {
 		return r.Home, nil
 	}
 	home, err := s.store.SlotHome(ctx, r.ID, slot)
@@ -297,8 +309,8 @@ func (s *Server) healthPlatforms(ctx context.Context, roomID int64) ([]string, e
 	}
 	var out []string
 	for _, name := range s.roomPlatformNames(m) {
-		up := s.uploads[name][m.OS]
-		if up.Hash != "" && s.cfg.Platforms[name].Script(m.OS, config.StepHealth) != "" && ready[name] == up.Hash {
+		up := s.platformUploads()[name][m.OS]
+		if pl := s.config().Platforms[name]; pl != nil && up.Hash != "" && pl.Script(m.OS, config.StepHealth) != "" && ready[name] == up.Hash {
 			out = append(out, name)
 		}
 	}
@@ -312,7 +324,10 @@ func (s *Server) runHealth(ctx context.Context, room *roomops.Room, roomID int64
 		return err
 	}
 	for _, name := range names {
-		p := s.cfg.Platforms[name]
+		p := s.config().Platforms[name]
+		if p == nil {
+			continue
+		}
 		timeout := p.ScriptTimeout(config.StepHealth)
 		resp, err := room.RunScript(ctx, name, config.StepHealth, "", protocol.RunScriptRequest{
 			Env: platformEnv(p), TimeoutSeconds: int(timeout / time.Second)})
@@ -379,7 +394,7 @@ func (s *Server) readyPlatforms(ctx context.Context, roomID int64) (map[string]s
 // roomUpload computes what the room must have: the helper and mise for its OS
 // and architecture, the machine-level mise tools, the room environment, and the
 // platform directories.
-func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Upload, error) {
+func (s *Server) roomUpload(lc *liveConfig, room *roomops.Room, m *config.Machine) (roomops.Upload, error) {
 	goos, ext := room.OS, ""
 	switch goos {
 	case config.OSMacOS:
@@ -388,8 +403,8 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 		ext = ".exe"
 	}
 	u := roomops.Upload{
-		HelperFile: filepath.Join(s.cfg.HelperDir, fmt.Sprintf("hostel-%s-%s%s", goos, room.Arch, ext)),
-		MiseFile:   filepath.Join(s.cfg.HelperDir, fmt.Sprintf("mise-%s-%s%s", goos, room.Arch, ext)),
+		HelperFile: filepath.Join(lc.cfg.HelperDir, fmt.Sprintf("hostel-%s-%s%s", goos, room.Arch, ext)),
+		MiseFile:   filepath.Join(lc.cfg.HelperDir, fmt.Sprintf("mise-%s-%s%s", goos, room.Arch, ext)),
 		Platforms:  map[string]roomops.Platform{},
 	}
 	var err error
@@ -411,7 +426,7 @@ func (s *Server) roomUpload(room *roomops.Room, m *config.Machine) (roomops.Uplo
 		return u, err
 	}
 	for _, name := range s.roomPlatformNames(m) {
-		u.Platforms[name] = s.uploads[name][m.OS]
+		u.Platforms[name] = lc.uploads[name][m.OS]
 	}
 	return u, nil
 }
@@ -426,10 +441,10 @@ func (s *Server) miseEnv(osName, home string) map[string]string {
 		"MISE_STATE_DIR":            roomops.Path(osName, home, "mise-state"),
 		"MISE_TRUSTED_CONFIG_PATHS": roomops.Path(osName, home, "slots"),
 		"MISE_YES":                  "1",
-		"MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": strings.Join(s.cfg.Mise.IdiomaticTools, ","),
+		"MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": strings.Join(s.config().Mise.IdiomaticTools, ","),
 	}
-	if s.cfg.Mise.GithubToken != "" {
-		env["MISE_GITHUB_TOKEN"] = s.cfg.Mise.GithubToken
+	if s.config().Mise.GithubToken != "" {
+		env["MISE_GITHUB_TOKEN"] = s.config().Mise.GithubToken
 	}
 	return env
 }

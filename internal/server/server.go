@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -23,7 +25,6 @@ import (
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/provider"
-	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/tlspin"
 	"github.com/csansoon/hostel/internal/version"
@@ -31,12 +32,20 @@ import (
 
 // Server holds the running server state.
 type Server struct {
-	cfg        *config.Server
+	// live is the current configuration; applyMu orders the changes, and
+	// schedMu keeps a scheduler pass and the swap apart.
+	live    atomic.Pointer[liveConfig]
+	applyMu sync.Mutex
+	// joinMu: one machine join at a time.
+	joinMu  sync.Mutex
+	schedMu sync.Mutex
+	// localData is server.toml at the start: its keys change only with a
+	// restart.
+	localData  []byte
 	store      *store.Store
 	log        *slog.Logger
 	gatewayKey ssh.Signer
 	serverKey  ssh.Signer
-	providers  map[string]provider.Provider
 	kick       chan struct{}
 	workers    workers
 	notify     notifier
@@ -50,10 +59,10 @@ type Server struct {
 	tlsKeyHash []byte
 	// publicURLs are the public_urls with the real listen port.
 	publicURLs []string
+	// logins are the provider CLI logins (M9).
+	logins logins
 	// connectLimit limits failed POST /v1/connect attempts.
 	connectLimit connectLimiter
-	// uploads has the platform files and hashes for each platform and OS.
-	uploads map[string]map[string]roomops.Platform
 	// lastReconcile is used only by the loop goroutine.
 	lastReconcile time.Time
 }
@@ -90,8 +99,26 @@ func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer,
 	return out, nil
 }
 
-// Run starts the server and blocks until ctx ends.
-func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
+// ErrConfig marks configuration errors at start (the caller prints them as
+// such).
+var ErrConfig = errors.New("configuration errors")
+
+// Run starts the server with server.toml at file and blocks until ctx ends.
+func Run(ctx context.Context, file string, log *slog.Logger) error {
+	paths, err := config.ReadPaths(file)
+	if err != nil {
+		return fmt.Errorf("%w:\n%v", ErrConfig, err)
+	}
+	st, err := store.Open(ctx, filepath.Join(paths.DataDir, "hostel.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	start, err := loadConfig(ctx, file, st, time.Now())
+	if err != nil {
+		return fmt.Errorf("%w:\n%v", ErrConfig, err)
+	}
+	cfg := start.cfg
 	gatewayKey, err := LoadKey(filepath.Join(cfg.DataDir, GatewayHostKeyFile))
 	if err != nil {
 		return err
@@ -101,25 +128,18 @@ func Run(ctx context.Context, cfg *config.Server, log *slog.Logger) error {
 		return err
 	}
 	rooms := gateway.NewRoomConns()
-	providers, err := newProviders(ctx, cfg, serverKey, rooms.Dial, log)
+	s := &Server{store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
+		rooms: rooms, kick: make(chan struct{}, 1), localData: start.local}
+	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, nil)
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "hostel.db"))
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	s := &Server{cfg: cfg, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
-		providers: providers, rooms: rooms, kick: make(chan struct{}, 1)}
+	s.live.Store(lc)
 	st.SetLeaseHook(s.notify.notify)
-	if err := s.loadPlatformUploads(); err != nil {
-		return err
-	}
 	if err := st.ResetTimers(ctx, time.Now()); err != nil {
 		return err
 	}
-	if err := s.ensureStaticRooms(ctx); err != nil {
+	if err := s.ensureStaticRooms(ctx, true); err != nil {
 		return fmt.Errorf("static rooms: %w", err)
 	}
 
@@ -212,6 +232,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/rooms/{id}/repair", s.auth(s.admin(s.handleRoomRepair)))
 	mux.HandleFunc("POST /v1/rooms/{id}/destroy", s.auth(s.admin(s.handleRoomDestroy)))
 	mux.HandleFunc("POST /v1/connect", s.handleConnect)
+	mux.HandleFunc("POST /v1/logins/{cli}", s.auth(s.admin(s.handleLogin)))
+	mux.HandleFunc("GET /v1/logins/{cli}", s.auth(s.admin(s.handleLoginState)))
+	mux.HandleFunc("POST /v1/machines/invites", s.auth(s.admin(s.handleMachineInvite)))
+	mux.HandleFunc("POST /v1/machines/join", s.handleMachineJoin)
+	mux.HandleFunc("GET /v1/download/{file}", s.handleDownload)
+	mux.HandleFunc("GET /v1/install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /v1/me", s.auth(s.handleMe))
 	mux.HandleFunc("DELETE /v1/me", s.auth(s.handleDisconnect))
 	mux.HandleFunc("GET /v1/users", s.auth(s.handleUsers))
@@ -221,6 +247,14 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/users/{name}/computers/{computer}", s.auth(s.admin(s.handleRemoveComputer)))
 	mux.HandleFunc("POST /v1/leases/{id}/move", s.auth(s.admin(s.handleMove)))
 	mux.HandleFunc("POST /v1/leases/{id}/priority", s.auth(s.admin(s.handlePriority)))
+	mux.HandleFunc("GET /v1/config", s.auth(s.handleGetConfig))
+	mux.HandleFunc("PUT /v1/config", s.auth(s.admin(s.handlePutConfig)))
+	mux.HandleFunc("GET /v1/config/history", s.auth(s.handleConfigHistory))
+	mux.HandleFunc("GET /v1/config/platforms", s.auth(s.handleConfigPlatforms))
+	mux.HandleFunc("GET /v1/config/platforms/{name}", s.auth(s.handleGetPlatformFiles))
+	mux.HandleFunc("PUT /v1/config/platforms/{name}", s.auth(s.admin(s.handlePutPlatform)))
+	mux.HandleFunc("DELETE /v1/config/platforms/{name}", s.auth(s.admin(s.handleRemovePlatform)))
+	mux.HandleFunc("POST /v1/config/platforms/{name}/reset", s.auth(s.admin(s.handleResetPlatform)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	// The gateway's SSH over a WebSocket; SSH authenticates inside.

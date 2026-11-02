@@ -20,15 +20,21 @@ func decodeFile(path string, v any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkDurations(path, data, reflect.TypeOf(v)); err != nil {
-		return nil, err
+	return data, decodeData(path, data, v)
+}
+
+// decodeData decodes TOML data into v (only the keys in data change); name is
+// the source in error messages.
+func decodeData(name string, data []byte, v any) error {
+	if err := checkDurations(name, data, reflect.TypeOf(v)); err != nil {
+		return err
 	}
 	dec := toml.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		return nil, positioned(path, err)
+		return positioned(name, err)
 	}
-	return data, nil
+	return nil
 }
 
 var typeErrRE = regexp.MustCompile(`^cannot decode TOML (\w+) into .* of type (\S+)$`)

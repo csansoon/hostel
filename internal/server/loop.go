@@ -57,11 +57,16 @@ func (s *Server) kickScheduler() {
 
 // loop runs a pass at start, after each kick, and every intervals.scheduler.
 func (s *Server) loop(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.Intervals.Scheduler.D())
+	interval := s.config().Intervals.Scheduler.D()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if err := s.pass(ctx); err != nil && ctx.Err() == nil {
 			s.log.Error("loop pass", "err", err)
+		}
+		if d := s.config().Intervals.Scheduler.D(); d != interval {
+			interval = d
+			ticker.Reset(d)
 		}
 		select {
 		case <-ctx.Done():
@@ -73,11 +78,14 @@ func (s *Server) loop(ctx context.Context) {
 }
 
 func (s *Server) pass(ctx context.Context) error {
-	if now := time.Now(); now.Sub(s.lastReconcile) >= s.cfg.Intervals.Reconcile.D() {
+	if now := time.Now(); now.Sub(s.lastReconcile) >= s.config().Intervals.Reconcile.D() {
 		s.lastReconcile = now
 		if err := s.reconcile(ctx); err != nil {
 			s.log.Error("reconcile", "err", err)
 		}
+	}
+	if err := s.refreshRooms(ctx); err != nil {
+		return fmt.Errorf("rooms after a configuration change: %w", err)
 	}
 	if err := s.warm(ctx); err != nil {
 		return fmt.Errorf("warm policy: %w", err)
@@ -123,24 +131,26 @@ var roomNameRE = regexp.MustCompile(`^hostel-([a-z0-9]+)-([0-9]+)$`)
 // with this server's prefix are destroyed; database rooms that the provider
 // lost are marked destroyed. It never acts on rooms without the prefix.
 func (s *Server) reconcile(ctx context.Context) error {
+	// One configuration for the whole pass.
+	lc := s.live.Load()
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return err
 	}
 	for _, r := range rooms {
-		p := s.cfg.Providers[r.Provider]
+		p := lc.cfg.Providers[r.Provider]
 		if p != nil && p.Kind == config.ProviderStatic && r.State == protocol.RoomBroken && r.BrokenReason == reasonUnreachable {
 			if _, err := s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomBroken}, protocol.RoomProvisioning, "", time.Now()); err != nil {
 				return err
 			}
 		}
 	}
-	prefix := "hostel-" + s.cfg.ServerID + "-"
-	for _, name := range s.cfg.ProviderOrder {
-		if s.cfg.Providers[name].Kind == config.ProviderStatic {
+	prefix := "hostel-" + lc.cfg.ServerID + "-"
+	for _, name := range lc.cfg.ProviderOrder {
+		if lc.cfg.Providers[name].Kind == config.ProviderStatic {
 			continue
 		}
-		p := s.providers[name]
+		p := lc.providers[name]
 		lctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
 		listed, err := p.List(lctx, prefix)
 		cancel()
@@ -151,7 +161,7 @@ func (s *Server) reconcile(ctx context.Context) error {
 		seen := map[int64]bool{}
 		for _, ref := range listed {
 			m := roomNameRE.FindStringSubmatch(ref.Name)
-			if m == nil || m[1] != s.cfg.ServerID {
+			if m == nil || m[1] != lc.cfg.ServerID {
 				continue
 			}
 			id, _ := strconv.ParseInt(m[2], 10, 64)
@@ -213,7 +223,7 @@ func (s *Server) warm(ctx context.Context) error {
 	}
 	now := time.Now()
 	for _, r := range rooms {
-		m := s.cfg.Machine(r.Provider + "/" + r.Machine)
+		m := s.config().Machine(r.Provider + "/" + r.Machine)
 		if m == nil || !m.OnDemand() {
 			continue
 		}
@@ -231,7 +241,7 @@ func (s *Server) warm(ctx context.Context) error {
 			s.store.SetWarmUntil(ctx, r.ID, now.Add(m.WarmRunning.D()))
 		case r.State == protocol.RoomRunning && now.After(r.WarmUntil):
 			to := protocol.RoomDestroying
-			if s.providers[r.Provider].Capabilities(r.Machine).CanStop {
+			if s.providerMap()[r.Provider].Capabilities(r.Machine).CanStop {
 				to = protocol.RoomStopping
 			}
 			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning}, to, "idle for warm_running", now)

@@ -111,7 +111,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "only room tokens are created here; invite users with \"hostel config users invite\"")
 		return
 	}
-	m := s.cfg.Machine(req.Machine)
+	m := s.config().Machine(req.Machine)
 	if m == nil || m.Kind != config.ProviderStatic {
 		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a room token needs machine = <provider>/<machine> of a static machine; %q is not one", req.Machine))
 		return
