@@ -133,7 +133,7 @@ Agents use the same commands as today. Server configuration is only under
 hostel connect <invite code>         connect this computer to a server
 hostel disconnect
 hostel status   (aliases: ls, rooms) interactive in a terminal; plain text otherwise
-hostel room <name>                   details of one room (plain text)
+hostel status <room|platform>        details of one room or queue (plain text)
 hostel platforms                     platforms with descriptions, devices, free slots, waits
 
 hostel acquire / run / sync / release / ...   unchanged (agents)
@@ -319,7 +319,7 @@ acme · 4 rooms (2 in use) · 1 waiting                     you: Ana Pérez (mem
 
 `q` or Ctrl-C ends it; the terminal keeps the last frame.
 
-Details of a room (Enter, or `hostel room <name>` as plain text):
+Details of a room (Enter, or `hostel status <room>` as plain text):
 
 ```
 home/macbook · static, connects to the server · macOS 26.1, arm64
@@ -339,7 +339,7 @@ EVENTS   14:31 lease 7f3a2c ready (prepare 18s)
 esc back · e end lease · d drain · r repair (admin)
 ```
 
-Details of a queue:
+Details of a queue (Enter, or `hostel status <platform>` as plain text):
 
 ```
 ios · 1 room in use, 0 free · median lease 22m

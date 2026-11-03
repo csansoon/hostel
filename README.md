@@ -11,7 +11,7 @@ machine or an on-demand cloud such as Namespace), prepares it, and gives the age
 SSH access through its gateway. When the lease ends, cleanup deletes everything the
 lease left on the room.
 
-Status: milestones M0 to M7 are done (Docker, static, and Namespace rooms; iOS, Android, macOS, Windows, and Linux; desktop testing). M8 (users and connection) is in progress; see docs/plan.md.
+Status: milestones M0 to M9 are done (Docker, static, and Namespace rooms; iOS, Android, macOS, Windows, and Linux; desktop testing; users and connection; remote configuration). M10 (the status view: `hostel status`) is in progress; see docs/plan.md.
 
 | Document | Content |
 |---|---|

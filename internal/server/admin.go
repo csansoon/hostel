@@ -14,7 +14,7 @@ import (
 func (s *Server) roomFor(w http.ResponseWriter, r *http.Request) (store.Room, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "", "the room ID must be a number; see \"hostel status\"")
+		writeError(w, http.StatusBadRequest, "", "the room ID must be a number; \"hostel status <room>\" shows it")
 		return store.Room{}, false
 	}
 	room, err := s.store.Room(r.Context(), id)

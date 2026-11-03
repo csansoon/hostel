@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -14,6 +17,10 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
+// statusTimeout bounds one status request (the details ask the room for the
+// jobs, up to 10 s on the server).
+const statusTimeout = 30 * time.Second
+
 func apiClient() (*client.Client, error) {
 	g, err := config.LoadGuest()
 	if err != nil {
@@ -22,9 +29,17 @@ func apiClient() (*client.Client, error) {
 	return client.New(g)
 }
 
+// statusCmd is "hostel status [room | platform]" (aliases ls, rooms): the
+// overview, the details of a room, or the queue of a platform.
 func statusCmd(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel status", stderr)
-	if _, err := cli.Parse(fs, args); err != nil {
+	plain := fs.Bool("plain", false, "print plain text (the default when stdout is not a terminal)")
+	rest, err := cli.Parse(fs, args)
+	if err != nil {
+		return 2
+	}
+	if len(rest) > 1 {
+		fmt.Fprintln(stderr, "hostel status: too many arguments; usage: hostel status [room | platform]")
 		return 2
 	}
 	c, err := apiClient()
@@ -32,59 +47,510 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
+	if !*plain && len(rest) == 0 {
+		if out, ok := viewSupported(stdout); ok {
+			if err := runView(c, out); err != nil {
+				fmt.Fprintln(stderr, "hostel:", err)
+				return 1
+			}
+			return 0
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
+	defer cancel()
+	now := time.Now()
 	var st protocol.Status
-	if err := c.Do(context.Background(), "GET", "/v1/status", nil, &st); err != nil {
+	if err := c.Do(ctx, "GET", "/v1/status", nil, &st); err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
-	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "LEASE\tSTATE\tPLATFORM\tDEVICES\tPRIORITY\tUSER\tGUEST\tROOM\tAGE\tEXPIRES\tTASK")
-	for _, l := range st.Leases {
-		state := l.State
-		if l.State == protocol.LeaseQueued {
-			state = fmt.Sprintf("queued #%d (%s)", l.Position, l.Reason)
+	cleanStatus(&st)
+	if len(rest) == 1 {
+		if slices.ContainsFunc(st.Rooms, func(r protocol.RoomStatus) bool { return r.Name == rest[0] }) {
+			var d protocol.RoomDetails
+			if err := c.Do(ctx, "GET", "/v1/rooms/"+rest[0], nil, &d); err != nil {
+				fmt.Fprintln(stderr, "hostel:", err)
+				return 1
+			}
+			cleanDetails(&d)
+			printRoomDetails(stdout, d, now, "")
+			return 0
 		}
-		room, expires := "-", "-"
-		if l.RoomID != 0 {
-			room = fmt.Sprintf("%d/%s", l.RoomID, l.Slot)
+		if err := printQueue(stdout, st, rest[0], now, ""); err != nil {
+			fmt.Fprintln(stderr, "hostel:", err)
+			return 1
+		}
+		return 0
+	}
+	printStatus(stdout, st, now, -1)
+	return 0
+}
+
+// printStatus prints the overview (multiplayer.md, section 8). With sel >= 0
+// (the interactive view), each line has a margin and the item sel (an index
+// of statusItems) has the marker.
+func printStatus(w io.Writer, st protocol.Status, now time.Time, sel int) {
+	mark := func(item int) string {
+		switch {
+		case sel < 0:
+			return ""
+		case item == sel:
+			return "❯ "
+		}
+		return "  "
+	}
+	inUse, waiting := 0, 0
+	for _, r := range st.Rooms {
+		if len(roomLeases(st, r.ID)) > 0 {
+			inUse++
+		}
+	}
+	for _, l := range st.Leases {
+		if l.State == protocol.LeaseQueued {
+			waiting++
+		}
+	}
+	you := "-"
+	if st.User != "" {
+		you = fmt.Sprintf("%s (%s)", st.User, st.Role)
+	}
+	fmt.Fprintf(w, "%s · %s (%d in use) · %d waiting · you: %s\n\n", st.ServerID, plural(len(st.Rooms), "room"), inUse, waiting, you)
+
+	tw := newTable(w)
+	fmt.Fprintln(tw, mark(-1)+"ROOM\tPLATFORMS\tSTATE\tUSER\tTASK\tTIME\tLEASE")
+	withRooms := map[string]bool{}
+	for ri, r := range st.Rooms {
+		withRooms[r.Provider+"/"+r.Machine] = true
+		leases := roomLeases(st, r.ID)
+		state := roomState(r, len(leases))
+		if len(leases) == 0 {
+			fmt.Fprintf(tw, "%s%s\t%s\t%s\t\t\t\t\n", mark(ri), r.Name, strings.Join(r.Platforms, ", "), state)
+		}
+		for i, l := range leases {
+			name, platforms := mark(ri)+r.Name, strings.Join(r.Platforms, ", ")
+			if i > 0 {
+				name, platforms, state = mark(-1), "", ""
+			}
+			if l.State != protocol.LeaseReady && state != "" {
+				state += " (" + l.State + ")"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", name, platforms, state, l.User, l.Task, leaseAge(l, now), l.ID)
+		}
+	}
+	for _, m := range st.Machines {
+		if withRooms[m.Key] {
+			continue
+		}
+		note := "(no room yet)"
+		if m.Kind != "static" {
+			note = fmt.Sprintf("(on demand, up to %d)", m.MaxRooms)
+		}
+		fmt.Fprintf(tw, "%s%s\t%s\tnone\t%s\t\t\t\n", mark(-1), m.Key, strings.Join(append([]string{m.OS}, m.Platforms...), ", "), note)
+	}
+	tw.flush()
+
+	queues := queuesOf(st)
+	if len(queues) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	tw = newTable(w)
+	fmt.Fprintln(tw, mark(-1)+"QUEUE\tWAITING\tEST.\tNEXT")
+	for qi, q := range queues {
+		next := q.leases[0]
+		fmt.Fprintf(tw, "%s%s\t%d\t%s\t%s · %s (%s, %s) · lease %s\n", mark(len(st.Rooms)+qi), q.platform, len(q.leases), estimate(next),
+			next.User, next.Task, next.Priority, shortDur(now.Sub(next.CreatedAt)), next.ID)
+	}
+	tw.flush()
+}
+
+// statusItem is a line of the overview that the view can select: a room or a
+// queue.
+type statusItem struct {
+	room bool
+	name string
+}
+
+// statusItems returns the selectable items in the order of printStatus.
+func statusItems(st protocol.Status) []statusItem {
+	var out []statusItem
+	for _, r := range st.Rooms {
+		out = append(out, statusItem{room: true, name: r.Name})
+	}
+	for _, q := range queuesOf(st) {
+		out = append(out, statusItem{name: q.platform})
+	}
+	return out
+}
+
+// printQueue prints the queue of a platform. With sel (the view), the lease
+// sel has the marker.
+func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time, sel string) error {
+	var q []protocol.LeaseStatus
+	for _, qu := range queuesOf(st) {
+		if qu.platform == platform {
+			q = qu.leases
+		}
+	}
+	used, free := 0, 0
+	known := false
+	for _, r := range st.Rooms {
+		if !slices.Contains(r.Platforms, platform) {
+			continue
+		}
+		known = true
+		if n := len(roomLeases(st, r.ID)); n > 0 {
+			used++
+		} else if r.State == protocol.RoomRunning && !r.Drained {
+			free++
+		}
+	}
+	for _, m := range st.Machines {
+		known = known || m.OS == platform || slices.Contains(m.Platforms, platform)
+	}
+	if !known && len(q) == 0 {
+		return fmt.Errorf("no room or platform %q; \"hostel status\" lists the rooms and the queues", platform)
+	}
+	fmt.Fprintf(w, "%s · %d in use, %d free · %d waiting\n", platform, used, free, len(q))
+	if len(q) == 0 {
+		return nil
+	}
+	fmt.Fprintln(w)
+	tw := newTable(w)
+	fmt.Fprintln(tw, marker(sel, "")+"#\tUSER\tTASK\tPRIORITY\tWAITING\tEST.\tLEASE\tREASON")
+	for _, l := range q {
+		fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", marker(sel, l.ID), position(l), l.User, l.Task, l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID, l.Reason)
+	}
+	return tw.flush()
+}
+
+// printRoomDetails prints the details of a room. With sel (the view), the
+// lease sel has the marker.
+func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time, sel string) {
+	r := d.Room
+	kind := "on demand"
+	if d.Machine != nil && d.Machine.Kind == "static" {
+		kind = "static"
+		if d.Machine.Connect {
+			kind += ", connects to the server"
+		}
+	}
+	osLine := r.OS
+	if r.Hardware != nil && r.Hardware.OSVersion != "" {
+		osLine = r.Hardware.OSVersion
+	}
+	if r.Arch != "" {
+		osLine += ", " + r.Arch
+	}
+	fmt.Fprintf(w, "%s · room %d · %s · %s · %s\n", r.Name, r.ID, kind, osLine, roomState(r, len(d.Leases)))
+	if hw := r.Hardware; hw != nil {
+		var parts []string
+		if hw.CPU != "" {
+			parts = append(parts, hw.CPU)
+		}
+		if hw.Cores > 0 {
+			parts = append(parts, plural(hw.Cores, "core"))
+		}
+		if hw.MemoryBytes > 0 {
+			parts = append(parts, gb(hw.MemoryBytes))
+		}
+		if hw.DiskFreeBytes > 0 {
+			parts = append(parts, "disk "+gb(hw.DiskFreeBytes)+" free")
+		}
+		fmt.Fprintln(w, strings.Join(parts, " · "))
+	}
+	line := "Platforms " + strings.Join(r.Platforms, ", ")
+	if d.Machine != nil && len(d.Machine.Labels) > 0 {
+		line += " · labels " + strings.Join(d.Machine.Labels, ", ")
+	}
+	fmt.Fprintf(w, "%s · %s\n", line, plural(len(r.Slots), "slot"))
+	if r.Reason != "" {
+		fmt.Fprintf(w, "Reason: %s\n", r.Reason)
+	}
+
+	fmt.Fprintln(w)
+	if len(d.Leases) == 0 {
+		fmt.Fprintln(w, "NOW      free")
+	}
+	for i, l := range d.Leases {
+		label := "NOW"
+		if i > 0 {
+			label = ""
+		}
+		fmt.Fprintf(w, "%-8s %s%s · %s · lease %s (%s, slot %s)\n", label, marker(sel, l.ID), l.User, l.Task, l.ID, l.State, l.Slot)
+		var times []string
+		if !l.ReadyAt.IsZero() {
+			times = append(times, "ready "+shortDur(now.Sub(l.ReadyAt))+" ago")
+		} else {
+			times = append(times, "since "+shortDur(now.Sub(l.CreatedAt)))
 		}
 		if !l.ExpiresAt.IsZero() {
-			expires = l.ExpiresAt.Local().Format(time.TimeOnly)
+			times = append(times, "ends at "+l.ExpiresAt.Local().Format("15:04")+" at the latest")
 		}
-		user := l.User
-		if user == "" {
-			user = "-"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", l.ID, state, l.Platform, strings.Join(l.Devices, ","),
-			l.Priority, user, l.Guest+":"+l.Repo, room, time.Since(l.CreatedAt).Round(time.Second), expires, l.Task)
-	}
-	tw.Flush()
-	fmt.Fprintln(stdout)
-	tw = tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ROOM\tNAME\tMACHINE\tOS\tSTATE\tSLOTS\tPLATFORMS")
-	for _, r := range st.Rooms {
-		var slots []string
-		for _, sl := range r.Slots {
-			s := sl.Name + ":" + sl.State
-			if sl.LeaseID != "" {
-				s += "(" + sl.LeaseID + ")"
+		fmt.Fprintf(w, "         %s\n", strings.Join(times, " · "))
+		fmt.Fprintf(w, "         from %s · repository %s\n", l.Guest, l.Repo)
+		for _, j := range d.Jobs[l.ID] {
+			state := j.State
+			if j.ExitCode != nil {
+				state = fmt.Sprintf("%s %d", state, *j.ExitCode)
 			}
-			slots = append(slots, s)
+			fmt.Fprintf(w, "         job %s %s %s: %s\n", j.ID, state, shortDur(now.Sub(j.StartedAt)), strings.Join(j.Command, " "))
 		}
-		state := r.State
-		if r.Reason != "" {
-			state += " (" + r.Reason + ")"
-		}
-		if r.Drained {
-			state += " drained"
-		}
-		osArch := r.OS
-		if r.Arch != "" {
-			osArch += "/" + r.Arch
-		}
-		fmt.Fprintf(tw, "%d\t%s\t%s/%s\t%s\t%s\t%s\t%s\n", r.ID, r.Name, r.Provider, r.Machine, osArch, state,
-			strings.Join(slots, " "), strings.Join(r.Platforms, ","))
 	}
-	tw.Flush()
-	return 0
+	if d.JobsError != "" {
+		fmt.Fprintf(w, "         %s\n", d.JobsError)
+	}
+
+	if len(d.Queue) > 0 {
+		fmt.Fprintln(w)
+		for i, l := range d.Queue {
+			label := "QUEUE"
+			if i > 0 {
+				label = ""
+			}
+			fmt.Fprintf(w, "%-8s %s. %s · %s · %s · %s · waiting %s · %s · lease %s\n", label, position(l), l.User, l.Task,
+				l.Platform, l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID)
+		}
+	}
+
+	if len(d.Events) > 0 {
+		fmt.Fprintln(w)
+		for i, e := range d.Events {
+			label := "EVENTS"
+			if i > 0 {
+				label = ""
+			}
+			msg := e.Message
+			if msg == "" {
+				msg = e.Kind
+			}
+			fmt.Fprintf(w, "%-8s %s %s\n", label, e.Time.Local().Format("15:04"), msg)
+		}
+	}
+}
+
+type queue struct {
+	platform string
+	leases   []protocol.LeaseStatus
+}
+
+// queuesOf groups the queued leases by platform, each in queue order.
+func queuesOf(st protocol.Status) []queue {
+	var out []queue
+	for _, l := range st.Leases {
+		if l.State != protocol.LeaseQueued {
+			continue
+		}
+		i := slices.IndexFunc(out, func(q queue) bool { return q.platform == l.Platform })
+		if i < 0 {
+			out = append(out, queue{platform: l.Platform})
+			i = len(out) - 1
+		}
+		out[i].leases = append(out[i].leases, l)
+	}
+	for _, q := range out {
+		slices.SortStableFunc(q.leases, byPosition)
+	}
+	slices.SortFunc(out, func(a, b queue) int { return strings.Compare(a.platform, b.platform) })
+	return out
+}
+
+// roomLeases returns the leases on a room that are not queued.
+func roomLeases(st protocol.Status, roomID int64) []protocol.LeaseStatus {
+	var out []protocol.LeaseStatus
+	for _, l := range st.Leases {
+		if l.RoomID == roomID && l.State != protocol.LeaseQueued {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// marker is the selection margin of the view: "" in plain text (sel is
+// empty), "❯ " for the selected lease, else two spaces.
+func marker(sel, id string) string {
+	switch {
+	case sel == "":
+		return ""
+	case sel == id:
+		return "❯ "
+	}
+	return "  "
+}
+
+// byPosition orders queued leases by position; a lease that the scheduler
+// has not placed yet (position 0) comes last.
+func byPosition(a, b protocol.LeaseStatus) int {
+	if (a.Position == 0) != (b.Position == 0) {
+		if a.Position == 0 {
+			return 1
+		}
+		return -1
+	}
+	return a.Position - b.Position
+}
+
+func position(l protocol.LeaseStatus) string {
+	if l.Position == 0 {
+		return "-"
+	}
+	return strconv.Itoa(l.Position)
+}
+
+func roomState(r protocol.RoomStatus, leases int) string {
+	state := r.State
+	if r.State == protocol.RoomRunning {
+		state = "free"
+		if leases > 0 {
+			state = "in use"
+			if len(r.Slots) > 1 {
+				// An exclusive lease holds all slots: count the slots.
+				used := 0
+				for _, sl := range r.Slots {
+					if sl.LeaseID != "" {
+						used++
+					}
+				}
+				state = fmt.Sprintf("in use %d/%d", max(used, leases), len(r.Slots))
+			}
+		}
+	}
+	if r.Drained {
+		state += ", drained"
+	}
+	return state
+}
+
+func leaseAge(l protocol.LeaseStatus, now time.Time) string {
+	if !l.ReadyAt.IsZero() {
+		return shortDur(now.Sub(l.ReadyAt))
+	}
+	return shortDur(now.Sub(l.CreatedAt))
+}
+
+func estimate(l protocol.LeaseStatus) string {
+	if l.EstimatedWaitSeconds <= 0 {
+		return "-"
+	}
+	return "~" + shortDur(time.Duration(l.EstimatedWaitSeconds)*time.Second)
+}
+
+// shortDur prints a duration as 41s, 12m, or 2h05m.
+func shortDur(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", max(int(d.Seconds()), 0))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
+func gb(n int64) string { return fmt.Sprintf("%.0f GB", float64(n)/(1<<30)) }
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// table aligns columns like tabwriter and drops the spaces at line ends.
+type table struct {
+	*tabwriter.Writer
+	buf bytes.Buffer
+	w   io.Writer
+}
+
+func newTable(w io.Writer) *table {
+	t := &table{w: w}
+	t.Writer = tabwriter.NewWriter(&t.buf, 0, 4, 2, ' ', 0)
+	return t
+}
+
+func (t *table) flush() error {
+	if err := t.Writer.Flush(); err != nil {
+		return err
+	}
+	for line := range strings.Lines(t.buf.String()) {
+		if _, err := io.WriteString(t.w, strings.TrimRight(line, " \n")+"\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clean replaces control characters (also newlines and tabs) with spaces:
+// tasks, job commands, and messages come from users, and must not add lines
+// or columns, or send VT sequences to the terminal.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+func cleanLease(l *protocol.LeaseStatus) {
+	for _, f := range []*string{&l.Task, &l.User, &l.Guest, &l.Repo, &l.Reason} {
+		*f = clean(*f)
+	}
+}
+
+func cleanRoom(r *protocol.RoomStatus) {
+	r.Reason = clean(r.Reason)
+	if hw := r.Hardware; hw != nil {
+		hw.CPU, hw.OSVersion = clean(hw.CPU), clean(hw.OSVersion)
+	}
+}
+
+// cleanMachine cleans the text from the configuration (an admin can write
+// any string in a label).
+func cleanMachine(m *protocol.MachineStatus) {
+	m.Key, m.Kind, m.OS = clean(m.Key), clean(m.Kind), clean(m.OS)
+	for _, list := range [][]string{m.Platforms, m.Labels} {
+		for i := range list {
+			list[i] = clean(list[i])
+		}
+	}
+}
+
+// cleanStatus cleans the text from users in a status.
+func cleanStatus(st *protocol.Status) {
+	st.User = clean(st.User)
+	for i := range st.Machines {
+		cleanMachine(&st.Machines[i])
+	}
+	for i := range st.Leases {
+		cleanLease(&st.Leases[i])
+	}
+	for i := range st.Rooms {
+		cleanRoom(&st.Rooms[i])
+	}
+}
+
+// cleanDetails cleans the text from users in room details.
+func cleanDetails(d *protocol.RoomDetails) {
+	cleanRoom(&d.Room)
+	if d.Machine != nil {
+		cleanMachine(d.Machine)
+	}
+	for _, ls := range [][]protocol.LeaseStatus{d.Leases, d.Queue} {
+		for i := range ls {
+			cleanLease(&ls[i])
+		}
+	}
+	for _, jobs := range d.Jobs {
+		for i := range jobs {
+			for j := range jobs[i].Command {
+				jobs[i].Command[j] = clean(jobs[i].Command[j])
+			}
+		}
+	}
+	for i := range d.Events {
+		d.Events[i].Message = clean(d.Events[i].Message)
+	}
+	d.JobsError = clean(d.JobsError)
 }

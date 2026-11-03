@@ -346,8 +346,8 @@ Design: `multiplayer.md`, section 8.
 
 - `hostel status` (aliases `ls`, `rooms`): interactive and inline in a terminal,
   plain text otherwise; updates on change (long poll on a status revision).
-- Room and queue details; `hostel room <name>` as plain text; the lease's jobs
-  from the room; hardware from the probe.
+- Room and queue details; `hostel status <room|platform>` as plain text; the
+  lease's jobs from the room; hardware from the probe.
 - Admin actions in the view, with a confirmation.
 
 Done when: the owner sees a coworker's lease, opens its details with its running

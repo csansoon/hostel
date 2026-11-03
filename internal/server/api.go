@@ -1,6 +1,9 @@
 package server
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,58 +46,135 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// statusKey is the notifier key of any lease change (the status long poll).
+const statusKey = "status"
+
+// maxStatusWait bounds the long poll of GET /v1/status (below common proxy
+// timeouts).
+const maxStatusWait = 50 * time.Second
+
+// handleStatus answers the status. With since=<revision> and wait=<duration>
+// it waits until the revision differs from since (M10).
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	since := r.URL.Query().Get("since")
+	wait, _ := time.ParseDuration(r.URL.Query().Get("wait"))
+	wait = min(max(wait, 0), maxStatusWait)
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	// Rooms and the configuration change without the hook: look again every
+	// 2 s.
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		// Wait for a lease change before reading, so no change between the
+		// read and the wait is lost.
+		changed := s.notify.wait(statusKey)
+		st, leases, err := s.buildStatus(ctx, requestToken(r))
+		if err != nil {
+			s.internalError(w, "read status", err)
+			return
+		}
+		send := since == "" || st.Revision != since || wait == 0
+		if !send {
+			select {
+			case <-changed:
+				continue
+			case <-tick.C:
+				continue
+			case <-deadline.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+		// The wait estimates are not in the revision (they change with time
+		// alone), so they are calculated only for the answer.
+		for i, l := range leases {
+			if l.State == protocol.LeaseQueued {
+				st.Leases[i].EstimatedWaitSeconds = s.leaseWait(ctx, l)
+			}
+		}
+		writeJSON(w, http.StatusOK, st)
+		return
+	}
+}
+
+// buildStatus reads the status without the wait estimates; leases are in the
+// order of the status leases.
+func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Status, []store.Lease, error) {
+	lc := s.live.Load()
+	out := protocol.Status{ServerID: lc.cfg.ServerID, Machines: []protocol.MachineStatus{}, Rooms: []protocol.RoomStatus{}, Leases: []protocol.LeaseStatus{}}
+	if tok.UserID != 0 {
+		out.User, out.Role = tok.Name, tok.Role
+	}
+	for _, m := range lc.cfg.Machines() {
+		out.Machines = append(out.Machines, machineStatus(m))
+	}
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
-		s.internalError(w, "read rooms", err)
-		return
+		return out, nil, err
 	}
 	slots, err := s.store.Slots(ctx)
 	if err != nil {
-		s.internalError(w, "read slots", err)
-		return
+		return out, nil, err
 	}
 	rps, err := s.store.RoomPlatforms(ctx)
 	if err != nil {
-		s.internalError(w, "read room platforms", err)
-		return
+		return out, nil, err
 	}
-	out := protocol.Status{Rooms: []protocol.RoomStatus{}}
 	for _, room := range rooms {
-		rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
-			OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
-			Slots: []protocol.SlotStatus{}, Platforms: []string{}, Deadline: room.ProviderDeadline}
-		for _, sl := range slots {
-			if sl.RoomID == room.ID {
-				rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
-			}
-		}
-		for _, rp := range rps {
-			if rp.RoomID == room.ID {
-				rs.Platforms = append(rs.Platforms, rp.Platform)
-			}
-		}
-		out.Rooms = append(out.Rooms, rs)
+		out.Rooms = append(out.Rooms, roomStatus(room, slots, rps))
 	}
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
-		s.internalError(w, "read leases", err)
-		return
+		return out, nil, err
 	}
 	users, err := s.store.TokenUserNames(ctx)
 	if err != nil {
-		s.internalError(w, "read users", err)
-		return
+		return out, nil, err
 	}
-	out.Leases = []protocol.LeaseStatus{}
 	for _, l := range leases {
-		out.Leases = append(out.Leases, protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
-			Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
-			Repo: l.Repo, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
-			ExpiresAt: l.ExpiresAt})
+		out.Leases = append(out.Leases, leaseStatus(l, users))
 	}
-	writeJSON(w, http.StatusOK, out)
+	data, _ := json.Marshal(out)
+	sum := sha256.Sum256(data)
+	out.Revision = hex.EncodeToString(sum[:8])
+	return out, leases, nil
+}
+
+func machineStatus(m *config.Machine) protocol.MachineStatus {
+	return protocol.MachineStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Platforms: append([]string{}, m.Platforms...),
+		Labels: append([]string{}, m.Labels...), MaxRooms: *m.MaxRooms, Connect: m.Connect}
+}
+
+func roomStatus(room store.Room, slots []store.Slot, rps []store.RoomPlatform) protocol.RoomStatus {
+	rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
+		OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
+		Slots: []protocol.SlotStatus{}, Platforms: []string{}, Deadline: room.ProviderDeadline}
+	for _, sl := range slots {
+		if sl.RoomID == room.ID {
+			rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
+		}
+	}
+	for _, rp := range rps {
+		if rp.RoomID == room.ID {
+			rs.Platforms = append(rs.Platforms, rp.Platform)
+		}
+	}
+	if room.Hardware != "" {
+		var hw protocol.Hardware
+		if json.Unmarshal([]byte(room.Hardware), &hw) == nil {
+			rs.Hardware = &hw
+		}
+	}
+	return rs
+}
+
+func leaseStatus(l store.Lease, users map[int64]string) protocol.LeaseStatus {
+	return protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
+		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
+		Repo: l.Repo, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
+		ReadyAt: l.ReadyAt, ExpiresAt: l.ExpiresAt}
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {

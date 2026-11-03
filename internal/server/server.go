@@ -135,7 +135,10 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 		return err
 	}
 	s.live.Store(lc)
-	st.SetLeaseHook(s.notify.notify)
+	st.SetLeaseHook(func(id string) {
+		s.notify.notify(id)
+		s.notify.notify(statusKey)
+	})
 	if err := st.ResetTimers(ctx, time.Now()); err != nil {
 		return err
 	}
@@ -221,6 +224,7 @@ func (s *Server) routes() http.Handler {
 	// "hostel room connect" reads the gateway address with a room token.
 	mux.HandleFunc("GET /v1/info", s.authRoom(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
+	mux.HandleFunc("GET /v1/rooms/{name...}", s.auth(s.handleRoomDetails))
 	mux.HandleFunc("GET /v1/platforms", s.auth(s.handlePlatforms))
 	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
 	mux.HandleFunc("GET /v1/leases/{id}", s.auth(s.handleGetLease))

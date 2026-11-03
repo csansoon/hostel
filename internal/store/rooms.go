@@ -23,6 +23,7 @@ type Room struct {
 	SSHHostKey       string
 	HelperSHA256     string
 	ConfigSHA256     string
+	Hardware         string
 	ProviderDeadline time.Time
 	WarmUntil        time.Time
 	Drained          bool
@@ -48,14 +49,14 @@ type RoomPlatform struct {
 }
 
 const roomColumns = `id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key,
-	helper_sha256, config_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at`
+	helper_sha256, config_sha256, hardware, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at`
 
 func scanRoom(row interface{ Scan(...any) error }) (Room, error) {
 	var r Room
 	var deadline, warm sql.NullInt64
 	var created, changed int64
 	err := row.Scan(&r.ID, &r.Name, &r.Provider, &r.Machine, &r.ProviderRef, &r.State, &r.OS, &r.Arch, &r.Home, &r.Shell,
-		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed)
+		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &r.Hardware, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed)
 	r.ProviderDeadline, r.WarmUntil = fromMS(deadline), fromMS(warm)
 	r.CreatedAt, r.StateChangedAt = time.UnixMilli(created), time.UnixMilli(changed)
 	return r, err
@@ -230,6 +231,12 @@ func (s *Store) PinHostKey(ctx context.Context, id int64, key string) error {
 
 func (s *Store) SetHelperSHA256(ctx context.Context, id int64, sum string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET helper_sha256 = ? WHERE id = ?`, sum, id)
+	return err
+}
+
+// SetHardware records the hardware of a room (JSON).
+func (s *Store) SetHardware(ctx context.Context, id int64, hw string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET hardware = ? WHERE id = ?`, hw, id)
 	return err
 }
 

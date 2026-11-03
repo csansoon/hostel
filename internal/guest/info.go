@@ -67,6 +67,8 @@ device tests. Your code stays local; Hostel sends it to the room.
 
 Start
   hostel platforms                         what you can request now
+  hostel status --plain                    rooms, leases, and queues (who uses
+                                           what); "hostel status <room>" details
   hostel acquire <platform> --task "..."   one lease for this worktree
     --device <d>    a device of the platform (repeat for several)
     --require <l>   a machine label, for example desktop

@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/csansoon/hostel/internal/cli"
@@ -61,13 +63,13 @@ func adminRoom(args []string, stdout, stderr io.Writer) int {
 	accept := fs.Bool("accept-host-key", false, "repair: accept a changed room host key")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 2 {
-		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room-id> [--accept-host-key]")
+		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room name or ID> [--accept-host-key]")
 		return 2
 	}
 	switch pos[0] {
 	case "drain", "undrain", "repair", "destroy":
 	default:
-		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room-id> [--accept-host-key]")
+		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room name or ID> [--accept-host-key]")
 		return 2
 	}
 	c, err := apiClient()
@@ -75,11 +77,27 @@ func adminRoom(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
+	defer cancel()
+	id := pos[1]
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		var st protocol.Status
+		if err := c.Do(ctx, "GET", "/v1/status", nil, &st); err != nil {
+			fmt.Fprintln(stderr, "hostel:", err)
+			return 1
+		}
+		i := slices.IndexFunc(st.Rooms, func(r protocol.RoomStatus) bool { return r.Name == id })
+		if i < 0 {
+			fmt.Fprintf(stderr, "hostel: no room %q; \"hostel status\" lists the rooms\n", id)
+			return 1
+		}
+		id = strconv.FormatInt(st.Rooms[i].ID, 10)
+	}
 	var body any
 	if pos[0] == "repair" {
 		body = map[string]bool{"accept_host_key": *accept}
 	}
-	if err := c.Do(context.Background(), "POST", "/v1/rooms/"+url.PathEscape(pos[1])+"/"+pos[0], body, nil); err != nil {
+	if err := c.Do(ctx, "POST", "/v1/rooms/"+url.PathEscape(id)+"/"+pos[0], body, nil); err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}

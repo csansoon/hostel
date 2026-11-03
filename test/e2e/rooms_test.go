@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -143,7 +144,7 @@ func TestStaticRoom(t *testing.T) {
 	if got := c.sh("cat /home/hostel/hostel/cache/provision.log"); got != wantLog {
 		t.Fatalf("provision log:\n%s\nwant:\n%s", got, wantLog)
 	}
-	if r := e.hostel("status"); r.code != 0 || !strings.Contains(r.stdout, "home/box") || !strings.Contains(r.stdout, "running") {
+	if r := e.hostel("status"); r.code != 0 || !regexp.MustCompile(`home/box\s+\S.*\s+free`).MatchString(r.stdout) {
 		t.Fatalf("hostel status: %s", r)
 	}
 

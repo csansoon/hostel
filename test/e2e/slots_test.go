@@ -5,6 +5,7 @@ package e2e
 import (
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +101,10 @@ slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
 		if sl.LeaseID != lease {
 			t.Fatalf("slot %s after the exclusive lease is ready: lease %q, want %s", sl.Name, sl.LeaseID, lease)
 		}
+	}
+	// The status counts both slots as used.
+	if r := f.e.mustHostel("status"); !regexp.MustCompile(`(?m)^home/box\s+\S.*\s+in use 2/2\s+guest\s+exclusive\s`).MatchString(r.stdout) {
+		t.Fatalf("status with the exclusive lease, want \"in use 2/2\":\n%s", r.stdout)
 	}
 	// It holds both slots, so it may forward to any port.
 	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-x | nc -N -l 127.0.0.1 7510; done")

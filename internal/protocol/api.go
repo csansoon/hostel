@@ -34,8 +34,37 @@ type Addresses struct {
 
 // Status is the response of GET /v1/status.
 type Status struct {
-	Rooms  []RoomStatus  `json:"rooms"`
-	Leases []LeaseStatus `json:"leases"`
+	// Revision changes when the status changes (M10: the long poll of
+	// GET /v1/status?since=...).
+	Revision string `json:"revision"`
+	ServerID string `json:"server_id"`
+	// User and Role are the caller's.
+	User     string          `json:"user,omitempty"`
+	Role     string          `json:"role,omitempty"`
+	Machines []MachineStatus `json:"machines"`
+	Rooms    []RoomStatus    `json:"rooms"`
+	Leases   []LeaseStatus   `json:"leases"`
+}
+
+// MachineStatus is a machine of the configuration (M10).
+type MachineStatus struct {
+	Key       string   `json:"key"`
+	Kind      string   `json:"kind"`
+	OS        string   `json:"os"`
+	Platforms []string `json:"platforms"`
+	Labels    []string `json:"labels"`
+	MaxRooms  int      `json:"max_rooms"`
+	Connect   bool     `json:"connect,omitempty"`
+}
+
+// Hardware is what the room helper found at the last provisioning of the
+// room (M10); DiskFreeBytes is the free disk of the home at that time.
+type Hardware struct {
+	CPU           string `json:"cpu,omitempty"`
+	Cores         int    `json:"cores,omitempty"`
+	MemoryBytes   int64  `json:"memory_bytes,omitempty"`
+	DiskFreeBytes int64  `json:"disk_free_bytes,omitempty"`
+	OSVersion     string `json:"os_version,omitempty"`
 }
 
 // LeaseStatus is a lease that is not final, in GET /v1/status.
@@ -56,7 +85,10 @@ type LeaseStatus struct {
 	RoomID    int64     `json:"room_id,omitempty"`
 	Slot      string    `json:"slot,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	ReadyAt   time.Time `json:"ready_at,omitzero"`
+	// EstimatedWaitSeconds: for a queued lease.
+	EstimatedWaitSeconds int       `json:"estimated_wait_seconds,omitempty"`
+	ExpiresAt            time.Time `json:"expires_at,omitzero"`
 }
 
 // Platform is one entry of GET /v1/platforms.
@@ -89,6 +121,30 @@ type RoomStatus struct {
 	Platforms []string `json:"platforms"`
 	// Deadline is the provider-side deadline of an on-demand room.
 	Deadline time.Time `json:"deadline,omitzero"`
+	Hardware *Hardware `json:"hardware,omitempty"`
+}
+
+// RoomDetails is GET /v1/rooms/{name} (M10): the room, its machine, the jobs
+// of its leases (from the room), its queue, and its last events.
+type RoomDetails struct {
+	Room    RoomStatus     `json:"room"`
+	Machine *MachineStatus `json:"machine,omitempty"`
+	Leases  []LeaseStatus  `json:"leases"`
+	// Jobs are the jobs of each ready lease on the room; JobsError says why
+	// they are not known. A member gets the jobs and events of the member's
+	// own leases only.
+	Jobs      map[string][]JobInfo `json:"jobs"`
+	JobsError string               `json:"jobs_error,omitempty"`
+	Queue     []LeaseStatus        `json:"queue"`
+	Events    []Event              `json:"events"`
+}
+
+// Event is an entry of the event log.
+type Event struct {
+	Time    time.Time `json:"time"`
+	LeaseID string    `json:"lease_id,omitempty"`
+	Kind    string    `json:"kind"`
+	Message string    `json:"message"`
 }
 
 type SlotStatus struct {

@@ -215,7 +215,7 @@ func TestUsersRoles(t *testing.T) {
 	guest := f.e.vars["HOSTEL_TOKEN"] // the fixture's member "guest"
 	lease := f.acquire()
 	f.e.vars["HOSTEL_TOKEN"] = f.e.admin
-	if r := f.e.mustHostel("status"); !regexp.MustCompile(lease + `\s+ready\s+fakedevice\s+\S*\s+normal\s+guest\s`).MatchString(r.stdout) {
+	if r := f.e.mustHostel("status"); !regexp.MustCompile(`home/box\s+.*\s+in use\s+guest\s+e2e test\s+\S+\s+` + lease).MatchString(r.stdout) {
 		t.Fatalf("status has no user for the lease:\n%s", r.stdout)
 	}
 

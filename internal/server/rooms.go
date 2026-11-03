@@ -210,6 +210,16 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 			return err
 		}
 	}
+	// The hardware is for the status view only: an error does not stop the
+	// provisioning.
+	var hw protocol.Hardware
+	if err := room.Helper(ctx, []string{"hardware"}, nil, &hw); err != nil {
+		s.log.Warn("read room hardware", "room", r.Name, "err", err)
+	} else if data, err := json.Marshal(hw); err == nil {
+		if err := s.store.SetHardware(ctx, r.ID, string(data)); err != nil {
+			s.log.Warn("save room hardware", "room", r.Name, "err", err)
+		}
+	}
 	return s.runHealth(ctx, room, r.ID)
 }
 
