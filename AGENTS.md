@@ -90,7 +90,7 @@ stay, Next room), each with a plain description (in the footer for a selectable 
   workflow "E2E gate"), and in one local run on macOS (`make test-e2e`) when the
   Mac has a normal load. `make test-e2e-10` runs the 10 runs locally.
 - **Shared machine.** The owner's Mac also runs other projects. Their Docker
-  containers (for example `exampleapp-postgres` and `exampleapp-storage`) and local servers must
+  containers (for example `app-postgres` and `app-storage`) and local servers must
   not be touched. E2E tests label every container, network, and volume that they
   create with `hostel-e2e=<run id>`, and remove only objects with their own run ID,
   or objects with a `hostel-e2e` label that are older than 2 hours (left by a crashed

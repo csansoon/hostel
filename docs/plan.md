@@ -372,6 +372,22 @@ sees a coworker's lease in Rooms with its branch and running job and the live
 use of the machine, moves an entry in a Lobby queue, ends a lease, invites a
 user, and checks out; `hostel status` in a pipe prints the plain text.
 
+## M10c. Public release
+
+Design: `m10c-implementation.md` (owner decisions of 2026-11-03).
+
+- MIT license; a README for people (what Hostel is, the one-command install, a
+  short start); skills for agents in `skills/` (install, server setup, rooms,
+  platforms, users, use, troubleshooting).
+- `install.sh` (macOS, Linux) and `install.ps1` (Windows) from GitHub Releases,
+  with checksums; the release workflow on a `v*` tag.
+- The personal and internal details out of the files and the history.
+
+Done when: the repository is public; `v0.1.0` is released; on a clean machine,
+the one-line install works, and an agent that reads only the README and the
+skills sets up a server, adds a Linux machine with SSH as a room, connects, and
+runs a lease.
+
 ## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor

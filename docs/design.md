@@ -988,10 +988,10 @@ local_port_env = "PORT"
 devices = ["iphone-17-pro"]         # default devices for this repository
 # requires = ["xcode-26.5"]         # labels that this repository needs on this platform
 setup = ["cd apps/ios && tuist install && tuist generate --no-open"]
-env = { EXAMPLEAPP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
+env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
 [platforms.android]
-env = { EXAMPLEAPP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
+env = { APP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
 
 ```
 
@@ -1584,7 +1584,7 @@ room's loopback interface).
   port from the slot's pool (10 ports for each slot; section 9). At lease creation,
   the server gives pool ports to the tunnels in name order. The room port stays the
   same for the whole lease unless the guest changes it, so a value that a build
-  embeds (for example `EXAMPLEAPP_API_BASE_URL`) stays valid.
+  embeds (for example `APP_API_BASE_URL`) stays valid.
 - **Assignment and registration.** `POST /v1/leases` contains the tunnels
   (`[{"name", "room_port"}]`, `room_port` 0 = from the pool). The scheduler uses
   them for candidate matching (section 5). The server records the room ports in

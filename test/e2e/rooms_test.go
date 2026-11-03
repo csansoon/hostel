@@ -85,6 +85,22 @@ func TestStaticRoom(t *testing.T) {
 			t.Fatalf("server init %v wrote server.toml (err %v)", c.args, err)
 		}
 	}
+	// Behind a proxy with TLS, init writes the gateway on the public address;
+	// --helper-dir writes the directory of install.sh --server (M10c).
+	proxy := newEnv(t)
+	if r := proxy.hostel("server", "init", "--user", "admin", "--tls", "off", "--listen", "0.0.0.0:7410",
+		"--url", "https://hostel.example.com", "--helper-dir", "/opt/hostel/helpers"); r.code != 0 {
+		t.Fatalf("server init behind a proxy: %s", r)
+	}
+	toml := readFile(t, filepath.Join(proxy.configDir(), "server.toml"))
+	for _, want := range []string{`gateway_public = "wss://hostel.example.com/v1/gateway"`, `helper_dir = "/opt/hostel/helpers"`} {
+		if !strings.Contains(toml, want) {
+			t.Fatalf("server.toml from init behind a proxy has no %s:\n%s", want, toml)
+		}
+	}
+	if r := proxy.hostel("admin", "config", "check"); r.code != 0 {
+		t.Fatalf("admin config check of the proxy server.toml: %s", r)
+	}
 	e.init()
 	if r := e.hostel("server", "invite", "--name", "a/b"); r.code != 1 || !strings.Contains(r.stderr, `"a/b" is not a valid name`) {
 		t.Fatalf("server invite with an invalid name: %s", r)

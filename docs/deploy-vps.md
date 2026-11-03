@@ -2,7 +2,7 @@
 
 This guide puts the Hostel server on a Linux VPS (milestone M5). The reference
 deployment is an exe.dev VM; section 8 shows the changes for another VPS. Rooms
-behind NAT (the home MacBook) connect to the server with `hostel machine connect` (before M9: `hostel room connect`)
+behind NAT (for example a Mac at home) connect to the server with `hostel machine connect` (before M9: `hostel room connect`)
 (section 6).
 
 ## 1. What you need
@@ -12,8 +12,7 @@ behind NAT (the home MacBook) connect to the server with `hostel machine connect
   gateway also accepts SSH inside a WebSocket on `/v1/gateway`.
 - For Namespace rooms: the `nsc` and `devbox` CLIs, logged in as the server user
   (section 5).
-- A GitHub release of Hostel (`install.sh`). While the repository is private, the
-  VM needs the GitHub CLI, logged in (`gh auth login`).
+- A GitHub release of Hostel (`install.sh`).
 
 ## 2. Create the VM (exe.dev)
 
@@ -45,11 +44,6 @@ On the VM (`ssh hostel.example.com`):
 curl -fsSL -o install.sh https://raw.githubusercontent.com/csansoon/hostel/main/install.sh
 sudo sh install.sh --dir /usr/local/bin --server /opt/hostel
 ```
-
-While the repository is private, get `install.sh` with
-`gh api repos/csansoon/hostel/contents/install.sh -H 'Accept: application/vnd.github.raw' > install.sh`
-and run it as a user that is logged in to `gh` (use `sudo -E` or install into
-directories that the user can write).
 
 `/opt/hostel/helpers` gets the binaries for all rooms, and `/opt/hostel/platforms`
 the platform scripts. To update Hostel, run the same command again and restart the
@@ -194,7 +188,7 @@ again.
 
 ## 6. A static room behind NAT
 
-The room (for example the home MacBook) keeps an outbound connection to the
+The room (for example a Mac at home) keeps an outbound connection to the
 gateway. It needs no inbound SSH from the internet.
 
 **With a code (M9).** On your own computer:

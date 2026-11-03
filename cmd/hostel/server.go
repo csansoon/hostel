@@ -48,6 +48,9 @@ type initOptions struct {
 	tls      string
 	urls     []string
 	user     string
+	// helperDir is helper_dir: the binaries for the rooms (install.sh
+	// --server DIR puts them into DIR/helpers).
+	helperDir string
 }
 
 func serverInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -60,6 +63,7 @@ func serverInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.StringVar(&o.tls, "tls", config.TLSSelfSigned, "self-signed (own certificate) or off (behind a proxy with TLS)")
 	fs.Var(&urls, "url", "an address that clients use, for example https://100.80.1.2:7410 (more than once for several)")
 	fs.StringVar(&o.user, "user", "", "your name, for the first admin")
+	fs.StringVar(&o.helperDir, "helper-dir", "", "the binaries for the rooms, for example /opt/hostel/helpers after install.sh --server /opt/hostel (default: data_dir/helpers)")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return 2
 	}
@@ -167,7 +171,7 @@ func initServer(path string, o initOptions, stdout io.Writer) error {
 				return fmt.Errorf("--url: %s", p)
 			}
 		}
-		if err := os.WriteFile(file, []byte(config.Template(o.serverID, o.listen, o.tls, o.urls)), 0o644); err != nil {
+		if err := os.WriteFile(file, []byte(config.Template(o.serverID, o.listen, o.tls, o.urls, o.helperDir)), 0o644); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "wrote %s\n", file)

@@ -48,7 +48,7 @@ Hostel server setup
 
 Wrote /home/exedev/.config/hostel/server.toml
 Wrote the server keys and the TLS certificate to /home/exedev/.local/share/hostel
-Installed and started the service hostel.service
+(Run "hostel server run" as a service: see the hostel-server-setup skill.)
 
 Connect your computer as the first admin. Run this on your computer:
 
@@ -328,7 +328,7 @@ Platforms ios, macos · labels xcode-26.5, desktop · 1 slot
 
 NOW      Alex E. · fix login screen · lease 7f3a2c
          ready 12m ago · ends at 15:48 at the latest, or after 10m without activity
-         from alex-mbp · repository exampleapp (branch fix-login)
+         from alex-mbp · repository app (branch fix-login)
          job j-91 running 3m: xcodebuild test -scheme ExampleApp
 
 QUEUE    1. Lucía G. · sign-in flow · normal · waiting 3m · ~15m

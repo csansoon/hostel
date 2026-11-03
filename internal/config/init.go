@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,10 +72,21 @@ func DefaultServerID() string {
 }
 
 // Template returns the commented server.toml that "hostel server init" writes.
-func Template(serverID, listen, tlsMode string, publicURLs []string) string {
+func Template(serverID, listen, tlsMode string, publicURLs []string, helperDir string) string {
 	urls := make([]string, len(publicURLs))
 	for i, u := range publicURLs {
 		urls[i] = fmt.Sprintf("%q", u)
+	}
+	extra := ""
+	// Behind a proxy, guests reach the gateway over WebSocket on the public
+	// address (the proxy forwards /v1/gateway to the API).
+	if tlsMode == TLSOff && len(publicURLs) > 0 {
+		if u, err := url.Parse(publicURLs[0]); err == nil && u.Scheme == "https" {
+			extra += fmt.Sprintf("gateway_public = %q\n", "wss://"+u.Host+GatewayPath)
+		}
+	}
+	if helperDir != "" {
+		extra += fmt.Sprintf("helper_dir = %q   # the binaries for the rooms (install.sh --server)\n", helperDir)
 	}
 	return `#:schema ./hostel.schema.json
 # Hostel server: the keys that the server needs on this machine. Check the
@@ -88,7 +100,7 @@ listen = "` + listen + `"
 tls = "` + tlsMode + `"
 # The addresses that clients use; invite codes contain them.
 public_urls = [` + strings.Join(urls, ", ") + `]
-
+` + extra + `
 # gateway_listen = "127.0.0.1:7422"  # SSH gateway
 # data_dir = "~/.local/share/hostel"
 

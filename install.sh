@@ -1,16 +1,18 @@
 #!/bin/sh
 # Installs Hostel from a GitHub release of csansoon/hostel.
 #
+#   curl -fsSL https://raw.githubusercontent.com/csansoon/hostel/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/csansoon/hostel/main/install.sh | sh -s -- --server /opt/hostel
+#
 #   sh install.sh [--version vX.Y.Z] [--dir DIR] [--server DIR]
 #
 # Without --server, it installs the hostel binary for this machine into DIR
-# (default ~/.local/bin): for guests and for "hostel room connect". With
+# (default ~/.local/bin): for guests and for "hostel machine connect". With
 # --server, it also puts the binaries for all rooms into DIR/helpers and the
 # platform scripts into DIR/platforms (helper_dir and platforms_dir of
 # server.toml). It verifies each file against SHA256SUMS of the release.
 #
-# A private repository needs the GitHub CLI, logged in ("gh auth login");
-# without gh, it downloads with curl (public repository only).
+# It downloads with curl (5 minutes for each file, 2 retries).
 # HOSTEL_INSTALL_URL replaces the download URL of the release (a mirror).
 set -eu
 
@@ -33,6 +35,10 @@ x86_64 | amd64) arch=amd64 ;;
 arm64 | aarch64) arch=arm64 ;;
 *) echo "install.sh: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
+# A shell under Rosetta reports x86_64 on an Apple silicon Mac.
+if [ "$(uname -s)" = Darwin ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+	arch=arm64
+fi
 case "$os" in
 darwin | linux) ;;
 *) echo "install.sh: unsupported OS $os; on Windows, download hostel-windows-$arch.exe from the release" >&2; exit 1 ;;
@@ -44,16 +50,10 @@ trap 'rm -rf "$tmp"' EXIT
 fetch() {
 	if [ -n "${HOSTEL_INSTALL_URL:-}" ]; then
 		curl -fsSL --max-time 300 -o "$tmp/$1" "$HOSTEL_INSTALL_URL/$1"
-	elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-		if [ "$version" = latest ]; then
-			gh release download -R "$repo" -p "$1" -D "$tmp" --clobber
-		else
-			gh release download "$version" -R "$repo" -p "$1" -D "$tmp" --clobber
-		fi
 	elif [ "$version" = latest ]; then
-		curl -fsSL --max-time 300 -o "$tmp/$1" "https://github.com/$repo/releases/latest/download/$1"
+		curl -fsSL --max-time 300 --retry 2 -o "$tmp/$1" "https://github.com/$repo/releases/latest/download/$1"
 	else
-		curl -fsSL --max-time 300 -o "$tmp/$1" "https://github.com/$repo/releases/download/$version/$1"
+		curl -fsSL --max-time 300 --retry 2 -o "$tmp/$1" "https://github.com/$repo/releases/download/$version/$1"
 	fi
 }
 
@@ -79,6 +79,10 @@ get "hostel-$os-$arch"
 mkdir -p "$dir"
 install -m 755 "$tmp/hostel-$os-$arch" "$dir/hostel"
 echo "installed $dir/hostel ($("$dir/hostel" --version))"
+case ":$PATH:" in
+*":$dir:"*) ;;
+*) echo "note: $dir is not on your PATH; add it, for example: export PATH=\"$dir:\$PATH\"" ;;
+esac
 
 if [ -n "$server" ]; then
 	mkdir -p "$server/helpers"

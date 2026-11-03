@@ -24,23 +24,16 @@ still runs locally on the agent's machine. A tunnel connects the remote app to i
 
 ## First user: ExampleApp
 
-Hostel must be generic, but ExampleApp is the first user. Facts about ExampleApp that matter
-here:
+Hostel must be generic, but ExampleApp is the first user: a private monorepo with a
+TypeScript API and native iOS and Android clients. What it needs from Hostel:
 
-- **Tool versions** (ExampleApp `mise.toml`): node 22.22.0, tuist 4.202.0, pnpm 12.3.4,
-  java temurin-21. The Android SDK is not managed by mise.
-- **Size:** about 3,800 tracked files, 87 MB.
-- **Local API:** each worktree runs its own API. Its port is in `PORT` in the
-  worktree's `.env` file.
-- **iOS build** (in `apps/ios`, after `tuist install` and `tuist generate --no-open`):
-  `EXAMPLEAPP_API_BASE_URL=http://localhost:<PORT> xcodebuild -workspace exampleapp.xcworkspace
-  -scheme exampleapp -configuration Debug -destination "id=<SIMULATOR_UDID>" build`.
-  Bundle ID: `com.example.app`. CI uses Xcode 26.5 on macOS 26.
-- **iOS QA:** ExampleApp's `apps/ios/QA.md` describes install, launch, sign-in (a deep
-  link with a session from the local API), and `xcrun simctl io <UDID> screenshot`.
-- **Android build** (in `apps/android`):
-  `./gradlew assembleDebug -Pexampleapp.apiBaseUrl=http://10.0.2.2:<PORT>`. It needs JDK 21
-  and the Android SDK.
+- **The local API:** each worktree runs its own API on its own port; the app on
+  the room reaches it through a tunnel (`hostel.toml`, `[tunnels.api]`).
+- **iOS:** an Xcode build for a simulator (the `ios` platform, with a label for
+  the Xcode version), install, launch, sign-in through the local API, and
+  screenshots.
+- **Android:** a Gradle build with JDK 21 and the Android SDK, and the emulator
+  (the `android` platform).
 - A `hostel.toml` for ExampleApp is a separate change in the ExampleApp repository. Propose it
   to the owner; do not change the ExampleApp repository from this project.
 
@@ -48,8 +41,7 @@ here:
 
 ### Prototype "berth" (2026-10-20, abandoned)
 
-A first prototype in TypeScript is at `a folder on the owner's Mac` (on the owner's Mac
-only; never pushed). Its design:
+A first prototype in TypeScript stayed on the owner's Mac (never pushed). Its design:
 
 - No central server. Each machine ran a broker (`harbor`) that the client called over
   SSH with one JSON request on stdin.
