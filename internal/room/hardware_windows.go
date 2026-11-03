@@ -1,11 +1,8 @@
 package room
 
 import (
-	"strings"
-	"unsafe"
-
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+	"strings"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
@@ -31,20 +28,7 @@ func windowsHardware(hw *protocol.Hardware) {
 		}
 		hw.OSVersion = strings.Join(strings.Fields(product+" "+display+" (build "+build+")"), " ")
 	}
-	var mem struct {
-		Length               uint32
-		MemoryLoad           uint32
-		TotalPhys            uint64
-		AvailPhys            uint64
-		TotalPageFile        uint64
-		AvailPageFile        uint64
-		TotalVirtual         uint64
-		AvailVirtual         uint64
-		AvailExtendedVirtual uint64
-	}
-	mem.Length = uint32(unsafe.Sizeof(mem))
-	proc := windows.NewLazySystemDLL("kernel32.dll").NewProc("GlobalMemoryStatusEx")
-	if ok, _, _ := proc.Call(uintptr(unsafe.Pointer(&mem))); ok != 0 {
+	if mem, ok := globalMemory(); ok {
 		hw.MemoryBytes = int64(mem.TotalPhys)
 	}
 }

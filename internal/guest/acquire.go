@@ -175,7 +175,7 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 	host, _ := os.Hostname()
 	req := protocol.CreateLeaseRequest{Platform: platform, Devices: reqDevices, Task: task, Priority: priority,
 		RequiredLabels: append(slices.Clone(rp.Requires), require...), Tunnels: tunnels, Fresh: fresh, PublicKey: pub,
-		GuestHost: host, Repo: filepath.Base(repo.Root), Worktree: repo.Root}
+		GuestHost: host, Repo: filepath.Base(repo.Root), Worktree: repo.Root, Branch: currentBranch(repo.Root)}
 	var l protocol.Lease
 	if err := api.Do(ctx, "POST", "/v1/leases", req, &l); err != nil {
 		var apiErr *client.APIError

@@ -354,6 +354,24 @@ Done when: the owner sees a coworker's lease, opens its details with its running
 job, moves a queue entry, and ends a lease from the view; the same command in a
 pipe prints plain text.
 
+## M10b. Hostel app
+
+Design: `m10b-implementation.md` (owner decisions of 2026-11-03).
+
+- `hostel` without arguments in a terminal opens the full-screen app (Bubble
+  Tea): Check in when the computer is not connected; else the menu Lobby
+  (platforms and queues), Rooms (machines), Front desk (server, users, invites,
+  add a machine, check out). Details and admin actions in each.
+- The agent commands stay non-interactive; `hostel status` prints only plain
+  text (the inline view of M10 goes away) with the next commands for agents.
+- New server data: the branch of a lease; the live CPU and memory use of a
+  room.
+
+Done when: on `hostel.example.com`, the owner checks in a new computer from the app,
+sees a coworker's lease in Rooms with its branch and running job and the live
+use of the machine, moves an entry in a Lobby queue, ends a lease, invites a
+user, and checks out; `hostel status` in a pipe prints the plain text.
+
 ## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor

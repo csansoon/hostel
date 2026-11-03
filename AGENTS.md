@@ -37,7 +37,10 @@ owner decision in `requirements.md`, section 3, with the date.
 Only Hostel, Guest, and Room come from the hostel theme. Use the plain terms from
 `requirements.md` (provider, machine, platform, device, slot, lease, queue,
 platform scripts, cleanup) in code, CLI text, and docs. Do not add new themed words. CLI verbs stay plain
-(`acquire`, `run`, `release`).
+(`acquire`, `run`, `release`). Exception (owner decision, 2026-11-03): the labels of the
+Hostel app (`hostel` without arguments) may be themed (Lobby, Rooms, Front desk, Check in,
+Check out, Guest, Guest list, Vacant, Occupied, Checked in, Out by, Waiting line, Typical
+stay, Next room), each with a plain description (in the footer for a selectable item).
 
 ## Toolchain
 

@@ -161,6 +161,9 @@ func roomStatus(room store.Room, slots []store.Slot, rps []store.RoomPlatform) p
 			rs.Platforms = append(rs.Platforms, rp.Platform)
 		}
 	}
+	if room.State == protocol.RoomBroken && room.BrokenReason == reasonUnreachable {
+		rs.LastSeen = room.LastSeenAt
+	}
 	if room.Hardware != "" {
 		var hw protocol.Hardware
 		if json.Unmarshal([]byte(room.Hardware), &hw) == nil {
@@ -173,7 +176,7 @@ func roomStatus(room store.Room, slots []store.Slot, rps []store.RoomPlatform) p
 func leaseStatus(l store.Lease, users map[int64]string) protocol.LeaseStatus {
 	return protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
 		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
-		Repo: l.Repo, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
+		Repo: l.Repo, Branch: l.Branch, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
 		ReadyAt: l.ReadyAt, ExpiresAt: l.ExpiresAt}
 }
 

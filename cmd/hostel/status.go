@@ -33,7 +33,7 @@ func apiClient() (*client.Client, error) {
 // overview, the details of a room, or the queue of a platform.
 func statusCmd(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel status", stderr)
-	plain := fs.Bool("plain", false, "print plain text (the default when stdout is not a terminal)")
+	fs.Bool("plain", false, "print plain text (the only output; people use the app: \"hostel\")")
 	rest, err := cli.Parse(fs, args)
 	if err != nil {
 		return 2
@@ -46,15 +46,6 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
-	}
-	if !*plain && len(rest) == 0 {
-		if out, ok := viewSupported(stdout); ok {
-			if err := runView(c, out); err != nil {
-				fmt.Fprintln(stderr, "hostel:", err)
-				return 1
-			}
-			return 0
-		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
 	defer cancel()
@@ -73,32 +64,22 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			cleanDetails(&d)
-			printRoomDetails(stdout, d, now, "")
+			printRoomDetails(stdout, d, now)
 			return 0
 		}
-		if err := printQueue(stdout, st, rest[0], now, ""); err != nil {
+		if err := printQueue(stdout, st, rest[0], now); err != nil {
 			fmt.Fprintln(stderr, "hostel:", err)
 			return 1
 		}
 		return 0
 	}
-	printStatus(stdout, st, now, -1)
+	printStatus(stdout, st, now)
 	return 0
 }
 
-// printStatus prints the overview (multiplayer.md, section 8). With sel >= 0
-// (the interactive view), each line has a margin and the item sel (an index
-// of statusItems) has the marker.
-func printStatus(w io.Writer, st protocol.Status, now time.Time, sel int) {
-	mark := func(item int) string {
-		switch {
-		case sel < 0:
-			return ""
-		case item == sel:
-			return "❯ "
-		}
-		return "  "
-	}
+// printStatus prints the overview for agents and scripts, with the next
+// commands at the end.
+func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 	inUse, waiting := 0, 0
 	for _, r := range st.Rooms {
 		if len(roomLeases(st, r.ID)) > 0 {
@@ -117,19 +98,19 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time, sel int) {
 	fmt.Fprintf(w, "%s · %s (%d in use) · %d waiting · you: %s\n\n", st.ServerID, plural(len(st.Rooms), "room"), inUse, waiting, you)
 
 	tw := newTable(w)
-	fmt.Fprintln(tw, mark(-1)+"ROOM\tPLATFORMS\tSTATE\tUSER\tTASK\tTIME\tLEASE")
+	fmt.Fprintln(tw, "ROOM\tPLATFORMS\tSTATE\tUSER\tTASK\tTIME\tLEASE")
 	withRooms := map[string]bool{}
-	for ri, r := range st.Rooms {
+	for _, r := range st.Rooms {
 		withRooms[r.Provider+"/"+r.Machine] = true
 		leases := roomLeases(st, r.ID)
 		state := roomState(r, len(leases))
 		if len(leases) == 0 {
-			fmt.Fprintf(tw, "%s%s\t%s\t%s\t\t\t\t\n", mark(ri), r.Name, strings.Join(r.Platforms, ", "), state)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t\t\t\t\n", r.Name, strings.Join(r.Platforms, ", "), state)
 		}
 		for i, l := range leases {
-			name, platforms := mark(ri)+r.Name, strings.Join(r.Platforms, ", ")
+			name, platforms := r.Name, strings.Join(r.Platforms, ", ")
 			if i > 0 {
-				name, platforms, state = mark(-1), "", ""
+				name, platforms, state = "", "", ""
 			}
 			if l.State != protocol.LeaseReady && state != "" {
 				state += " (" + l.State + ")"
@@ -145,47 +126,28 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time, sel int) {
 		if m.Kind != "static" {
 			note = fmt.Sprintf("(on demand, up to %d)", m.MaxRooms)
 		}
-		fmt.Fprintf(tw, "%s%s\t%s\tnone\t%s\t\t\t\n", mark(-1), m.Key, strings.Join(append([]string{m.OS}, m.Platforms...), ", "), note)
+		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(append([]string{m.OS}, m.Platforms...), ", "), note)
 	}
 	tw.flush()
 
-	queues := queuesOf(st)
-	if len(queues) == 0 {
-		return
+	if queues := queuesOf(st); len(queues) > 0 {
+		fmt.Fprintln(w)
+		tw = newTable(w)
+		fmt.Fprintln(tw, "QUEUE\tWAITING\tEST.\tNEXT")
+		for _, q := range queues {
+			next := q.leases[0]
+			fmt.Fprintf(tw, "%s\t%d\t%s\t%s · %s (%s, %s) · lease %s\n", q.platform, len(q.leases), estimate(next),
+				next.User, next.Task, next.Priority, shortDur(now.Sub(next.CreatedAt)), next.ID)
+		}
+		tw.flush()
 	}
 	fmt.Fprintln(w)
-	tw = newTable(w)
-	fmt.Fprintln(tw, mark(-1)+"QUEUE\tWAITING\tEST.\tNEXT")
-	for qi, q := range queues {
-		next := q.leases[0]
-		fmt.Fprintf(tw, "%s%s\t%d\t%s\t%s · %s (%s, %s) · lease %s\n", mark(len(st.Rooms)+qi), q.platform, len(q.leases), estimate(next),
-			next.User, next.Task, next.Priority, shortDur(now.Sub(next.CreatedAt)), next.ID)
-	}
-	tw.flush()
+	fmt.Fprintln(w, "Details: hostel status <room> (its leases, jobs, events) or hostel status <platform> (its queue).")
+	fmt.Fprintln(w, "To get a room: hostel acquire <platform> --task \"...\" (\"hostel platforms\" lists the platforms).")
 }
 
-// statusItem is a line of the overview that the view can select: a room or a
-// queue.
-type statusItem struct {
-	room bool
-	name string
-}
-
-// statusItems returns the selectable items in the order of printStatus.
-func statusItems(st protocol.Status) []statusItem {
-	var out []statusItem
-	for _, r := range st.Rooms {
-		out = append(out, statusItem{room: true, name: r.Name})
-	}
-	for _, q := range queuesOf(st) {
-		out = append(out, statusItem{name: q.platform})
-	}
-	return out
-}
-
-// printQueue prints the queue of a platform. With sel (the view), the lease
-// sel has the marker.
-func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time, sel string) error {
+// printQueue prints the queue of a platform.
+func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time) error {
 	var q []protocol.LeaseStatus
 	for _, qu := range queuesOf(st) {
 		if qu.platform == platform {
@@ -217,16 +179,15 @@ func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time,
 	}
 	fmt.Fprintln(w)
 	tw := newTable(w)
-	fmt.Fprintln(tw, marker(sel, "")+"#\tUSER\tTASK\tPRIORITY\tWAITING\tEST.\tLEASE\tREASON")
+	fmt.Fprintln(tw, "#\tUSER\tTASK\tPRIORITY\tWAITING\tEST.\tLEASE\tREASON")
 	for _, l := range q {
-		fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", marker(sel, l.ID), position(l), l.User, l.Task, l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID, l.Reason)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", position(l), l.User, l.Task, l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID, l.Reason)
 	}
 	return tw.flush()
 }
 
-// printRoomDetails prints the details of a room. With sel (the view), the
-// lease sel has the marker.
-func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time, sel string) {
+// printRoomDetails prints the details of a room.
+func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time) {
 	r := d.Room
 	kind := "on demand"
 	if d.Machine != nil && d.Machine.Kind == "static" {
@@ -277,7 +238,7 @@ func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time, sel st
 		if i > 0 {
 			label = ""
 		}
-		fmt.Fprintf(w, "%-8s %s%s · %s · lease %s (%s, slot %s)\n", label, marker(sel, l.ID), l.User, l.Task, l.ID, l.State, l.Slot)
+		fmt.Fprintf(w, "%-8s %s · %s · lease %s (%s, slot %s)\n", label, l.User, l.Task, l.ID, l.State, l.Slot)
 		var times []string
 		if !l.ReadyAt.IsZero() {
 			times = append(times, "ready "+shortDur(now.Sub(l.ReadyAt))+" ago")
@@ -288,7 +249,11 @@ func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time, sel st
 			times = append(times, "ends at "+l.ExpiresAt.Local().Format("15:04")+" at the latest")
 		}
 		fmt.Fprintf(w, "         %s\n", strings.Join(times, " · "))
-		fmt.Fprintf(w, "         from %s · repository %s\n", l.Guest, l.Repo)
+		from := fmt.Sprintf("from %s · repository %s", l.Guest, l.Repo)
+		if l.Branch != "" {
+			from += " · branch " + l.Branch
+		}
+		fmt.Fprintf(w, "         %s\n", from)
 		for _, j := range d.Jobs[l.ID] {
 			state := j.State
 			if j.ExitCode != nil {
@@ -366,18 +331,6 @@ func roomLeases(st protocol.Status, roomID int64) []protocol.LeaseStatus {
 	return out
 }
 
-// marker is the selection margin of the view: "" in plain text (sel is
-// empty), "❯ " for the selected lease, else two spaces.
-func marker(sel, id string) string {
-	switch {
-	case sel == "":
-		return ""
-	case sel == id:
-		return "❯ "
-	}
-	return "  "
-}
-
 // byPosition orders queued leases by position; a lease that the scheduler
 // has not placed yet (position 0) comes last.
 func byPosition(a, b protocol.LeaseStatus) int {
@@ -399,6 +352,12 @@ func position(l protocol.LeaseStatus) string {
 
 func roomState(r protocol.RoomStatus, leases int) string {
 	state := r.State
+	if r.State == protocol.RoomBroken && r.Reason == "unreachable" {
+		state = "offline"
+		if !r.LastSeen.IsZero() {
+			state += " (last seen " + shortDur(time.Since(r.LastSeen)) + " ago)"
+		}
+	}
 	if r.State == protocol.RoomRunning {
 		state = "free"
 		if leases > 0 {
@@ -494,7 +453,7 @@ func clean(s string) string {
 }
 
 func cleanLease(l *protocol.LeaseStatus) {
-	for _, f := range []*string{&l.Task, &l.User, &l.Guest, &l.Repo, &l.Reason} {
+	for _, f := range []*string{&l.Task, &l.User, &l.Guest, &l.Repo, &l.Branch, &l.Reason} {
 		*f = clean(*f)
 	}
 }

@@ -3,41 +3,23 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/csansoon/hostel/internal/cli"
-	"github.com/csansoon/hostel/internal/client"
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/connect"
 	"github.com/csansoon/hostel/internal/invite"
 	"github.com/csansoon/hostel/internal/protocol"
-	"github.com/csansoon/hostel/internal/tlspin"
 )
 
 // ExitNotConnected: the client has no connection (EX_CONFIG).
 const ExitNotConnected = 78
-
-// computerName is this computer's name for the server: the host name in the
-// form of a Hostel name.
-func computerName() string {
-	host, _ := os.Hostname()
-	host, _, _ = strings.Cut(strings.ToLower(host), ".")
-	name := strings.Trim(regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(host, "-"), "-")
-	if len(name) > 40 {
-		name = name[:40]
-	}
-	if name == "" || !config.ValidName(name) {
-		return "computer"
-	}
-	return name
-}
 
 func connectCmd(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel connect", stderr)
@@ -71,7 +53,7 @@ func connectCmd(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if *name == "" {
-		*name = gitUserName()
+		*name = connect.GitUserName()
 		if interactive {
 			fmt.Fprintf(stdout, "Your name [%s]: ", *name)
 			if in.Scan() && strings.TrimSpace(in.Text()) != "" {
@@ -83,54 +65,24 @@ func connectCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel: give your name: hostel connect <code> --name \"Your Name\"")
 		return 2
 	}
-	g := &config.Guest{}
-	if code.KeyHash != nil {
-		g.Key = tlspin.Fingerprint(code.KeyHash)
-	}
-	req := protocol.ConnectRequest{Secret: code.Secret, Name: *name, Computer: computerName()}
-	var resp protocol.ConnectResponse
-	var errs []string
-	for i, addr := range code.Addresses {
-		g.Addresses = append([]string{addr}, append(append([]string{}, code.Addresses[:i]...), code.Addresses[i+1:]...)...)
-		c, err := client.New(g)
-		if err != nil {
-			fmt.Fprintln(stderr, "hostel:", err)
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err = c.Do(ctx, "POST", "/v1/connect", req, &resp)
-		cancel()
-		// The server's answer about the code ends the attempts; a server-side
-		// failure (a proxy or an outage) lets the next address try.
-		var apiErr *client.APIError
-		if errors.As(err, &apiErr) && apiErr.Status < 500 {
-			fmt.Fprintln(stderr, "hostel:", err)
-			return 1
-		}
-		if err == nil {
-			break
-		}
-		errs = append(errs, err.Error())
-	}
-	if resp.Token == "" {
-		fmt.Fprintf(stderr, "hostel: no address of the server answered:\n  %s\n", strings.Join(errs, "\n  "))
+	res, err := connect.Connect(context.Background(), code, *name)
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
-	g.ServerID, g.Token = resp.ServerID, resp.Token
-	if err := config.SaveGuest(g); err != nil {
-		fmt.Fprintln(stderr, "hostel: save the connection:", err)
-		return 1
-	}
+	g, resp := res.Guest, res.Response
 	// The replaced connection's token must not stay valid.
 	if old != nil {
-		revokeToken(old, stderr)
+		if err := connect.Revoke(context.Background(), old); err != nil {
+			fmt.Fprintln(stderr, "hostel: warning:", err)
+		}
 	}
 	fmt.Fprintf(stdout, "Server:  %s (%s)\n", resp.ServerID, g.URL())
 	if g.Key != "" {
 		fmt.Fprintf(stdout, "Key:     %s (pinned)\n", g.Key)
 	}
-	fmt.Fprintf(stdout, "Connected as %s (%s) from %s.\n", resp.User, resp.Role, req.Computer)
-	fmt.Fprintln(stdout, "Run \"hostel status\" to see the rooms. Agents on this computer use this connection.")
+	fmt.Fprintf(stdout, "Connected as %s (%s) from %s.\n", resp.User, resp.Role, res.Computer)
+	fmt.Fprintln(stdout, "Run \"hostel\" to open the Hostel app. Agents on this computer use this connection.")
 	return 0
 }
 
@@ -148,27 +100,16 @@ func disconnectCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "This computer is not connected.")
 		return 0
 	}
-	revokeToken(g, stderr)
-	if err := config.RemoveGuest(); err != nil {
+	warning, err := connect.Disconnect(context.Background(), g)
+	if warning != nil {
+		fmt.Fprintln(stderr, "hostel: warning:", warning)
+	}
+	if err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "Disconnected from %s.\n", g.URL())
 	return 0
-}
-
-// revokeToken deletes the connection's token on its server; a failure is only
-// a warning (an admin can remove the user).
-func revokeToken(g *config.Guest, stderr io.Writer) {
-	c, err := client.New(g)
-	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err = c.Do(ctx, "DELETE", "/v1/me", nil, nil)
-		cancel()
-	}
-	if err != nil {
-		fmt.Fprintf(stderr, "hostel: warning: %s did not delete this computer's old token (%v); an admin of that server can run: hostel config users remove \"<your name>\" --computer %s\n", g.URL(), err, computerName())
-	}
 }
 
 func usersCmd(args []string, stdout, stderr io.Writer) int {

@@ -280,7 +280,7 @@ func (s *Server) roomFailed(ctx context.Context, r store.Room, m *config.Machine
 	case unreachable:
 		reason = reasonUnreachable
 	case errors.Is(err, roomops.ErrHostKeyChanged):
-		reason = "host key changed"
+		reason = reasonHostKeyChanged
 	}
 	to := protocol.RoomBroken
 	if m.OnDemand() {

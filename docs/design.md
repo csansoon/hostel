@@ -624,6 +624,7 @@ success; else stdout has `{"error": "..."}`.
 |---|---|---|---|
 | `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
 | `install mise\|mise-config\|room-env --sha256 H` / `install platform <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (platform) | `{}`; refuses data with another hash |
+| `usage` | server | — | `{"cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_free_bytes"}`, best effort (M10b): the CPU use over 1 s (`/proc/stat`; `ps` on macOS; `GetSystemTimes` on Windows) and the memory (`/proc/meminfo`; `vm_stat`; `GlobalMemoryStatusEx`). The server runs it for the room details. |
 | `hardware` | server | — | `{"cpu", "cores", "memory_bytes", "disk_free_bytes", "os_version"}`, best effort (M10). The server runs it after each provisioning and keeps it on the room for the status view. |
 | `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
 | `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
@@ -1229,7 +1230,7 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel tunnel list` | Lists the tunnels with their local and room ports. |
 | `hostel tunnel add <name> (--local-port N \| --local-port-env VAR) [--room-port P]` / `tunnel set <name> [--local-port N] [--room-port P]` / `tunnel remove <name>` | Changes tunnels during a lease (section 14). |
 | `hostel forward <room-port> [--local-port N]` / `forward list` / `forward stop <room-port>` | Guest → room forwards (section 14). |
-| `hostel status [room \| platform]` (aliases `ls`, `rooms`) | In a terminal: the interactive view (below). In a pipe or with `--plain`: the rooms with their leases (user, task, time, lease ID), the machines without rooms, and the queues with their next lease. `hostel status <room>` prints the details of a room (hardware, leases with jobs, queue, events, room ID); `hostel status <platform>` prints the queue (position, user, task, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
+| `hostel status [room \| platform]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, time, lease ID), the machines without rooms, and the queues with their next lease. `hostel status <room>` prints the details of a room (hardware, leases with jobs, queue, events, room ID); `hostel status <platform>` prints the queue (position, user, task, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
 | `hostel agent-guide` | Prints short usage instructions for coding agents. |
 | `hostel screenshot [--device d] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
@@ -1244,20 +1245,57 @@ Admin commands: `hostel admin token create --role room|revoke`, `admin pubkey`,
 `admin config check|schema`. The room commands take the room name or ID;
 `hostel status` shows the lease IDs, `hostel status <room>` the room ID.
 
-**Status view (M10, `multiplayer.md` section 8).** When stdin and stdout are
-terminals (`TERM` is not `dumb`; on Windows the console takes VT sequences),
-`hostel status` draws the plain lines inline under the prompt (raw mode with
-`golang.org/x/term`, ANSI cursor moves, no alternate screen) and redraws on
-each long-poll answer. Lines are cut to the terminal width and the frame to
-its height. `↑`/`↓` select a room or a queue, Enter opens its details, Esc goes
-back, `q` or Ctrl-C quits and the last frame stays. The room details are read
-again with a status answer, at most every 10 s. Actions (each asks
-"… ? [y/N]" and uses the API above): in a room, `e` ends the selected lease, `d`
-drains or undrains, `r` repairs; in a queue, `e` ends, `Shift+↑/↓` (or `K`/`J`)
-moves (a move is cancelled when the queue changes before `y`), `p` sets the
-priority. Members get `e` for their own leases only; the server checks again.
-After a refused token (HTTP 401/403) the view ends; after another error it
-shows the error and asks again after 5 s.
+**The Hostel app (M10b).** People use `hostel` without arguments when stdin
+and stdout are terminals: a full-screen app (Bubble Tea, `internal/app`); in a
+pipe, `hostel` prints the help. Agents and scripts use only the `hostel <verb>`
+commands; `hostel status` prints plain text with the next commands at the end.
+
+- Not connected: *Check in* (an invite code, then the name; the same code as
+  `hostel connect`, package `internal/connect`) or *Leave*.
+- Main menu: *Lobby* (the platforms: free machines of all that serve it, the
+  queue, the wait; a platform page with its machines, the typical lease, and
+  the full queue), *Rooms* (the machines with their platforms and state in
+  plain words; a machine page with the hardware, the live use, and each lease
+  with its user, task, computer, repository, branch, and running jobs), *Front
+  desk* (the server and you; *Invite a guest* for admins, *Add your other
+  computer* for members, *Guest list*, *Add a room* for admins, *Check out*). Themed labels have a muted plain description (owner decision,
+  2026-11-03).
+- Actions ask "… ? [y/N]" (or a choice) and use the API: end a lease (admins:
+  any; members: their own), move (`shift+↑/↓` or `K`/`J`) and set the priority
+  of a queued lease, stop or allow new leases on the room of a static machine and repair it, invite
+  someone, change a role, remove a user, a code for the caller's other
+  computer, a machine code.
+- Data: one long poll of `GET /v1/status`; `GET /v1/platforms` after each
+  status answer; a machine page reads `GET /v1/rooms/{name}` when it opens and
+  at most every 10 s. Each request has a deadline; after an error the app asks
+  again after 5 s; a refused token (401/403) goes to Check in. Text from users
+  and the configuration is cleaned of control characters before it is drawn.
+- Invite codes and join commands can be longer than a screen line: the app
+  wraps them, and prints them again after the full screen ends, to copy.
+- Presence (owner decision, 2026-11-03): every `intervals.presence` (default
+  30 s) the server makes an SSH connection with its key to each idle static
+  room and to each offline one, and closes it (`presence.go`; through the
+  gateway for a machine that connects to the server; 10 s deadline). It logs
+  in on purpose: OpenSSH 9.8 and later (`PerSourcePenalties`) penalizes a
+  source whose connections close without authentication, and then refuses the
+  server's own connections. A running room without a lease
+  that does not answer goes offline (broken, reason `unreachable`, the state
+  that the scheduler already skips); an offline room that answers provisions
+  again. `rooms.last_seen_at` (migration 009) is the last answer (a presence
+  check or a provisioning); the status shows it as `last_seen` for an offline
+  room. The reconcile loop no longer provisions unreachable rooms blindly.
+  The app shows "Offline · last seen …" in Rooms, and the Lobby leaves offline
+  machines out; `hostel status` prints "offline (last seen …)".
+- The look (owner decision, 2026-11-03): each page has the header bar (the
+  Hostel sign, the place, the user and role) and the footer (the description of
+  the selected item, or a question or message; then the keys as chips; `?`
+  lists all keys). Sections are cards with rounded borders; the card with the
+  keyboard has an amber border, and `tab` moves between cards. Two cards stand
+  side by side from 100 columns. Colors (ANSI 256; `NO_COLOR` turns them off):
+  amber for Hostel and the selection, green vacant, blue occupied, yellow
+  waiting, red broken, gray for secondary text. Machine states are themed
+  words (Vacant, Occupied, Getting ready, Broken, Not connected); the live use
+  shows as gauges. `1` `2` `3` jump to Lobby, Rooms, Front desk.
 
 All guest commands except `platforms`, `status`, and `agent-guide` call
 `POST /v1/leases/{id}/touch`. When a lease command fails (for example because
@@ -1308,7 +1346,7 @@ and `users`. Room tokens can only read `GET /v1/info`.
 | Method and path | Effect |
 |---|---|
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
-| `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait. |
+| `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait, the keys of the machines that serve it, and `typical_lease_seconds` (the median of its last leases; M10b). |
 | `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
 | `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait` (at most 60 s and half of `poll_timeout`, so the guest polls again before the timeout). Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). |
 | `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
@@ -1316,7 +1354,7 @@ and `users`. Room tokens can only read `GET /v1/info`.
 | `POST /v1/leases/{id}/release` | Releases or cancels. For another user's lease (admin), the end reason is "released by <admin> (admin)". |
 | `POST /v1/leases/{id}/move`, `/priority` (admin) | Queue control (section 5): `{"first": true}` or `{"before": "<lease id>"}`; `{"priority": "low|normal|high"}`. HTTP 409 for a lease that is not queued. |
 | `GET /v1/status[?since=R&wait=50s]` | Leases (with their user, ready time, and the estimated wait of queued leases), rooms (with hardware), the machines of the configuration, the server ID, the caller (user, role), and `revision` (a hash of the content without the wait estimates). With `since`, the answer waits (at most 50 s) until the revision differs from `R`; the server checks again on each lease change and every 2 s (M10). |
-| `GET /v1/rooms/{name}` | Room details (M10): the room, its machine, its leases, the jobs of its ready leases (the server asks the room helper, `job list`, all in one 10 s deadline; on an error `jobs_error` says "jobs unknown"), the queue of its platforms, and its last 10 events. A member gets the jobs and events of the member's own leases only (commands and messages can hold secrets). |
+| `GET /v1/rooms/{name}` | Room details (M10): the room, its machine, its leases, the jobs of its ready leases (the server asks the room helper, `job list`, all in one 10 s deadline; on an error `jobs_error` says "jobs unknown"), the queue of its platforms, its last 10 events, and the live use (`usage`, the helper command `usage` in the same deadline; M10b). A member gets the jobs and events of the member's own leases only (commands and messages can hold secrets). |
 | `POST /v1/connect` (no token) | `{"secret", "name", "computer"}` from an invite code; returns `{"server_id", "user", "role", "token"}` once. HTTP 403 for an invalid code, 409 `name_taken`, 429 after 10 failures per minute. |
 | `GET /v1/me`, `DELETE /v1/me` | The token's user, role, and computer; `DELETE` revokes the token (`hostel disconnect`). |
 | `GET /v1/users`, `PATCH /v1/users/{name}`, `DELETE /v1/users/{name}`, `DELETE /v1/users/{name}/computers/{computer}` (admin to change) | Users with their computers; `{"role"}`; removal (tokens revoked, leases ended); removal of one computer (its tokens revoked; the user stays). The server keeps at least one admin (HTTP 409 `last_admin`). |

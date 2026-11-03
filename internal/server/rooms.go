@@ -88,6 +88,10 @@ func (s *Server) ensureStaticRooms(ctx context.Context, start bool) error {
 
 const reasonUnreachable = "unreachable"
 
+// reasonHostKeyChanged: the room answered with another SSH host key; an
+// admin repairs it and accepts the new key.
+const reasonHostKeyChanged = "host key changed"
+
 // connect opens an SSH connection to a room and pins its host key at the first
 // connection.
 func (s *Server) connect(ctx context.Context, r store.Room) (*roomops.Conn, error) {
@@ -209,6 +213,10 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		if err := s.store.SetRoomPlatform(ctx, r.ID, name, p.Hash, time.Now()); err != nil {
 			return err
 		}
+	}
+	// The provisioning reached the room: a "last seen" for the presence.
+	if err := s.store.SetLastSeen(ctx, r.ID, time.Now()); err != nil {
+		s.log.Warn("save the last seen time", "room", r.Name, "err", err)
 	}
 	// The hardware is for the status view only: an error does not stop the
 	// provisioning.

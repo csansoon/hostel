@@ -99,8 +99,12 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// The live use and the jobs come from the room at the same time.
+	usage := make(chan *protocol.Usage, 1)
+	go func() { usage <- s.roomUsage(ctx, room) }()
 	jobs, jobsErr := s.roomJobs(ctx, ready)
 	out.Jobs, out.JobsError = jobs, jobsErr
+	out.Usage = <-usage
 	events, err := s.store.RoomEvents(ctx, room.ID, 10)
 	if err != nil {
 		s.internalError(w, "read events", err)
@@ -171,4 +175,24 @@ func (s *Server) leaseJobs(ctx context.Context, l store.Lease) ([]protocol.JobIn
 		return nil, err
 	}
 	return list.Jobs, nil
+}
+
+// roomUsage asks the room's helper for its live use (M10b); nil when the room
+// does not run or does not answer within detailsJobsTimeout.
+func (s *Server) roomUsage(ctx context.Context, r store.Room) *protocol.Usage {
+	if r.State != protocol.RoomRunning {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, detailsJobsTimeout)
+	defer cancel()
+	room, _, err := s.openRoom(ctx, r.ID)
+	if err != nil {
+		return nil
+	}
+	defer room.Conn.Close()
+	var u protocol.Usage
+	if err := room.Helper(ctx, []string{"usage"}, nil, &u); err != nil {
+		return nil
+	}
+	return &u
 }

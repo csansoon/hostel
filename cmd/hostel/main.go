@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/csansoon/hostel/internal/app"
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/guest"
 	"github.com/csansoon/hostel/internal/room"
@@ -58,6 +59,15 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
+		// People get the Hostel app; without a terminal (an agent, a pipe),
+		// the help.
+		if isTerminal(os.Stdin) && isTerminalWriter(stdout) {
+			if err := app.Run(version.Version, stdout); err != nil {
+				fmt.Fprintln(stderr, "hostel:", err)
+				return 1
+			}
+			return 0
+		}
 		printHelp(stderr)
 		return 2
 	}
@@ -101,6 +111,7 @@ func needsConnection(name string, args []string) bool {
 
 func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "Hostel gives short, temporary, exclusive access to remote machines.")
+	fmt.Fprintln(w, "People: run \"hostel\" alone in a terminal to open the Hostel app.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage: hostel <command> [arguments]")
 	fmt.Fprintln(w)

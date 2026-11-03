@@ -262,7 +262,7 @@ func serverHeaderWith(agentDevice bool) string {
 	id := fmt.Sprintf("e2e%x", b)
 	return fmt.Sprintf("server_id = %q\nlisten = \"127.0.0.1:0\"\ngateway_listen = \"127.0.0.1:0\"\nhelper_dir = %q\n"+
 		"tls = \"self-signed\"\npublic_urls = [\"https://127.0.0.1:0\"]\n"+
-		"intervals = { scheduler = \"1s\", reconcile = \"2s\", tunnel_check = \"1s\" }\nmise = { agent_device = %t }\n", id, helperDir, agentDevice)
+		"intervals = { scheduler = \"1s\", reconcile = \"2s\", tunnel_check = \"1s\", presence = \"1s\" }\nmise = { agent_device = %t }\n", id, helperDir, agentDevice)
 }
 
 type serverProc struct {

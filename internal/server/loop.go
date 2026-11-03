@@ -84,6 +84,9 @@ func (s *Server) pass(ctx context.Context) error {
 			s.log.Error("reconcile", "err", err)
 		}
 	}
+	if err := s.checkPresence(ctx); err != nil {
+		return fmt.Errorf("presence: %w", err)
+	}
 	if err := s.refreshRooms(ctx); err != nil {
 		return fmt.Errorf("rooms after a configuration change: %w", err)
 	}
@@ -126,8 +129,9 @@ func (s *Server) pass(ctx context.Context) error {
 
 var roomNameRE = regexp.MustCompile(`^hostel-([a-z0-9]+)-([0-9]+)$`)
 
-// reconcile (design, section 7) probes static rooms that were unreachable, and
-// compares each on-demand provider's rooms with the database: unknown rooms
+// reconcile (design, section 7) compares each on-demand provider's rooms with
+// the database (static rooms that were unreachable come back through the
+// presence check, presence.go): unknown rooms
 // with this server's prefix are destroyed; database rooms that the provider
 // lost are marked destroyed. It never acts on rooms without the prefix.
 func (s *Server) reconcile(ctx context.Context) error {
@@ -136,14 +140,6 @@ func (s *Server) reconcile(ctx context.Context) error {
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return err
-	}
-	for _, r := range rooms {
-		p := lc.cfg.Providers[r.Provider]
-		if p != nil && p.Kind == config.ProviderStatic && r.State == protocol.RoomBroken && r.BrokenReason == reasonUnreachable {
-			if _, err := s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomBroken}, protocol.RoomProvisioning, "", time.Now()); err != nil {
-				return err
-			}
-		}
 	}
 	prefix := "hostel-" + lc.cfg.ServerID + "-"
 	for _, name := range lc.cfg.ProviderOrder {

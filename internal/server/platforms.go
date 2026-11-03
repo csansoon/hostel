@@ -66,7 +66,8 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 	for _, name := range config.PlatformNames(s.config().Platforms) {
 		p := s.config().Platforms[name]
 		req := scheduler.Request{Platform: name, PlatformOS: p.Kind == config.KindOS, Labels: p.Requires}
-		if len(scheduler.Candidates(s.schedMachines(), req)) == 0 {
+		machines := scheduler.Candidates(s.schedMachines(), req)
+		if len(machines) == 0 {
 			continue
 		}
 		free, total, newRoom := s.capacity(req, rooms, slots)
@@ -81,7 +82,8 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 			wait = s.estimatedWait(ctx, name, queue+1, total)
 		}
 		out = append(out, protocol.Platform{Name: name, Kind: p.Kind, Description: p.Description, Devices: nonNil(p.Devices),
-			MaxDevices: p.MaxDevices, FreeSlots: free, NewRoom: newRoom, Queue: queue, EstimatedWaitSeconds: int(wait.Seconds())})
+			MaxDevices: p.MaxDevices, FreeSlots: free, NewRoom: newRoom, Queue: queue, EstimatedWaitSeconds: int(wait.Seconds()),
+			Machines: machines, TypicalLeaseSeconds: int(s.medianDuration(ctx, name, 0).Seconds())})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

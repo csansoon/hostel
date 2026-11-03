@@ -109,6 +109,9 @@ type Intervals struct {
 	Scheduler   *Duration `toml:"scheduler"`
 	Reconcile   *Duration `toml:"reconcile"`
 	TunnelCheck *Duration `toml:"tunnel_check"`
+	// Presence is how often the server checks that the idle static
+	// machines answer, and that the offline ones are back (M10b).
+	Presence *Duration `toml:"presence"`
 }
 
 type Mise struct {
@@ -390,6 +393,7 @@ func (s *Server) resolve() error {
 	setDur(&s.Intervals.Scheduler, 10*time.Second)
 	setDur(&s.Intervals.Reconcile, 5*time.Minute)
 	setDur(&s.Intervals.TunnelCheck, 30*time.Second)
+	setDur(&s.Intervals.Presence, 30*time.Second)
 	for _, d := range []struct {
 		key string
 		v   *Duration
@@ -397,7 +401,7 @@ func (s *Server) resolve() error {
 		{"idle_timeout", s.IdleTimeout}, {"poll_timeout", s.PollTimeout},
 		{"limit_retry", s.LimitRetry}, {"port_process_offline", s.PortProcessOffline},
 		{"intervals.scheduler", s.Intervals.Scheduler}, {"intervals.reconcile", s.Intervals.Reconcile},
-		{"intervals.tunnel_check", s.Intervals.TunnelCheck},
+		{"intervals.tunnel_check", s.Intervals.TunnelCheck}, {"intervals.presence", s.Intervals.Presence},
 	} {
 		if d.v.D() <= 0 {
 			el.add(d.key, "must be longer than 0")

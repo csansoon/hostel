@@ -131,7 +131,14 @@ max_rooms = 2
 		`(?m)^\S+ · 1 room \(0 in use\) · 0 waiting · you: guest \(member\)$`,
 		`(?m)^ROOM\s+PLATFORMS\s+STATE\s+USER\s+TASK\s+TIME\s+LEASE$`,
 		`(?m)^home/box\s+fakedevice, linux\s+free$`,
-		`(?m)^cloud/small\s+linux\s+none\s+\(on demand, up to 2\)$`)
+		`(?m)^cloud/small\s+linux\s+none\s+\(on demand, up to 2\)$`,
+		`(?m)^Details: hostel status <room> .* or hostel status <platform> \(its queue\)\.$`,
+		`(?m)^To get a room: hostel acquire <platform> --task "\.\.\."`)
+	// Without a terminal, "hostel" alone prints the help (the app needs a
+	// terminal).
+	if r := f.e.hostel(); r.code != 2 || !strings.Contains(r.stderr, "Usage: hostel <command>") {
+		t.Fatalf("hostel without arguments in a pipe: %s", r)
+	}
 
 	lease := f.acquire()
 	f.e.vars["HOSTEL_TOKEN"] = f.e.newUser("ana", "member")

@@ -11,7 +11,9 @@ machine or an on-demand cloud such as Namespace), prepares it, and gives the age
 SSH access through its gateway. When the lease ends, cleanup deletes everything the
 lease left on the room.
 
-Status: milestones M0 to M9 are done (Docker, static, and Namespace rooms; iOS, Android, macOS, Windows, and Linux; desktop testing; users and connection; remote configuration). M10 (the status view: `hostel status`) is in progress; see docs/plan.md.
+Status: milestones M0 to M10 are done (Docker, static, and Namespace rooms; iOS, Android, macOS, Windows, and Linux; desktop testing; users and connection; remote configuration; the status API). M10b (the Hostel app) is in progress; see docs/plan.md.
+
+People run `hostel` in a terminal to open the Hostel app (check in, the platforms and their queues, the machines, the server). Agents use the `hostel <verb>` commands (`hostel agent-guide`).
 
 | Document | Content |
 |---|---|

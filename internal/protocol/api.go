@@ -67,6 +67,14 @@ type Hardware struct {
 	OSVersion     string `json:"os_version,omitempty"`
 }
 
+// Usage is the live use of a room (M10b), read when its details open.
+type Usage struct {
+	CPUPercent       float64 `json:"cpu_percent"`
+	MemoryUsedBytes  int64   `json:"memory_used_bytes,omitempty"`
+	MemoryTotalBytes int64   `json:"memory_total_bytes,omitempty"`
+	DiskFreeBytes    int64   `json:"disk_free_bytes,omitempty"`
+}
+
 // LeaseStatus is a lease that is not final, in GET /v1/status.
 type LeaseStatus struct {
 	ID        string    `json:"id"`
@@ -80,6 +88,7 @@ type LeaseStatus struct {
 	User      string    `json:"user"`
 	Guest     string    `json:"guest"`
 	Repo      string    `json:"repo"`
+	Branch    string    `json:"branch,omitempty"`
 	Provider  string    `json:"provider,omitempty"`
 	Machine   string    `json:"machine,omitempty"`
 	RoomID    int64     `json:"room_id,omitempty"`
@@ -104,6 +113,11 @@ type Platform struct {
 	NewRoom              bool `json:"new_room"`
 	Queue                int  `json:"queue"`
 	EstimatedWaitSeconds int  `json:"estimated_wait_seconds"`
+	// Machines are the keys of the machines that can serve the platform
+	// (M10b); TypicalLeaseSeconds is the median of its last leases (0: none
+	// yet).
+	Machines            []string `json:"machines"`
+	TypicalLeaseSeconds int      `json:"typical_lease_seconds,omitempty"`
 }
 
 type RoomStatus struct {
@@ -122,6 +136,9 @@ type RoomStatus struct {
 	// Deadline is the provider-side deadline of an on-demand room.
 	Deadline time.Time `json:"deadline,omitzero"`
 	Hardware *Hardware `json:"hardware,omitempty"`
+	// LastSeen is the last presence check that the room answered; only for
+	// an offline room (broken, reason "unreachable"; M10b).
+	LastSeen time.Time `json:"last_seen,omitzero"`
 }
 
 // RoomDetails is GET /v1/rooms/{name} (M10): the room, its machine, the jobs
@@ -137,6 +154,8 @@ type RoomDetails struct {
 	JobsError string               `json:"jobs_error,omitempty"`
 	Queue     []LeaseStatus        `json:"queue"`
 	Events    []Event              `json:"events"`
+	// Usage is the live use of the room (M10b; nil when it is not known).
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // Event is an entry of the event log.
@@ -189,6 +208,8 @@ type CreateLeaseRequest struct {
 	GuestHost      string          `json:"guest_host"`
 	Repo           string          `json:"repo"`
 	Worktree       string          `json:"worktree"`
+	// Branch is the git branch of the worktree (M10b; empty when unknown).
+	Branch string `json:"branch,omitempty"`
 }
 
 // Error codes of POST /v1/leases (HTTP 422, R4).

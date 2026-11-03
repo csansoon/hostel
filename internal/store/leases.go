@@ -32,6 +32,7 @@ type Lease struct {
 	GuestHost      string
 	Repo           string
 	Worktree       string
+	Branch         string
 	Provider       string
 	Machine        string
 	RoomID         int64
@@ -61,7 +62,7 @@ func Final(state string) bool {
 const leaseColumns = `id, token_id, state, revision, position, reason, platform, devices, task, priority,
 	required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id,
 	slot_name, attempts, began_at, created_at, last_poll_at, last_activity_at, ready_at, expires_at,
-	ended_at, end_state, end_reason, manual_position`
+	ended_at, end_state, end_reason, manual_position, branch`
 
 func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	var l Lease
@@ -71,7 +72,7 @@ func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	err := row.Scan(&l.ID, &l.TokenID, &l.State, &l.Revision, &l.Position, &l.Reason, &l.Platform, &devices,
 		&l.Task, &l.Priority, &labels, &tunnels, &l.Fresh, &l.PublicKey, &l.GuestHost, &l.Repo, &l.Worktree,
 		&l.Provider, &l.Machine, &roomID, &l.SlotName, &l.Attempts, &began, &created, &poll, &activity,
-		&ready, &expires, &ended, &l.EndState, &l.EndReason, &l.ManualPosition)
+		&ready, &expires, &ended, &l.EndState, &l.EndReason, &l.ManualPosition, &l.Branch)
 	if err != nil {
 		return l, err
 	}
@@ -98,10 +99,10 @@ func jsonText(v any) string {
 func (s *Store) InsertLease(ctx context.Context, l Lease, now time.Time) error {
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO leases (id, token_id, state, platform, devices, task, priority,
-			required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, created_at, last_poll_at, last_activity_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, branch, created_at, last_poll_at, last_activity_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			l.ID, l.TokenID, protocol.LeaseQueued, l.Platform, jsonText(nonNil(l.Devices)), l.Task, l.Priority,
-			jsonText(nonNil(l.RequiredLabels)), jsonText(l.Tunnels), l.Fresh, l.PublicKey, l.GuestHost, l.Repo, l.Worktree,
+			jsonText(nonNil(l.RequiredLabels)), jsonText(l.Tunnels), l.Fresh, l.PublicKey, l.GuestHost, l.Repo, l.Worktree, l.Branch,
 			now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
 		if err != nil {
 			return err

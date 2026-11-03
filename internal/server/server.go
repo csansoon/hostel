@@ -63,8 +63,8 @@ type Server struct {
 	logins logins
 	// connectLimit limits failed POST /v1/connect attempts.
 	connectLimit connectLimiter
-	// lastReconcile is used only by the loop goroutine.
-	lastReconcile time.Time
+	// lastReconcile and lastPresence are used only by the loop goroutine.
+	lastReconcile, lastPresence time.Time
 }
 
 func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, dialRoom provider.RoomDialer, log *slog.Logger) (map[string]provider.Provider, error) {

@@ -125,7 +125,7 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Platform: p.Name, Devices: devices, Task: req.Task,
 		Priority: priority, RequiredLabels: labels, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
-		GuestHost: req.GuestHost, Repo: req.Repo, Worktree: req.Worktree}
+		GuestHost: req.GuestHost, Repo: req.Repo, Worktree: req.Worktree, Branch: req.Branch}
 	if l.Tunnels == nil {
 		l.Tunnels = []protocol.TunnelRequest{}
 	}

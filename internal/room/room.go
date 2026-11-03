@@ -36,6 +36,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		out, err = h.info()
 	case "hardware":
 		out, err = h.hardware()
+	case "usage":
+		out, err = h.usage()
 	case "install":
 		out, err = h.install(args[1:], stdin)
 	case "run-script":

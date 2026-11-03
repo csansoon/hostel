@@ -213,3 +213,19 @@ func (r *Repo) SelectState(platform string) (*State, error) {
 	}
 	return nil, fmt.Errorf("this worktree has several leases (%s); select one with --platform", strings.Join(names, ", "))
 }
+
+// currentBranch is the git branch of the worktree for the status (empty when
+// it is not known, for example a detached HEAD).
+func currentBranch(dir string) string {
+	// 5 s: the branch is only for the status; a slow git must not hold up
+	// the lease.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}

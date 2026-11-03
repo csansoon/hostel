@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/connect"
 	"github.com/csansoon/hostel/internal/server"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/tlspin"
@@ -79,6 +79,11 @@ func isTerminal(r io.Reader) bool {
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
 // ask asks for the values that the flags did not give.
 func ask(stdin io.Reader, stdout io.Writer, o *initOptions) {
 	in := bufio.NewScanner(stdin)
@@ -112,19 +117,9 @@ func ask(stdin io.Reader, stdout io.Writer, o *initOptions) {
 		}
 	}
 	if o.user == "" {
-		o.user = line("Your name", gitUserName())
+		o.user = line("Your name", connect.GitUserName())
 	}
 	fmt.Fprintln(stdout)
-}
-
-func gitUserName() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "config", "user.name").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func initServer(path string, o initOptions, stdout io.Writer) error {
