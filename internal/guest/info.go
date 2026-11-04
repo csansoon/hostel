@@ -29,7 +29,8 @@ func FormatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%d s", int(d.Seconds()))
 	}
-	return fmt.Sprintf("%d min", int(d.Round(time.Minute).Minutes()))
+	// Down, not to the nearest minute: the message must not promise more.
+	return fmt.Sprintf("%d min", int(d.Minutes()))
 }
 
 // Platforms is "hostel platforms" (R1).

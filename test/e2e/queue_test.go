@@ -262,4 +262,17 @@ func TestAcquireBackground(t *testing.T) {
 	f.e.waitFor("the keeper stops after release", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
 	f.useRepo("repo")
 	f.e.mustHostel("release")
+	f.waitSlotFree()
+
+	// With a free slot, --background still returns at once: the lease is
+	// ready, and the next acquire syncs and sets it up.
+	f.useRepo("repo2")
+	r = f.e.hostel("acquire", "fakedevice", "--task", "free slot", "--background")
+	if r.code != 75 || !strings.Contains(r.stderr, "is ready; run the same command again to sync and set it up") {
+		t.Fatalf("acquire --background with a free slot: %s", r)
+	}
+	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "free slot"); !strings.Contains(r.stdout, "is ready") {
+		t.Fatalf("acquire after a ready --background: %s", r)
+	}
+	f.e.mustHostel("release")
 }
