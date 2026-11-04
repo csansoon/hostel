@@ -173,7 +173,7 @@ OrbStack is installed).
 
 ## M2. Spare MacBook as a static iOS room
 
-Goal: an agent builds the ExampleApp iOS app on the MacBook and gets a screenshot.
+Goal: an agent builds an iOS app on the MacBook and gets a screenshot.
 
 Owner tasks (write a short guide in `docs/static-room-setup.md` first):
 
@@ -191,13 +191,15 @@ Build:
   check the Screen Recording permission over SSH). The owner sets automatic login on the MacBook so that it has a
   desktop session (add this to the setup guide), and the machine gets the label
   `desktop`.
-- ExampleApp `hostel.toml` proposal (do not commit it to ExampleApp; give it to the owner).
-- Check that the ExampleApp iOS build works in `work/` without `.git` (design, section 12).
+- `hostel.toml` example for an app repository (do not commit it to that
+  repository; give it to the owner).
+- Check that a real iOS app build works in `work/` without `.git` (design,
+  section 12).
 - Check that `ps -E` shows the environment of the room user's processes (cleanup,
   design section 17).
-- `hostel agent-guide` text for ExampleApp agents.
+- `hostel agent-guide` text for the agents of an app.
 
-Done when: from an ExampleApp worktree with a local API, `hostel acquire ios`, `hostel run`
+Done when: from an app's worktree with a local API, `hostel acquire ios`, `hostel run`
 of the iOS build, app launch, sign-in against the local API through the tunnel, and
 `hostel screenshot` work, on an iPhone and on an iPad device. A second lease starts
 on the warm room and has a clean simulator. A `macos` lease gives a desktop
@@ -240,7 +242,7 @@ Build:
 - A Linux Docker image or provision step with the Android SDK, if the boot time
   needs it.
 
-Done when: an agent runs the ExampleApp Android app on a remote emulator against its local
+Done when: an agent runs an Android app on a remote emulator against its local
 API (`10.0.2.2` through the tunnel) and gets a screenshot.
 
 ## M5. VPS deployment
@@ -290,7 +292,7 @@ Not in scope: the repository's own UI test suites, signed builds.
 - Windows after that: the owner selects the machine (a desktop session that stays
   drawn; not the owner's session on `win-pc`). agent-device has no Windows
   support; Hostel needs a bridge in the desktop session (UI Automation, input,
-  screenshots), as ExampleApp's QA bridge does.
+  screenshots), as the QA bridge of another project does.
 
 Done when: an agent on the owner's Mac builds a small macOS app on the MacBook,
 starts it, reads its accessibility snapshot, clicks and types in it, and takes a

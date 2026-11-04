@@ -98,7 +98,7 @@ detail to the contract, the same commit updates `design.md`.
    acquire `macos` on a devbox, run a command, take a desktop screenshot, release,
    wait until the devbox is deleted. Then a `kill -9` of the server during a lease
    and a restart: no devbox remains.
-5. The M2 ExampleApp flow on a devbox (iOS build, install, launch, sign-in through the
+5. The M2 app flow on a devbox (iOS build, install, launch, sign-in through the
    tunnel, screenshot), by hand, with the evidence in section 5.
 
 ## 4. Risks
@@ -126,7 +126,7 @@ detail to the contract, the same commit updates `design.md`.
   screenshot (2560×1600); `kill -9` of the server and a restart during the lease;
   release; the devbox was deleted. Total 2 min 26 s. `devbox list` was empty
   before and after.
-- 2026-10-26, the M2 ExampleApp flow on a devbox (server on the owner's Mac; machine
+- 2026-10-26, the M2 app flow on a devbox (server on the owner's Mac; machine
   `namespace/mac` with `DEVELOPER_DIR` for Xcode 26.5 and the label `devbox`):
   - The first three tries failed: the server ran the `ios` health script at room
     provisioning, before the `ios` provision script, which an on-demand room runs
@@ -136,9 +136,9 @@ detail to the contract, the same commit updates `design.md`.
     provision script, so the E2E tests of on-demand rooms show this case.
   - Lease timeline: create 18 s, room provisioning (helper, mise, agent-device)
     41 s, `ios` provision (two golden simulators, Xcode 26.5, iOS 26.5) 74 s,
-    prepare 14 s: ready 2 min 27 s after the request. With the ExampleApp setup job
+    prepare 14 s: ready 2 min 27 s after the request. With the app's setup job
     (`tuist install`, `tuist generate`), `acquire` returned after 240 s.
-  - Cold ExampleApp build (`xcodebuild ... build`): 57 s (MacBook: 2 min 45 s).
+  - Cold app build (`xcodebuild ... build`): 57 s (MacBook: 2 min 45 s).
   - Install and launch; the tunnel from the devbox to the local API (HTTP 200);
     the app signed in as `user@dev.local`, an account that exists only in this
     worktree's database (agent-device read it in the sidebar);

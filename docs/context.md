@@ -1,31 +1,31 @@
 # Context
 
 This file gives a new contributor the background that is not in the code: why
-Hostel exists, who uses it first, and what was tried before.
+Hostel exists, how it is typically used, and what was tried before.
 
 ## Why Hostel exists
 
-The owner develops **ExampleApp**, a monorepo with a TypeScript API and native iOS, Mac
-Catalyst, and Android clients. A native Windows client is planned. Many coding
-agents work on ExampleApp at the same time, each in its own git worktree on the owner's
-Mac.
+Many coding agents can work on the same app at the same time, each in its own git
+worktree. They need builds, UI QA, and device tests on iOS, Android, macOS,
+Windows, and Linux. One developer often works on several apps at the same time.
 
-Today, these agents share one iOS Simulator, one Android emulator or USB device,
-and one Postgres + SeaweedFS pair on the Mac. A local lock tool (`devlock`) makes
-them take turns. This has three problems:
+On one developer machine, these agents share one iOS Simulator, one Android
+emulator or USB device, and the local services. A local lock tool makes them take
+turns. This does not scale:
 
 1. Agents wait for each other for the devices.
-2. Cloud agents (Linux machines) cannot build or QA the iOS or Mac app at all.
-3. There is no Windows machine.
+2. Cloud agents (Linux machines) cannot build or QA Apple apps at all.
+3. A platform that the developer machine does not have (for example Windows) is
+   not available.
 
 Hostel moves builds and UI QA to remote machines. Each agent gets its own machine
 (or slot) for a short time. The agent's code stays local, and the API under test
 still runs locally on the agent's machine. A tunnel connects the remote app to it.
 
-## First user: ExampleApp
+## Typical use
 
-Hostel must be generic, but ExampleApp is the first user: a private monorepo with a
-TypeScript API and native iOS and Android clients. What it needs from Hostel:
+An example: an app monorepo with an API and native iOS and Android clients. What
+it needs from Hostel:
 
 - **The local API:** each worktree runs its own API on its own port; the app on
   the room reaches it through a tunnel (`hostel.toml`, `[tunnels.api]`).
@@ -34,8 +34,6 @@ TypeScript API and native iOS and Android clients. What it needs from Hostel:
   screenshots.
 - **Android:** a Gradle build with JDK 21 and the Android SDK, and the emulator
   (the `android` platform).
-- A `hostel.toml` for ExampleApp is a separate change in the ExampleApp repository. Propose it
-  to the owner; do not change the ExampleApp repository from this project.
 
 ## History
 
@@ -72,8 +70,8 @@ provider contract inspired Hostel's `external` provider.
 
 ### Namespace spike (2026-10-20)
 
-The spike proved that a Namespace macOS devbox can build and run ExampleApp iOS and take
-screenshots, and that a Linux instance can run the Android emulator. See
+The spike proved that a Namespace macOS devbox can build and run an iOS app and
+take screenshots, and that a Linux instance can run the Android emulator. See
 `namespace.md` for times, limits, and traps.
 
 ## Decisions log

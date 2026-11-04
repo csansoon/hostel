@@ -8,8 +8,8 @@ the build order, and the risks. `design.md` stays the contract.
 ## 1. Facts from the experiments (2026-10-29)
 
 `win-pc`: Windows 11 Enterprise 10.0.26300, amd64, 2 CPUs, 8 GB, 57 GB free. Not
-in a domain. Reached at a Tailscale address only. The ExampleApp agents use it (SSH
-alias `win-pc`, devlock `windows` for its desktop).
+in a domain. Reached at a Tailscale address only. Agents of other projects use it
+(SSH alias `win-pc`, and a `windows` desktop lock of those projects).
 
 - **SSH.** OpenSSH Server runs (automatic start). The default shell of the SSH
   server is Windows PowerShell 5.1 (`HKLM\SOFTWARE\OpenSSH\DefaultShell`); this is
@@ -162,7 +162,7 @@ request.
 
 | Risk | Control |
 |---|---|
-| Hostel work slows down the ExampleApp agents on a 2-CPU machine. | One slot. The owner can drain the machine (`hostel admin`) while ExampleApp needs it. |
+| Hostel work slows down the agents of other projects on a 2-CPU machine. | One slot. The owner can drain the machine (`hostel admin`) while those agents need it. |
 | A guest process escapes the jobs (for example through WMI or a scheduled task). | Cleanup also finds it by `HOSTEL_LEASE` in its environment. A process that clears its environment and is started outside the lease's process tree escapes, as on macOS (design, section 18). |
 | Microsoft Defender blocks or slows down the unsigned helper. | Not seen in the experiments. If it happens, the owner adds an exclusion for `C:\Users\hostel\hostel`. |
 | The Cloud PC restarts or sleeps. | `room connect` starts at boot; the room is unreachable until then, and the lease returns to the queue (design, section 6). |

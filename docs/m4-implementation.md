@@ -55,7 +55,7 @@ adds a detail to the contract, the same commit updates `design.md`.
     caller stops it. Nothing is created.
   - `nsc build` starts a builder instance (label `nsc.purpose: builder`); destroy
     it after use.
-- **The MacBook** (`mac-mini`, static room of M2): macOS 26.6.2, arm64,
+- **The MacBook** (`home/macbook`, static room of M2): macOS 26.6.2, arm64,
   8 CPU, 8 GB memory, 157 GB free. No Android SDK, no Java, no Homebrew.
 
 ## 2. Decisions from the facts
@@ -115,7 +115,7 @@ adds a detail to the contract, the same commit updates `design.md`.
    `Extend`: the creation deadline covers the first leases. The real
    `extend-duration` call is checked by hand.)
 4. A smoke test against the real account (`HOSTEL_SMOKE_NAMESPACE=1`).
-5. Done-when check: the ExampleApp Android app on a Namespace instance against the local
+5. Done-when check: an Android app on a Namespace instance against the local
    API, with a screenshot.
 6. Gate: `e2e-10` in CI and one local macOS run; `pr-ready`.
 
@@ -162,20 +162,19 @@ adds a detail to the contract, the same commit updates `design.md`.
   instance to a guest HTTP server; `kill -9` of the server and a restart during
   the lease; release; the instance was destroyed. Total 1 min 59 s. `nsc list`
   was empty before and after.
-- 2026-10-27, done-when check: the ExampleApp Android app on a Namespace instance
+- 2026-10-27, done-when check: an Android app on a Namespace instance
   (owner's server, machine `namespace/android`, `linux/amd64:8x16`, default image,
-  `tools = { java = "21" }`), against the API of the ExampleApp worktree on the Mac
+  `tools = { java = "21" }`), against the API of the app's worktree on the Mac
   through the tunnel:
   - `acquire android --require kvm` returned after 351 s: `nsc create` and the
     room container 43 s, room provisioning 43 s, `android` provision 3 min 45 s
     (packages, SDK, 2 golden AVDs), `prepare` 7 s, then the sync (3,347 files)
     and `mise install` (Java, pnpm, tuist for Linux).
-  - Cold `./gradlew installDebug -Pexampleapp.apiBaseUrl=http://10.0.2.2:$HOSTEL_TUNNEL_API_PORT`:
-    2 min 31 s.
-  - The app started; the sign-in with a `@dev.local` account went through the
-    tunnel to the local API (its log shows the dev magic link); the app showed
-    "New chat". Screenshots: `/tmp/hostel-m4/exampleapp-android-1.png` and
-    `exampleapp-android-2.png`.
+  - Cold `./gradlew installDebug`, with the app's API URL property set to
+    `http://10.0.2.2:$HOSTEL_TUNNEL_API_PORT`: 2 min 31 s.
+  - The app started; the sign-in with a test account went through the tunnel to
+    the local API; the app showed its first screen after sign-in, in two
+    screenshots.
 - 2026-10-27, defect found in that check: after the release, `health` failed
   with exit code 127: `emulator -version` starts QEMU, which needs
   `libpng16.so.16`, and `ubuntu:24.04` does not have it (the emulator itself ran;

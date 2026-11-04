@@ -13,8 +13,8 @@ Owner decisions: `requirements.md`, section 3, 2026-11-03.
   is private).
 - An audit of the whole history (2026-11-03) found no secrets. It found
   personal and internal details: the owner's server address and VM names, the
-  owner's machine names and hardware, details of ExampleApp, and the owner's name in
-  examples.
+  owner's machine names, details of the owner's app, and the owner's name in
+  examples. Hardware facts stay as test conditions.
 
 ## 2. Decisions
 

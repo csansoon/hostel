@@ -48,9 +48,9 @@ macOS devbox, image `tahoe-slim` (macOS 26.6.2, virtual M4 Pro, 6 CPU, 14 GB):
 | `devbox create` | 22 s |
 | Xcode 26.5 and the iOS 26.5 simulator | already in the image |
 | Simulator first boot / second boot | 27 s / 9 s |
-| Upload of the ExampleApp source (`rsync`) | 8 s |
+| Upload of the source of the test app (`rsync`, about 87 MB) | 8 s |
 | `tuist install` + `tuist generate` (tuist from mise) | 86 s |
-| Cold `xcodebuild` of the ExampleApp iOS app | 53 s |
+| Cold `xcodebuild` of the test iOS app | 53 s |
 | Install and launch in the simulator | 5 s |
 | `devbox desktop screenshot` | about 10 s |
 | Reverse tunnel `ssh -R` through the devbox SSH alias | worked (HTTP 200, 0.16 s) |
@@ -62,7 +62,7 @@ Linux compute instance (`nsc create --bare --machine_type linux/amd64:4x16`):
 | Create | 6 s |
 | `/dev/kvm`, Docker, root access | present |
 | Android 15 emulator, from nothing to booted (`cirruslabs/android-sdk:35` image) | 99 s |
-| Cold ExampleApp `./gradlew assembleDebug` | 3 min 25 s |
+| Cold `./gradlew assembleDebug` of the test Android app | 3 min 25 s |
 
 macOS compute instance (`nsc create --machine_type macos/arm64:6x14`): 20 s, but
 the selector `macos.version=26.x` gave macOS 26.3.1 without Xcode 26.5.

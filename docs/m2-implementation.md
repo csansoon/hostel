@@ -10,7 +10,7 @@ contract, the same commit updates `design.md`.
 - The Hostel server runs on the owner's Mac (`hostel server init` done on
   2026-10-22; `~/.config/hostel/server.toml`, `~/.local/share/hostel`). It listens
   on the default `127.0.0.1:7410` (API) and `127.0.0.1:7422` (gateway). Guests run
-  on the same Mac, in ExampleApp worktrees.
+  on the same Mac, in an app's worktrees.
 - The server connects to the MacBook over the local network (`connect = false`).
   `hostel room connect` is M5.
 - The owner prepares the MacBook with `docs/static-room-setup.md`.
@@ -54,7 +54,7 @@ contract, the same commit updates `design.md`.
 3. The E2E platform `fakedevice` stays the test for the script contract. The
    `ios` scripts cannot run in Docker; `make lint` runs `shellcheck` on
    `platforms/` (new) and `hostel admin config check` on them.
-4. A draft of the ExampleApp `hostel.toml` and of the `agent-guide` text (section 4).
+4. A draft of an app's `hostel.toml` and of the `agent-guide` text (section 4).
 
 ## 3. Checks on the MacBook
 
@@ -67,8 +67,8 @@ Each check gives a short result in `design.md` (or a fix), with the date.
 2. **`ps -E`.** Check that the helper finds the room user's processes by
    `HOSTEL_LEASE` in their environment (cleanup step 1, design section 17), also
    for processes in a new session (`setsid`, `nohup`, a detached `screen`).
-3. **Build without `.git`.** Build ExampleApp in `work/` with the `setup` commands
-   (`tuist install`, `tuist generate`) and `xcodebuild` for the simulator. ExampleApp's
+3. **Build without `.git`.** Build the app in `work/` with the `setup` commands
+   (`tuist install`, `tuist generate`) and `xcodebuild` for the simulator. The app's
    `Tuist.swift` finds the root without `.git`; check that no build step needs git
    (for example a build number from `git rev-list`).
 4. **Screen Recording over SSH.** `screencapture` from an SSH session, with the
@@ -79,10 +79,10 @@ Each check gives a short result in `design.md` (or a fix), with the date.
    session (needed for the desktop screenshot and for a person who watches). The
    device screenshot does not need it.
 
-## 4. ExampleApp
+## 4. App configuration
 
-`hostel.toml` proposal for the ExampleApp repository root (not committed to ExampleApp; the
-owner adds it):
+`hostel.toml` example for an app repository root (not committed to that
+repository; the owner adds it):
 
 ```toml
 # The guest reads PORT from the local .env for each connection, so .env is not
@@ -92,18 +92,17 @@ local_port_env = "PORT"
 
 [platforms.ios]
 devices = ["iphone-17-pro"]
-setup = ["cd apps/ios && tuist install && tuist generate --no-open"]
-# Debug builds read the API URL from TUIST_DEBUG_API_BASE_URL at generate time.
-env = { TUIST_DEBUG_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
+setup = ["tuist install && tuist generate --no-open"]
+env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 ```
 
-- ExampleApp's `.mise.toml` pins `node`, `tuist`, `pnpm`, and `java`. The setup job runs
+- The app's `.mise.toml` pins `node`, `tuist`, `pnpm`, and `java`. The setup job runs
   `mise install`, so the room also gets Java, which iOS does not need. The cost is
   one download; the mise cache keeps it.
-- Build command for agents (ExampleApp `apps/ios/QA.md`, section 3):
+- Build command for agents (from the app's QA notes):
 
   ```sh
-  hostel run -- "cd apps/ios && xcodebuild -workspace exampleapp.xcworkspace -scheme exampleapp \
+  hostel run -- "xcodebuild -workspace App.xcworkspace -scheme App \
     -configuration Debug -destination id=\$SIMULATOR_UDID build"
   ```
 
@@ -111,11 +110,11 @@ env = { TUIST_DEBUG_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
   `com.example.app`). DerivedData stays in its default place; the `work` path of a slot
   is the same for each lease, so the warm build reuses it.
 - `hostel agent-guide` has a short generic part for devices and tunnels. The
-  ExampleApp-specific commands go to ExampleApp's `AGENTS.md` (proposal for the owner).
+  app-specific commands go to the app's `AGENTS.md` (proposal for the owner).
 
 ## 5. Acceptance (the "done when" of M2)
 
-From an ExampleApp worktree on the owner's Mac, with the local API running:
+From an app's worktree on the owner's Mac, with the local API running:
 
 1. `hostel acquire ios --device iphone-17-pro`; `hostel run` of the iOS build; app
    install and launch; sign-in against the local API through the tunnel;
@@ -139,8 +138,8 @@ the MacBook are manual; their results go into this file (section 8).
 | `screencapture` over SSH fails even with the permission. | A launchd agent in the `hostel` session takes the screenshot; the script asks it. |
 | Simulator boot over SSH needs the desktop session. | The setup has automatic login; if a boot fails without it, `health` reports it. |
 | An Xcode prompt (license, first launch, developer tools) stops a script. | The setup guide covers them; scripts have timeouts; `health` checks `xcodebuild -version`. |
-| Building ExampleApp takes long. The default `max_lease` (`2h`) and the `run` wait need checks. | DerivedData in the cache; measure the first and the warm build. |
-| ExampleApp must not build with `CODE_SIGNING_ALLOWED=NO` (its QA notes: the Keychain fails). A simulator build can need a signing identity for its entitlements. | Check the first build. If it needs an Apple account in Xcode for the `hostel` user, ask the owner. |
+| Building the app takes long. The default `max_lease` (`2h`) and the `run` wait need checks. | DerivedData in the cache; measure the first and the warm build. |
+| The app must not build with `CODE_SIGNING_ALLOWED=NO` (its QA notes: the Keychain fails). A simulator build can need a signing identity for its entitlements. | Check the first build. If it needs an Apple account in Xcode for the `hostel` user, ask the owner. |
 | The MacBook sleeps or loses the network. | `pmset` in the setup; the room becomes unreachable, and the server reports it. |
 
 ## 8. Results
@@ -183,7 +182,7 @@ the MacBook are manual; their results go into this file (section 8).
 - 2026-10-22, simulator window (check 5): `simctl boot` does not open the
   Simulator app. `open -a Simulator` from a lease job shows the booted lease
   device on the desktop. The device screenshot (`simctl io`) works without it.
-- 2026-10-22, ExampleApp on the room (check 3): `tuist install` and `tuist generate`
+- 2026-10-22, the app on the room (check 3): `tuist install` and `tuist generate`
   work in `work/` without `.git` (71 s, the first time). The setup first failed
   with `tuist: command not found`: the job `PATH` comes from `mise env` at the
   job start, before the setup's `mise install`. Fix: the setup adds
@@ -192,21 +191,20 @@ the MacBook are manual; their results go into this file (section 8).
   `xcodebuild` (Debug, simulator) took 2 min 45 s; the build in the next lease
   took 47 s (DerivedData reused, the same `work` path). The app is signed ad hoc
   with the simulator entitlements (`keychain-access-groups` included), without
-  an Apple account. The first `mise install` of ExampleApp's tools took 225 s on the
+  an Apple account. The first `mise install` of the app's tools took 225 s on the
   room's network (Java, 200 MB, at about 50 kB/s); they are cached for later
   leases.
-- 2026-10-22, acceptance item 2: a second lease was ready in 47 s, and ExampleApp was
+- 2026-10-22, acceptance item 2: a second lease was ready in 47 s, and the app was
   not installed on its simulator.
 - 2026-10-22, tunnel: from the room, `localhost:7500` reaches the owner's local
-  ExampleApp API; `POST /auth/magic-link` returns 200. ExampleApp's debug build signs in by
-  itself as `user@dev.local` against a localhost API, and that account was then
-  in the worktree's own database (only reachable through the tunnel).
+  app API; the app's sign-in request returns 200. The app's debug build signs in
+  by itself with a test account against a localhost API, and that account was
+  then in the worktree's own database (only reachable through the tunnel).
 - 2026-10-23, UI input: T3 Code drives simulators with `agent-device`
   (Callstack, npm, 0.21.25). Owner decision: each room gets it by default
   (design, section 9, "mise on rooms"). Over SSH on the room it works: the first
   `open` built its XCTest runner and took 39 s; later leases took 17–19 s
-  (runner cache). `click` and `fill` work (ExampleApp's notification sheet, the
-  sidebar, text in the chat field).
+  (runner cache). `click` and `fill` work on the app's screens.
 - 2026-10-23, cleanup with agent-device: its iOS runner (`xcodebuild
   test-without-building`) runs in a new session without a visible environment,
   and it survived cleanup until its simulator was gone (about 2.5 min). Fix:
@@ -222,7 +220,7 @@ the MacBook are manual; their results go into this file (section 8).
   agent-device without failures. I did not measure two devices in one lease.
 - 2026-10-23, macOS desktop with agent-device: `open Calculator` worked, but
   `snapshot` timed out, because macOS asks an administrator to enable Automation
-  Mode for XCTest UI automation. The ExampleApp Mac Catalyst build failed without team
+  Mode for XCTest UI automation. The app's Mac Catalyst build failed without team
   provisioning profiles. Owner decision: Hostel focuses on iOS for now; macOS
   desktop apps are future work (`requirements.md`, open question 8).
 - 2026-10-23, 10-run gate: the first two attempts failed on short fixed waits in

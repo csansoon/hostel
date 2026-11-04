@@ -329,7 +329,7 @@ Platforms ios, macos · labels xcode-26.5, desktop · 1 slot
 NOW      Alex E. · fix login screen · lease 7f3a2c
          ready 12m ago · ends at 15:48 at the latest, or after 10m without activity
          from alex-mbp · repository app (branch fix-login)
-         job j-91 running 3m: xcodebuild test -scheme ExampleApp
+         job j-91 running 3m: xcodebuild test -scheme App
 
 QUEUE    1. Lucía G. · sign-in flow · normal · waiting 3m · ~15m
 

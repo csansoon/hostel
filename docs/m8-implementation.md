@@ -150,8 +150,8 @@ a test server on the owner's Mac reached by its LAN or Tailscale IP (TLS
   Its existing tokens become users by the migration. Check with `hostel status`
   from the owner's client and the room tokens of `home/macbook` and `home/win`
   after the deploy.
-- **Clients of other projects.** T3 Code and ExampleApp agents use `HOSTEL_SERVER` and
-  `HOSTEL_TOKEN`; these keep working.
+- **Clients of other projects.** T3 Code and the agents of other projects use
+  `HOSTEL_SERVER` and `HOSTEL_TOKEN`; these keep working.
 - **WebSocket gateway on HTTPS.** Long SSH sessions over the WebSocket on the
   API listener need the same timeouts as on exe.dev (checked in M5); with TLS
   `self-signed`, the E2E tests use this path.

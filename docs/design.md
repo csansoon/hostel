@@ -987,7 +987,7 @@ local_port_env = "PORT"
 [platforms.ios]
 devices = ["iphone-17-pro"]         # default devices for this repository
 # requires = ["xcode-26.5"]         # labels that this repository needs on this platform
-setup = ["cd apps/ios && tuist install && tuist generate --no-open"]
+setup = ["tuist install && tuist generate --no-open"]
 env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
 [platforms.android]
@@ -1433,7 +1433,7 @@ The helper must not write or delete outside `work/`:
 - If `git` is not on the room, the helper skips the baseline and `diff` reports that
   it is not available.
 - A build step that needs git metadata (`git describe`) does not work in `work/`.
-  Check this for ExampleApp in M2.
+  Check this for a real app build in M2.
 
 This design works on all room OSes without `rsync`.
 

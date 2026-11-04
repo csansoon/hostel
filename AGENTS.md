@@ -9,7 +9,7 @@ modes.
 
 Read these files in full before you change code:
 
-1. `docs/context.md`: why Hostel exists, the first user (ExampleApp), and history.
+1. `docs/context.md`: why Hostel exists, typical use, and history.
 2. `docs/requirements.md`: vocabulary, owner decisions, requirements, risks.
 3. `docs/design.md`: architecture and contracts.
 4. `docs/plan.md`: milestones. Work only on the current milestone.

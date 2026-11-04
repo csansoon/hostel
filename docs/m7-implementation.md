@@ -46,9 +46,9 @@ contract.
 ### Windows
 
 - `agent-device` has no Windows support.
-- ExampleApp's QA tools control the `win-pc` desktop with a bridge: a scheduled task
-  in the desktop user's session runs PowerShell jobs, UI Automation (FlaUI), and
-  screenshots. A Cloud PC stops drawing when no client is connected.
+- The QA tools of another project control the `win-pc` desktop with a bridge: a
+  scheduled task in the desktop user's session runs PowerShell jobs, UI
+  Automation (FlaUI), and screenshots. A Cloud PC stops drawing when no client is connected.
 
 ### Windows: the room user on another user's desktop (`win-pc`, 2026-10-30)
 
@@ -85,7 +85,7 @@ user).
     `RegisterClientSideProviderAssembly` fails in PowerShell. WPF (and other
     apps with their own UI Automation support) show correctly.
   - Input goes to the foreground window. Before keys, check that the foreground
-    window belongs to the app (ExampleApp's QA guide: otherwise keys go to the owner's
+    window belongs to the app (an app's QA guide: otherwise keys go to the owner's
     desktop).
 - After the test, the task was removed and no test process remained.
 
@@ -168,7 +168,7 @@ no more and the desktop is clean (checked by a second lease on the same room).
 ## 6. Results (Windows, 2026-10-30)
 
 - `TestSmokeWindowsDesktop` passed on `win-pc` (72 s; the owner kept the
-  desktop connected; the `windows` devlock was held, and the room `home/win` of
+  desktop connected; the `windows` desktop lock of the other projects was held, and the room `home/win` of
   the exe.dev server was drained during the test). First lease (ready after
   20 s): `dotnet build` of a small WPF app (4 s), `desktop --detach
   out\HostelSmoke.exe`, `winapp ui status` and `inspect`, two `invoke`s
