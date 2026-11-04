@@ -54,8 +54,9 @@ hostel
   it. Open a machine to see its hardware, its live CPU and memory use, and the
   current lease with its branch and running job. You can end your own lease;
   admins can end any lease, stop new leases, and repair a broken room.
-- **Front desk**: the server, the guest list, invites (Invite a guest), new
-  machines (Add a room), and Check out.
+- **Front desk**: the server, the guest list, and Check out. Members can make a
+  code for their other computer. Admins invite guests (Invite a guest), change
+  roles, and add machines (Add a room).
 
 The footer shows what the selected item is and which keys work. `?` lists all
 keys; `1` `2` `3` jump to Lobby, Rooms, and Front desk; `q` quits.
@@ -77,8 +78,9 @@ hostel server init --listen 0.0.0.0:7410 --url https://hostel.example.com:7410 -
 hostel server run
 ```
 
-`hostel server init` prints the invite code for your computer. Then open the app
-and add your machines in Front desk › Add a room. The
+Run these as the user of the service (not root), and open TCP 7410.
+`hostel server init` prints the invite code for your computer; use it within 24
+hours. Then open the app and add your machines in Front desk › Add a room. The
 [`hostel-server-setup`](skills/hostel-server-setup/SKILL.md) skill has the
 details (a service, a proxy with TLS, backups).
 
@@ -102,9 +104,9 @@ skill fits a task.
   machine), or on demand (Namespace, or an `external` provider); limits, warm
   rooms, drain, repair, remove; offline machines.
 - [**`hostel-platforms`**](skills/hostel-platforms/SKILL.md): what each platform
-  needs on a machine (Xcode and its label for iOS; the Android SDK and Java for
-  Android; the `desktop` label for desktop apps), devices, labels, and your own
-  platforms with their scripts.
+  needs on a machine (Xcode and its label for iOS; Java, and KVM on Linux, for
+  Android, whose SDK Hostel downloads; the `desktop` label for desktop apps),
+  devices, labels, and your own platforms with their scripts.
 - [**`hostel-users`**](skills/hostel-users/SKILL.md): invite people
   (`hostel config users invite`), roles (admin, member), a code for another
   computer, remove a user or one computer.
@@ -126,8 +128,8 @@ hostel screenshot -o screen.png
 hostel release
 ```
 
-On a connected computer, `hostel agent-guide` prints the instructions for agents
-that come with the installed version. To make your agents use Hostel, add this
+`hostel agent-guide` prints the instructions for agents that come with the
+installed version. To make your agents use Hostel, add this
 to their instructions file (for example `AGENTS.md` or `CLAUDE.md`):
 
 ```markdown
