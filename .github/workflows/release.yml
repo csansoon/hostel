@@ -16,8 +16,14 @@ jobs:
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@v2
-      - name: Build the release files
-        run: make release
+      - name: Build and sign the release files
+        env:
+          HOSTEL_RELEASE_KEY: ${{ secrets.HOSTEL_RELEASE_KEY }}
+        run: |
+          test -n "$HOSTEL_RELEASE_KEY" || { echo "the secret HOSTEL_RELEASE_KEY is missing" >&2; exit 1; }
+          test "$(git describe --tags --always --dirty)" = "$GITHUB_REF_NAME" || { echo "the tag is not on the checked-out commit" >&2; exit 1; }
+          make release
+          test -s dist/release/SHA256SUMS.sig
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

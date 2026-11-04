@@ -27,6 +27,7 @@ import (
 	"github.com/csansoon/hostel/internal/provider"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/tlspin"
+	"github.com/csansoon/hostel/internal/update"
 	"github.com/csansoon/hostel/internal/version"
 )
 
@@ -263,7 +264,26 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	// The gateway's SSH over a WebSocket; SSH authenticates inside.
 	mux.Handle("GET /v1/gateway", s.gateway)
-	return mux
+	return versioned(mux)
+}
+
+// minGuestVersion is the oldest guest that this server accepts. Raise it only
+// with a change that breaks the API (m10d-implementation.md).
+const minGuestVersion = "v0.1.0"
+
+// versioned adds the server version to each answer, and refuses a guest that
+// is older than minGuestVersion. A request without a version (v0.1.0, curl)
+// passes.
+func versioned(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(protocol.VersionHeader, version.Version)
+		if v := r.Header.Get(protocol.VersionHeader); update.Older(v, minGuestVersion) {
+			writeError(w, http.StatusUpgradeRequired, protocol.CodeUpdateRequired, fmt.Sprintf(
+				"this computer has Hostel %s; this server needs %s or later. Update this computer: run \"hostel update\"", v, minGuestVersion))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type tokenKey struct{}

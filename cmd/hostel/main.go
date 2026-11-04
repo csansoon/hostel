@@ -7,11 +7,14 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/csansoon/hostel/internal/app"
+	"github.com/csansoon/hostel/internal/client"
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/guest"
 	"github.com/csansoon/hostel/internal/room"
+	"github.com/csansoon/hostel/internal/update"
 	"github.com/csansoon/hostel/internal/version"
 )
 
@@ -43,6 +46,7 @@ var commands = []command{
 	{name: "ls", hidden: true, run: statusCmd},
 	{name: "rooms", hidden: true, run: statusCmd},
 	{name: "release", summary: "End the lease", run: guest.Release},
+	{name: "update", summary: "Replace this hostel binary with the latest release", run: updateCmd},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents", run: guest.AgentGuide},
 	{name: "config", summary: "The server configuration: machines, providers, settings, users (admins change it)", run: configCmd},
 	{name: "admin", summary: "Admin commands: room tokens, leases, rooms, configuration", run: adminCmd},
@@ -59,6 +63,7 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	update.CleanOld()
 	if len(args) == 0 {
 		// People get the Hostel app; without a terminal (an agent, a pipe),
 		// the help.
@@ -83,6 +88,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	for _, c := range commands {
 		if c.name == args[0] {
 			if needsConnection(c.name, args[1:]) {
+				var once sync.Once
+				client.ServerVersion = func(v string) {
+					once.Do(func() { update.Notice(stderr, v, version.Version, noticeFile()) })
+				}
 				if _, err := config.LoadGuest(); errors.Is(err, config.ErrNotConnected) {
 					fmt.Fprintln(stderr, "hostel:", err)
 					return ExitNotConnected
@@ -100,7 +109,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func needsConnection(name string, args []string) bool {
 	switch name {
 	// The others report the missing connection themselves.
-	case "connect", "disconnect", "server", "room", "machine", "agent-guide", "ports", "gateway-proxy":
+	case "connect", "disconnect", "server", "room", "machine", "agent-guide", "ports", "gateway-proxy", "update":
 		return false
 	case "admin":
 		// "admin config check|schema" is local; without a subcommand, admin

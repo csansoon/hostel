@@ -16,10 +16,15 @@ import (
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/tlspin"
+	"github.com/csansoon/hostel/internal/version"
 )
 
 // requestTimeout bounds each request; long polls set their own deadline.
 const requestTimeout = 90 * time.Second
+
+// ServerVersion, when set, gets the server version of each answer
+// (X-Hostel-Version), for the update notice.
+var ServerVersion func(v string)
 
 type Client struct {
 	base  string
@@ -80,6 +85,7 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set(protocol.VersionHeader, version.Version)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -91,6 +97,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return fmt.Errorf("cannot reach the Hostel server at %s: %w", c.base, err)
 	}
 	defer resp.Body.Close()
+	if v := resp.Header.Get(protocol.VersionHeader); v != "" && ServerVersion != nil {
+		ServerVersion(v)
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
 		return fmt.Errorf("read the server response: %w", err)

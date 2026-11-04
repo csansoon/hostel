@@ -363,6 +363,14 @@ type ConfigRevision struct {
 // CodeConflict: the configuration changed since the base revision.
 const CodeConflict = "conflict"
 
+// VersionHeader carries the hostel version: of the guest in each request, of
+// the server in each answer (M10d).
+const VersionHeader = "X-Hostel-Version"
+
+// CodeUpdateRequired: the guest is older than the server's minimum guest
+// version (HTTP 426).
+const CodeUpdateRequired = "update_required"
+
 // ConfigPlatform is a platform of the server's configuration (M9).
 type ConfigPlatform struct {
 	Name        string `json:"name"`
