@@ -384,6 +384,11 @@ func TestServerUpdate(t *testing.T) {
 		linux: versionBin(t, "linux", dockerArch, "v1.2.0"),
 	})
 	e.bin = copyBin(t, hostBin(t, "v1.1.0"), filepath.Join(e.home, "cli"))
+	for _, v := range []string{"v1.1.0", "v1.0.0", "latest"} {
+		if r := e.hostel("server", "update", "--version", v); r.code != 1 || !strings.Contains(r.stderr, "not newer") && !strings.Contains(r.stderr, "not vX.Y.Z") {
+			t.Fatalf("server update --version %s: %s", v, r)
+		}
+	}
 	r = e.mustHostel("server", "update")
 	if !strings.Contains(r.stdout, "from v1.1.0 to v1.2.0") || !strings.Contains(r.stdout, "restart the server") {
 		t.Fatalf("server update: %s", r)

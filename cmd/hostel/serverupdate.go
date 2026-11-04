@@ -94,7 +94,13 @@ func localServerUpdate(path, want string, stdout io.Writer) error {
 			return err
 		}
 	}
+	if _, ok := update.ParseTag(tag); !ok {
+		return fmt.Errorf("the version %q is not vX.Y.Z", tag)
+	}
 	if _, known := update.Parse(have); known && !update.Newer(tag, have) {
+		if want != "" {
+			return fmt.Errorf("the server binary %s has %s; %s is not newer (to install an older release, use the install command with --version)", exe, have, tag)
+		}
 		fmt.Fprintf(stdout, "the server binary %s has %s: up to date (the release is %s)\n", exe, have, tag)
 		return nil
 	}
