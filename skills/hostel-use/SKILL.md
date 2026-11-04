@@ -30,6 +30,34 @@ One lease per platform per worktree. Run `acquire` in the repository. Flags:
 | `--priority low\|normal\|high` | The queue lane. Change it only when the user asks. |
 | `--fresh` | A new on-demand room with empty caches. |
 | `--wait 100s` | How long `acquire` waits before it returns. |
+| `--background` | Return at once; a small background process keeps the place in the queue. |
+
+## Wait in the queue and keep working
+
+The place in the queue belongs to the lease, and the lease ID is in the
+worktree (`$(git rev-parse --git-dir)/hostel/<platform>/lease.json`). Running
+the same `acquire` command again continues that lease in the same place; it
+never takes another agent's place. Use one worktree for each agent: agents in
+the same worktree share one lease.
+
+A waiting lease lives only while its owner polls it: after `poll_timeout`
+(default 5 minutes) without `acquire`, the server ends it. `acquire` prints the
+time. Two ways to keep the place while you do other work:
+
+```sh
+# 1. Return at once and let Hostel keep the place:
+hostel acquire ios --task "QA the sign-in screen" --background
+# ... other work ...
+hostel acquire ios --task "QA the sign-in screen"   # continue; wait until ready
+
+# 2. Or return quickly and run the command again before the timeout:
+hostel acquire ios --task "QA the sign-in screen" --wait 1s
+```
+
+With `--background`, a detached `hostel keep-place` process polls the lease
+until it is ready or ends, then stops. A ready lease then lives for
+`idle_timeout` (default 10 minutes) without a `hostel` command, so come back
+soon. `hostel release` ends the lease and the process.
 
 Exit codes of `acquire`:
 

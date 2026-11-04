@@ -24,6 +24,14 @@ func FormatWait(seconds int) string {
 	return fmt.Sprintf("~%d min", int(d.Round(time.Minute).Minutes()))
 }
 
+// FormatDuration formats a timeout: "45 s", "5 min".
+func FormatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d s", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%d min", int(d.Round(time.Minute).Minutes()))
+}
+
 // Platforms is "hostel platforms" (R1).
 func Platforms(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel platforms", stderr)
@@ -73,8 +81,15 @@ Start
     --device <d>    a device of the platform (repeat for several)
     --require <l>   a machine label, for example desktop
     --priority      high or low, only when the user asks for it
+    --background    return at once; Hostel keeps the place in the queue
   When acquire exits with code 75, run the SAME command again. It continues
   the same lease. Code 69: no machine can serve the request; do not retry.
+  A waiting lease keeps its place only while you run that command: after a
+  few minutes without it (5 by default; acquire prints the time), the lease
+  ends. To do other work while you wait, add --background: Hostel keeps the
+  place for you; run the same command again later to continue (within 10
+  minutes, by default, of the lease being ready). One worktree for each agent: agents in the same worktree share
+  one lease.
   Code 78: this computer is not connected to a Hostel server. Do not try to
   connect; ask the user to run "hostel connect <invite code>" with a code from
   an admin of their server.

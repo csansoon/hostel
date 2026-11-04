@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -196,4 +197,50 @@ func TestPollTimeout(t *testing.T) {
 	if r.code != 1 || !strings.Contains(r.stderr, "ended (cancelled: poll timeout") {
 		t.Fatalf("acquire after the poll timeout: %s", r)
 	}
+}
+
+// TestAcquireBackground: "acquire --background" returns at once, and a
+// detached keeper polls the waiting lease, so it keeps its place in the queue
+// for longer than poll_timeout without acquire; a lease without it ends after
+// poll_timeout (acquire says so). When the room is free, the kept lease is
+// ready, the same command continues it, and the keeper stops.
+func TestAcquireBackground(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{serverKeys: "poll_timeout = \"6s\"\n"})
+	f.acquire()
+
+	f.e.newRepoNamed("repo2", defaultRepoFiles())
+	r := f.e.hostel("acquire", "fakedevice", "--task", "in the background", "--background")
+	if r.code != 75 || !strings.Contains(r.stderr, "keeps the place of lease") {
+		t.Fatalf("acquire --background: %s", r)
+	}
+	kept := createdID(t, r)
+
+	f.e.newRepoNamed("repo3", defaultRepoFiles())
+	r = f.e.hostel("acquire", "fakedevice", "--task", "without polls", "--wait", "2s")
+	if r.code != 75 || !strings.Contains(r.stderr, "the server keeps the place of lease") || !strings.Contains(r.stderr, "for 6 s without this command") {
+		t.Fatalf("acquire of a waiting lease: %s", r)
+	}
+	dropped := createdID(t, r)
+	f.e.waitFor("the end of the lease without polls", time.Minute, func() bool { return f.lease(dropped).State != protocol.LeaseQueued })
+
+	// The kept lease outlives 3 poll timeouts without an acquire of its own.
+	start := time.Now()
+	f.e.waitFor("3 poll timeouts", time.Minute, func() bool { return time.Since(start) > 18*time.Second })
+	if st := f.lease(kept).State; st != protocol.LeaseQueued {
+		t.Fatalf("the kept lease after 3 poll timeouts: %s, want queued", st)
+	}
+
+	f.useRepo("repo")
+	f.e.mustHostel("release")
+	f.useRepo("repo2")
+	f.e.waitFor("the kept lease ready", 2*time.Minute, func() bool { return f.lease(kept).State == protocol.LeaseReady })
+	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "in the background"); !strings.Contains(r.stdout, "Lease "+kept+" is ready") {
+		t.Fatalf("acquire after the background wait: %s", r)
+	}
+	f.e.waitFor("the keeper stops", time.Minute, func() bool {
+		out, _ := exec.Command("pgrep", "-f", "keep-place --dir "+filepath.Join(f.e.home, "repo2")).Output()
+		return len(strings.TrimSpace(string(out))) == 0
+	})
+	f.e.mustHostel("release")
 }
