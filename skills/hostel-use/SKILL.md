@@ -62,6 +62,12 @@ A ready lease lives for `idle_timeout` (default 10 minutes) without a `hostel`
 command, and it holds the room meanwhile. `hostel release` ends the lease and
 the process.
 
+On Windows, an agent tool can run each command in a job object that kills all
+its processes when the command ends and does not let them leave. Then the
+background process ends with the command. `acquire` notices it at the next
+run: it says how long the server keeps the place, and `--background` starts a
+new process. In such a tool, run `acquire` again before the poll timeout.
+
 Exit codes of `acquire`:
 
 | Code | Meaning | Do |
