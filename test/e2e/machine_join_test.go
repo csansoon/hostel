@@ -116,6 +116,9 @@ func TestMachineJoin(t *testing.T) {
 		t.Fatalf("user on the joined machine: %q", r.stdout)
 	}
 	e.mustHostel("release")
+	// The lease stays active during its cleanup, and the server refuses to
+	// remove a machine with an active lease (below): wait for the end.
+	e.waitFor("the end of the lease on the joined machine", time.Minute, func() bool { return len(s.status().Leases) == 0 })
 
 	// On a machine without the result of the join: the used code is refused,
 	// and a second code for the same name too.
