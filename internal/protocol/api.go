@@ -239,6 +239,11 @@ type Lease struct {
 	EndReason string    `json:"end_reason,omitempty"`
 	// EstimatedWaitSeconds is set for a queued lease.
 	EstimatedWaitSeconds int `json:"estimated_wait_seconds,omitempty"`
+	// PollTimeoutMS is how long a queued lease lives without a poll of its
+	// owner; IdleTimeoutMS how long a ready lease lives without a hostel
+	// command (the server settings poll_timeout and idle_timeout).
+	PollTimeoutMS int64 `json:"poll_timeout_ms,omitempty"`
+	IdleTimeoutMS int64 `json:"idle_timeout_ms,omitempty"`
 	// Access is set when the lease is ready.
 	Access *Access `json:"access,omitempty"`
 }

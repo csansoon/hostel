@@ -30,6 +30,8 @@ type lease struct {
 	repo *Repo
 	st   *State
 	api  *client.Client
+	// background: acquire --background (a keeper polls the waiting lease).
+	background bool
 }
 
 func apiClient() (*client.Client, error) {

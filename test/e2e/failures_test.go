@@ -180,7 +180,7 @@ func TestRestartQueue(t *testing.T) {
 
 // TestPollNetworkError: a waiting acquire survives a server that stops during
 // its long poll and is down for a while; it retries its poll and continues the
-// same lease.
+// same lease. A short acquire during the outage ends at its --wait.
 func TestPollNetworkError(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
@@ -200,6 +200,12 @@ func TestPollNetworkError(t *testing.T) {
 	f.e.waitFor("the guest polls", time.Minute, func() bool { return strings.Contains(stderr.String(), "lease "+id+" queued") })
 	f.s.stop()
 	f.e.waitFor("the guest retries", time.Minute, func() bool { return strings.Contains(stderr.String(), "; retrying") })
+	// While the server is down, a short acquire still ends at its --wait:
+	// failed polls count too.
+	start := time.Now()
+	if r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "3s"); r.code != 75 || time.Since(start) > 20*time.Second {
+		t.Fatalf("acquire --wait 3s while the server is down: %s after %s", r, time.Since(start))
+	}
 	f.s = f.s.restart()
 	f.useRepo("repo")
 	f.e.mustHostel("release")

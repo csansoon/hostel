@@ -19,3 +19,8 @@ func startDetached(exe string, args []string, logFile *os.File) error {
 	}
 	return cmd.Process.Release()
 }
+
+// processAlive reports whether a process with this ID runs.
+func processAlive(pid int) bool {
+	return pid > 0 && syscall.Kill(pid, 0) == nil
+}

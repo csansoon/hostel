@@ -110,18 +110,7 @@ func (s *State) KeyPath() string { return filepath.Join(s.Dir, "id_ed25519") }
 
 // LoadState reads the state of a platform; ok is false if there is none.
 func (r *Repo) LoadState(platform string) (*State, bool, error) {
-	s := &State{Dir: filepath.Join(r.stateRoot(), platform)}
-	data, err := os.ReadFile(s.path())
-	if errors.Is(err, os.ErrNotExist) {
-		return s, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if err := json.Unmarshal(data, s); err != nil {
-		return nil, false, fmt.Errorf("read %s: %w", s.path(), err)
-	}
-	return s, true, nil
+	return loadStateDir(filepath.Join(r.stateRoot(), platform))
 }
 
 // Save writes the state with a temporary file and a rename.

@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -196,4 +198,112 @@ func TestPollTimeout(t *testing.T) {
 	if r.code != 1 || !strings.Contains(r.stderr, "ended (cancelled: poll timeout") {
 		t.Fatalf("acquire after the poll timeout: %s", r)
 	}
+}
+
+// TestAcquireBackground: "acquire --background" returns at once, and a
+// detached keeper polls the waiting lease, so it keeps its place in the queue
+// for longer than poll_timeout without acquire; a lease without it ends after
+// poll_timeout (acquire says so). When the room is free, the kept lease is
+// ready, the same command continues it, and the keeper stops.
+func TestAcquireBackground(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{serverKeys: "poll_timeout = \"6s\"\n"})
+	f.acquire()
+
+	f.e.newRepoNamed("repo2", defaultRepoFiles())
+	r := f.e.hostel("acquire", "fakedevice", "--task", "in the background", "--background")
+	if r.code != 75 || !strings.Contains(r.stderr, "keeps the place of lease") {
+		t.Fatalf("acquire --background: %s", r)
+	}
+	kept := createdID(t, r)
+
+	f.e.newRepoNamed("repo3", defaultRepoFiles())
+	r = f.e.hostel("acquire", "fakedevice", "--task", "without polls", "--wait", "2s")
+	if r.code != 75 || !strings.Contains(r.stderr, "the server keeps the place of lease") || !strings.Contains(r.stderr, "for 6 s without this command") {
+		t.Fatalf("acquire of a waiting lease: %s", r)
+	}
+	dropped := createdID(t, r)
+	f.e.waitFor("the end of the lease without polls", time.Minute, func() bool { return f.lease(dropped).State != protocol.LeaseQueued })
+
+	// "acquire --wait 1s", run again before poll_timeout, keeps a place too:
+	// each run polls the lease at least once.
+	f.e.newRepoNamed("repo4", defaultRepoFiles())
+	r = f.e.hostel("acquire", "fakedevice", "--task", "short waits", "--wait", "1s")
+	short := createdID(t, r)
+	for start := time.Now(); time.Since(start) < 15*time.Second; {
+		time.Sleep(2 * time.Second) // the agent's other work, shorter than poll_timeout
+		if r := f.e.hostel("acquire", "fakedevice", "--task", "short waits", "--wait", "1s"); r.code != 75 {
+			t.Fatalf("acquire --wait 1s: %s", r)
+		}
+	}
+	if st := f.lease(short).State; st != protocol.LeaseQueued {
+		t.Fatalf("a lease kept by acquire --wait 1s: %s, want queued", st)
+	}
+	f.e.mustHostel("release")
+
+	// The kept lease outlives 3 poll timeouts without an acquire of its own.
+	start := time.Now()
+	f.e.waitFor("3 poll timeouts", time.Minute, func() bool { return time.Since(start) > 18*time.Second })
+	if st := f.lease(kept).State; st != protocol.LeaseQueued {
+		t.Fatalf("the kept lease after 3 poll timeouts: %s, want queued", st)
+	}
+
+	f.useRepo("repo")
+	f.e.mustHostel("release")
+	f.useRepo("repo2")
+	f.e.waitFor("the kept lease ready", 2*time.Minute, func() bool { return f.lease(kept).State == protocol.LeaseReady })
+	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "in the background"); !strings.Contains(r.stdout, "Lease "+kept+" is ready") {
+		t.Fatalf("acquire after the background wait: %s", r)
+	}
+	// The keeper stops and removes its heartbeat.
+	beat := filepath.Join(f.e.home, "repo2", ".git", "hostel", "fakedevice", "keeper.json")
+	f.e.waitFor("the keeper stops", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
+
+	// A new waiting lease in the same worktree gets its own keeper at once;
+	// release stops it.
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+	f.useRepo("repo")
+	f.acquire()
+	f.useRepo("repo2")
+	r = f.e.hostel("acquire", "fakedevice", "--task", "again", "--background")
+	if r.code != 75 {
+		t.Fatalf("a second acquire --background: %s", r)
+	}
+	again := createdID(t, r)
+	keeperPID := func() int {
+		var b struct {
+			LeaseID string `json:"lease_id"`
+			PID     int    `json:"pid"`
+		}
+		data, err := os.ReadFile(beat)
+		if err != nil || json.Unmarshal(data, &b) != nil || b.LeaseID != again {
+			return 0
+		}
+		return b.PID
+	}
+	f.e.waitFor("the keeper of the new lease", 30*time.Second, func() bool { return keeperPID() > 0 })
+	// A keeper killed hard leaves its heartbeat; the next acquire --background
+	// starts a new keeper anyway.
+	old := keeperPID()
+	if p, err := os.FindProcess(old); err == nil {
+		p.Kill()
+	}
+	if r := f.e.hostel("acquire", "fakedevice", "--task", "again", "--background"); r.code != 75 {
+		t.Fatalf("acquire --background after the keeper was killed: %s", r)
+	}
+	f.e.waitFor("a new keeper", 30*time.Second, func() bool { p := keeperPID(); return p > 0 && p != old })
+	f.e.mustHostel("release")
+	f.e.waitFor("the keeper stops after release", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
+	f.useRepo("repo")
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+
+	// With a free slot, --background does not wait in the queue: the lease is
+	// ready, and the same command syncs and sets it up.
+	f.useRepo("repo2")
+	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "free slot", "--background"); !strings.Contains(r.stdout, "is ready") {
+		t.Fatalf("acquire --background with a free slot: %s", r)
+	}
+	f.e.mustHostel("release")
 }

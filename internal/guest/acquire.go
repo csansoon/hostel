@@ -23,8 +23,28 @@ import (
 // pollWait is the long-poll time of one request (design, section 10).
 const pollWait = 50 * time.Second
 
+// backgroundLook bounds the look of acquire --background at the lease.
+const backgroundLook = 5 * time.Second
+
 // maxPollRetry is the longest pause before a poll after a network error.
 const maxPollRetry = 10 * time.Second
+
+// keepNote says how the place of a waiting lease is kept.
+func keepNote(l protocol.Lease, background bool, stderr io.Writer) {
+	idle := "a few minutes"
+	if l.IdleTimeoutMS > 0 {
+		idle = FormatDuration(time.Duration(l.IdleTimeoutMS) * time.Millisecond)
+	}
+	if background {
+		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again at least every %s: it continues the lease, and takes the room when it is ready (a ready room waits only %s for you)\n", l.ID, idle, idle)
+		return
+	}
+	keep := "a few minutes"
+	if l.PollTimeoutMS > 0 {
+		keep = FormatDuration(time.Duration(l.PollTimeoutMS) * time.Millisecond)
+	}
+	fmt.Fprintf(stderr, "hostel: the server keeps the place of lease %s for %s without this command; run it again before then, or add --background to keep the place while you do other work\n", l.ID, keep)
+}
 
 func notFinished(stderr io.Writer) int {
 	fmt.Fprintln(stderr, "hostel: not finished; run the same command again")
@@ -42,9 +62,10 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&require, "require", "label that the machine must have (repeat for several)")
 	fresh := fs.Bool("fresh", false, "use a new room with empty caches")
 	wait := fs.Duration("wait", 100*time.Second, "time to wait before returning; then run the same command again")
+	background := fs.Bool("background", false, "return at once and keep the place in the queue in the background; run the same command again to continue")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 1 {
-		fmt.Fprintln(stderr, "hostel: usage: hostel acquire <platform> --task \"...\" [--device d]... [--priority low|normal|high] [--require label]... [--fresh] [--wait 100s]")
+		fmt.Fprintln(stderr, "hostel: usage: hostel acquire <platform> --task \"...\" [--device d]... [--priority low|normal|high] [--require label]... [--fresh] [--wait 100s] [--background]")
 		return ExitUsage
 	}
 	platform := pos[0]
@@ -81,13 +102,28 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr, "hostel: lease %s created for %s\n", st.LeaseID, platform)
 	}
-	l := &lease{repo: repo, st: st, api: api}
+	l := &lease{repo: repo, st: st, api: api, background: *background}
 
 	if st.Access == nil {
-		code := waitReady(ctx, l, deadline, stderr)
+		until, look := deadline, ctx
+		if *background {
+			// A short look at the lease, with its own deadline; then the
+			// keeper polls it.
+			if err := ensureKeeper(st); err != nil {
+				return fail(stderr, err)
+			}
+			until = time.Now().Add(2 * time.Second)
+			var cancel context.CancelFunc
+			look, cancel = context.WithTimeout(ctx, backgroundLook)
+			defer cancel()
+		}
+		code := waitReady(look, l, until, stderr)
 		if code >= 0 {
 			return code
 		}
+		// --background only means "do not wait in the queue": a ready lease
+		// goes on to the sync and the setup, so that the same command, run
+		// again, always gets further.
 	}
 	steps := []struct {
 		name string
@@ -195,15 +231,33 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 	var since int64
 	var retry time.Duration
 	last := ""
+	var seen protocol.Lease
+	// polled: a poll was sent (also a failed one). Each acquire sends at
+	// least one; after that, the deadline counts.
+	polled := false
 	for {
 		remaining := time.Until(deadline)
-		if remaining <= 0 {
+		// Less than 1 s left after a poll: another one would ask for wait=0
+		// and answer at once (a burst of polls); stop here. The first poll
+		// always runs: it is what keeps the place of a waiting lease.
+		if remaining < time.Second && polled {
+			if seen.State == protocol.LeaseQueued || seen.State == protocol.LeaseAssigned ||
+				seen.State == protocol.LeaseProvisioning || seen.State == protocol.LeasePreparing {
+				keepNote(seen, l.background || keeperAlive(l.st), stderr)
+			}
 			return notFinished(stderr)
 		}
 		w := min(pollWait, remaining)
 		var lease protocol.Lease
 		path := fmt.Sprintf("/v1/leases/%s?since=%d&wait=%ds", l.st.LeaseID, since, int(w.Seconds()))
+		polled = true
 		if err := l.api.Do(ctx, "GET", path, nil, &lease); err != nil {
+			if l.background && ctx.Err() != nil {
+				// The server did not answer the short look: the keeper
+				// keeps the place.
+				fmt.Fprintf(stderr, "hostel: the server did not answer within %s; Hostel keeps the place of lease %s in the background\n", FormatDuration(backgroundLook), l.st.LeaseID)
+				return notFinished(stderr)
+			}
 			var apiErr *client.APIError
 			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
 				l.st.Final = true
@@ -216,6 +270,10 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 				fmt.Fprintf(stderr, "hostel: %v; retrying\n", err)
 			}
 			retry = min(max(2*retry, time.Second), maxPollRetry)
+			if time.Until(deadline) < time.Second {
+				// No time for another try: the loop ends at the deadline.
+				continue
+			}
 			select {
 			case <-time.After(min(retry, time.Until(deadline))):
 			case <-ctx.Done():
@@ -224,7 +282,7 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 			continue
 		}
 		retry = 0
-		since = lease.Revision
+		since, seen = lease.Revision, lease
 		line := describe(lease)
 		if line != last {
 			fmt.Fprintln(stderr, "hostel: "+line)
