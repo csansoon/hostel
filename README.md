@@ -34,7 +34,8 @@ irm https://raw.githubusercontent.com/csansoon/hostel/main/install.ps1 | iex
 ```
 
 Both install the latest [release](https://github.com/csansoon/hostel/releases)
-and check it against its `SHA256SUMS`. Run the same command again to update.
+and check it against its `SHA256SUMS`. To update, run `hostel update` (from
+v0.2.0; it checks the release signature), or choose Update in the app.
 
 ## For humans
 
@@ -56,7 +57,9 @@ hostel
   admins can end any lease, stop new leases, and repair a broken room.
 - **Front desk**: the server, the guest list, and Check out. Members can make a
   code for their other computer. Admins invite guests (Invite a guest), change
-  roles, and add machines (Add a room).
+  roles, add machines (Add a room), and update the server (Update the server).
+- **Update**: shows in the menu when a newer release exists; it installs it on
+  this computer.
 
 The footer shows what the selected item is and which keys work. `?` lists all
 keys; `1` `2` `3` jump to Lobby, Rooms, and Front desk; `q` quits.
@@ -73,7 +76,8 @@ example:
 Or do it yourself on a Linux machine that your computers can reach:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/csansoon/hostel/main/install.sh | sudo sh -s -- --dir /usr/local/bin --server /opt/hostel
+curl -fsSL https://raw.githubusercontent.com/csansoon/hostel/main/install.sh | sudo sh -s -- --dir /opt/hostel/bin --server /opt/hostel
+sudo chown -R "$USER" /opt/hostel && sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 hostel server init --listen 0.0.0.0:7410 --url https://hostel.example.com:7410 --helper-dir /opt/hostel/helpers
 hostel server run
 ```
@@ -83,7 +87,8 @@ root), and open TCP 7410.
 `hostel server init` prints the invite code for your computer; use it within 24
 hours. Then open the app and add your machines in Front desk › Add a room. The
 [`hostel-server-setup`](skills/hostel-server-setup/SKILL.md) skill has the
-details (a service, a proxy with TLS, backups).
+details (a service, a proxy with TLS, backups, updates: an admin updates the
+server from the app, in Front desk › Update the server).
 
 ## For agents
 
@@ -93,13 +98,13 @@ other agents read. Start with [`hostel`](skills/hostel/SKILL.md): it says which
 skill fits a task.
 
 - [**`hostel-install`**](skills/hostel-install/SKILL.md): install or update the
-  CLI on macOS, Linux, or Windows; connect a computer with an invite code
+  CLI on macOS, Linux, or Windows (`hostel update`); connect a computer with an invite code
   (`hostel connect hostel1-…`); check it with `hostel --version` and
   `hostel status`.
 - [**`hostel-server-setup`**](skills/hostel-server-setup/SKILL.md): run a server
   on a VPS or a machine at home: `hostel server init` (its own TLS, or behind a
   proxy), a systemd service, the configuration in the database
-  (`hostel config edit`), backups, updates.
+  (`hostel config edit`), backups, updates (`hostel server update`).
 - [**`hostel-rooms`**](skills/hostel-rooms/SKILL.md): add machines: over SSH, from
   behind NAT (`hostel config rooms add`, then `hostel machine join` on the
   machine), or on demand (Namespace, or an `external` provider); limits, warm
@@ -153,7 +158,7 @@ and follow it. Always run `hostel release` when you are done.
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents that work on Hostel itself |
 
-Status: version 0.1. Milestones M0 to M10c are done; M11 (hardening against
+Status: version 0.2. Milestones M0 to M10d are done; M11 (hardening against
 backdoors) is planned. See [docs/plan.md](docs/plan.md).
 
 ## License

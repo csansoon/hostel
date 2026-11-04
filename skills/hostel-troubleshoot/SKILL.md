@@ -89,6 +89,16 @@ provisions it again and it becomes Vacant. Check:
 
 ## Connection and TLS errors
 
+- **HTTP 426, `this server needs vX or later`**: this computer's Hostel is too
+  old for the server. Run `hostel update` (`hostel-install`).
+- **`the signature of release … is not valid`** or **`the checksum of … is not
+  the one of release …`**: do not install it; report it to the Hostel
+  maintainers. A release before v0.2.0 has no signature: install it with the
+  install command.
+- **`this user cannot write …`** (an update): run `sudo hostel update`; for the
+  server, give the service's user `/opt/hostel` (`hostel-server-setup`,
+  section 9).
+
 - **`the server at ... has another TLS key than the one that this computer
   pinned`**: the server was set up again (a new TLS key), or the address points
   to another server. Ask an admin. To trust the new server, connect again with a

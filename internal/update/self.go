@@ -53,4 +53,3 @@ func Self(ctx context.Context, have, want string, check bool) (string, error) {
 	}
 	return fmt.Sprintf("updated %s from %s to %s", exe, have, tag), nil
 }
-

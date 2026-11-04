@@ -42,12 +42,17 @@ On the VM (`ssh hostel.example.com`):
 
 ```sh
 curl -fsSL -o install.sh https://raw.githubusercontent.com/csansoon/hostel/main/install.sh
-sudo sh install.sh --dir /usr/local/bin --server /opt/hostel
+sudo sh install.sh --dir /opt/hostel/bin --server /opt/hostel
+sudo chown -R exedev /opt/hostel
+sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 ```
 
-`/opt/hostel/helpers` gets the binaries for all rooms, and `/opt/hostel/platforms`
-the platform scripts. To update Hostel, run the same command again and restart the
-service (section 4).
+`/opt/hostel/bin/hostel` is the server binary, `/opt/hostel/helpers` gets the
+binaries for all rooms, and `/opt/hostel/platforms` the platform scripts. The
+service's user (`exedev`) owns `/opt/hostel`, so that an admin can update the
+server from the app (Front desk › Update the server) or with `hostel server
+update --remote`; the server then starts again by itself. On the VM,
+`hostel server update` and a restart of the service (section 4) do the same.
 
 If you copy files from a Mac instead, make the archive with `COPYFILE_DISABLE=1`.
 Without it, macOS adds `._*` files, and the server refuses the platform
@@ -107,7 +112,7 @@ Wants=network-online.target
 
 [Service]
 User=exedev
-ExecStart=/usr/local/bin/hostel server run
+ExecStart=/opt/hostel/bin/hostel server run
 Restart=on-failure
 RestartSec=5
 

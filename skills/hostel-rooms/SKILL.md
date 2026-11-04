@@ -66,6 +66,19 @@ command to run yourself (`--server <url> --token-file <file> [--server-key k]
 
 4. Check: `hostel status` shows the room within a minute.
 
+**Update** the connection binary of a machine that joined: the app shows "Out
+of date" on the machine when its connect service is older than the server
+(`hostel status` JSON: `connect_version`). On the machine, as an administrator:
+
+```sh
+sudo /etc/hostel/hostel machine update                 # macOS, Linux
+C:\ProgramData\hostel\hostel.exe machine update         # Windows, administrator PowerShell
+```
+
+It downloads the server's binary for the machine, replaces the service's copy,
+and restarts the service. The room helper needs nothing: the server sends it
+before each lease.
+
 ## A static machine that the server reaches over SSH
 
 Use this when the server can open TCP to the machine (same LAN or VPN). On the

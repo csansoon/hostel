@@ -160,4 +160,6 @@ End
   hostel release                when you are done. A lease also ends after
                                 10 minutes without a hostel command.
 Changes on the room are temporary. Make durable changes in your local files.
+If a command says 'run "hostel update"', tell the user; do not update hostel
+yourself (other agents on this computer use the same binary).
 `

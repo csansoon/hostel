@@ -120,14 +120,29 @@ prints the help instead. Agents use `hostel status` (plain text).
 
 ## Update
 
-Run the same install command again. It replaces the binary.
+From v0.2.0:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/csansoon/hostel/main/install.sh | sh
+hostel update --check   # is a newer release available?
+hostel update           # install it (it checks the release signature)
 hostel --version
 ```
 
-On Windows, run the `irm ... | iex` line again. The connection stays.
+The app (`hostel`) shows Update in its menu when a newer release exists. A
+command prints `the server runs Hostel vB and this computer has vA; run "hostel
+update"` (at most once a day) when the server is newer. If the binary is in a
+directory that the user cannot write, `hostel update` says so: run `sudo hostel
+update`, or install again. The connection stays.
+
+Before v0.2.0, run the install command again (on Windows the `irm ... | iex`
+line):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/csansoon/hostel/main/install.sh | sh
+```
+
+`hostel update` exit codes: 0 done or up to date, 1 error, 69 GitHub cannot be
+reached. `HOSTEL_NO_UPDATE_CHECK=1` stops the background check of the app.
 
 For the server machine, also restart the service after the update
 (`hostel-server-setup`, section "Update").

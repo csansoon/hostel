@@ -181,6 +181,9 @@ and at `max_lease` (default 2 hours). Changes on the room are temporary: make
 durable changes in local files. `hostel release <lease-id>` ends another lease
 of yours (admins: any lease).
 
+If a command prints `run "hostel update"`, tell the user. Do not update
+`hostel` yourself: other agents on the computer use the same binary.
+
 ## Status
 
 - `hostel status` prints plain text: rooms with their leases (user, task, time,
