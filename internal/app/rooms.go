@@ -56,7 +56,11 @@ func (p *rooms) body(m *model) string {
 				guest += mutedStyle.Render(fmt.Sprintf(" (+%d)", len(leases)-1))
 			}
 		}
-		rows = append(rows, []string{s.dot() + " " + clean(ms.Key), fg(s.color).Render(s.word), chips(machinePlatforms(ms), colBlue), guest})
+		word := fg(s.color).Render(s.word)
+		if m.outOfDate(ms) {
+			word += " " + pill("Out of date", colYellow)
+		}
+		rows = append(rows, []string{s.dot() + " " + clean(ms.Key), word, chips(machinePlatforms(ms), colBlue), guest})
 	}
 	return "\n" + table(rows, sel, []string{"ROOM", "STATUS", "RUNS", "GUEST"})
 }
@@ -73,7 +77,11 @@ func (p *rooms) hint(m *model) string {
 	}
 	ms := machines[i]
 	s := machineState(m.st, ms, time.Now())
-	return ms.Key + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
+	h := ms.Key + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
+	if m.outOfDate(ms) {
+		h += " · its connect service runs " + clean(ms.ConnectVersion) + ", older than the server"
+	}
+	return h
 }
 
 func (p *rooms) keys(m *model) []binding { return []binding{{"↑↓", "move"}, {"enter", "open"}} }
@@ -236,6 +244,13 @@ func (p *machinePage) body(m *model) string {
 		}
 		if r.Reason != "" {
 			info.WriteString(field("Reason", fg(colRed).Render(clean(r.Reason))) + "\n")
+		}
+		if ms.ConnectVersion != "" {
+			v := clean(ms.ConnectVersion)
+			if m.outOfDate(ms) {
+				v += " " + pill("Out of date", colYellow) + mutedStyle.Render(" on the machine, as an administrator: ") + machineUpdateCommand(ms.OS)
+			}
+			info.WriteString(field("Connect", v) + "\n")
 		}
 		title := boldStyle.Render(p.machineKey) + " " + pill(st.word, st.color) + " " + mutedStyle.Render(kind)
 		if ms.Kind != "static" {

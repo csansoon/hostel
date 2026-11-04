@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/update"
@@ -448,6 +449,19 @@ func TestMachineUpdate(t *testing.T) {
 	}
 	e.waitFor("the connect version v1.0.0", roomReady, func() bool { return connectVersion() == "v1.0.0" })
 
+	// The app shows the machine as out of date, with the command.
+	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
+	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`)
+	a.in("2")
+	a.waitFor(10*time.Second, `home/box3\s+\S+\s+Out of date`)
+	for i := 0; i < 10 && !regexp.MustCompile(`❯ \S+ home/box3`).MatchString(a.screen()); i++ {
+		a.in("\x1b[B")
+		time.Sleep(100 * time.Millisecond)
+	}
+	a.in("\r")
+	a.waitFor(10*time.Second, `Connect\s+v1\.0\.0\s+Out of date\s+on the machine, as an administrator: sudo /etc/hostel/hostel machine update`)
+	a.quit()
+
 	if out, err := docker("exec", "-u", "hostel", name, "/etc/hostel/hostel", "machine", "update"); err == nil || !strings.Contains(err.Error()+out, "as an administrator") {
 		t.Fatalf("machine update as the room user: %v\n%s", err, out)
 	}
@@ -466,4 +480,52 @@ func TestMachineUpdate(t *testing.T) {
 	}
 	startConnect()
 	e.waitFor("the connect version v1.1.0", roomReady, func() bool { return connectVersion() == "v1.1.0" })
+}
+
+// TestAppUpdate: the app reads the latest release in the background and
+// shows Update; Enter and y replace the app's binary. For an admin, Front
+// desk has Update the server; the server starts again with the new version.
+func TestAppUpdate(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.init()
+	rel := newFakeRelease(t)
+	rel.use(e)
+	own := ownHelperDir(t, filepath.Join(e.home, "opt", "helpers"))
+	e.serverBin = copyBin(t, hostBin(t, "v1.0.0"), filepath.Join(e.home, "opt", "bin"))
+	f := newFixtureWithEnv(t, e, &fixtureOpts{helperDir: own})
+	f.s.pinPorts()
+	rel.add("v1.1.0", map[string]string{
+		update.BinaryName(runtime.GOOS, runtime.GOARCH): hostBin(t, "v1.1.0"),
+		"hostel-linux-" + dockerArch:                    versionBin(t, "linux", dockerArch, "v1.1.0"),
+	})
+	e.bin = copyBin(t, hostBin(t, "v1.0.0"), filepath.Join(e.home, "bin"))
+
+	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
+	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`, `4  ⇪  Update\s+v1\.1\.0 available`)
+	a.in("\x1b[B\x1b[B\x1b[B")
+	a.waitFor(10*time.Second, `❯ 4  ⇪  Update`, `Update: install Hostel v1\.1\.0 on this computer \(it has v1\.0\.0\)`)
+	a.in("\r")
+	a.waitFor(10*time.Second, `Install Hostel v1\.1\.0 on this computer\? \[y/N\]`)
+	a.in("y")
+	a.waitFor(time.Minute, `Hostel v1\.1\.0 is installed\. Quit \(q\) and run hostel again\.`)
+	a.waitGone(10*time.Second, `⇪  Update`)
+	if v := binVersion(t, e.bin); v != "hostel v1.1.0" {
+		t.Fatalf("the app's binary after Update: %q", v)
+	}
+
+	a.in("3")
+	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `  ⇪  Update the server`)
+	for i := 0; i < 10 && !strings.Contains(a.screen(), "❯ ⇪  Update the server"); i++ {
+		a.in("\x1b[B")
+		time.Sleep(100 * time.Millisecond)
+	}
+	a.waitFor(10*time.Second, `Update the server: install Hostel v1\.1\.0 on the server \(it runs v1\.0\.0\)`)
+	a.in("\r")
+	a.waitFor(10*time.Second, `Update the server from v1\.0\.0 to v1\.1\.0\? \[y/N\]`)
+	a.in("y")
+	a.waitFor(time.Minute, `The server updates from v1\.0\.0 to v1\.1\.0`)
+	a.waitFor(2*time.Minute, `Version\s+v1\.1\.0`)
+	a.waitGone(10*time.Second, `Update the server`)
+	a.quit()
 }
