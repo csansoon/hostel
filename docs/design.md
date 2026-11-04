@@ -53,7 +53,7 @@ One Go binary, `hostel`, for darwin, linux, and windows on amd64 and arm64.
 | Guest | `hostel connect`, `hostel platforms`, `hostel acquire`, `hostel run`, ... | agent machines (a user's computer) |
 | Config | `hostel config users ...` | any connected computer; changes need an admin (M8; `multiplayer.md`) |
 | Admin | `hostel admin ...` | room tokens, room control; `config check|schema` run locally |
-| Server | `hostel server init`, `hostel server invite`, `hostel server run` | the server machine |
+| Server | `hostel server init`, `hostel server invite`, `hostel server run`, `hostel server update` | the server machine (`update --remote`: an admin's computer) |
 | Helper | `hostel room ...` (hidden from help) | rooms; the server uploads it |
 
 Rooms need no permanent daemon. Exception: a static room behind NAT runs
@@ -61,9 +61,68 @@ Rooms need no permanent daemon. Exception: a static room behind NAT runs
 
 Distribution. A tag `v*` makes a GitHub release (`make release`): the binary for
 each OS and architecture, the pinned `mise` binaries, `hostel-platforms.tar.gz`,
-and `SHA256SUMS`. `install.sh` installs the binary for the machine, or with
-`--server DIR` also the helper binaries and the platform scripts; it checks each
-file against `SHA256SUMS`. `docs/deploy-vps.md` shows a server on a VPS.
+`SHA256SUMS`, and (from v0.2.0) `SHA256SUMS.sig`. `install.sh` installs the
+binary for the machine, or with `--server DIR` also the helper binaries and the
+platform scripts; it checks each file against `SHA256SUMS`.
+`docs/deploy-vps.md` shows a server on a VPS.
+
+### Releases and updates (M10d)
+
+- **Signature.** The release workflow signs `"hostel-release <tag>\n" +
+  SHA256SUMS` with Ed25519 (`tools/signrelease`, the repository secret
+  `HOSTEL_RELEASE_KEY`); `SHA256SUMS.sig` is the signature in base64. The
+  public key is in the binary (`internal/update`). The tag in the signed text
+  stops an old release that is served under a new tag. The install scripts
+  check `SHA256SUMS` only (the first install trusts HTTPS).
+- **Source.** `https://github.com/csansoon/hostel/releases`: the latest tag is
+  the redirect of `<base>/latest`; the files are `<base>/download/<tag>/<file>`.
+  `HOSTEL_UPDATE_URL` and `HOSTEL_UPDATE_KEY` replace the base and the key (a
+  mirror, the E2E tests). Deadlines: 30 s for the tag and the small files, 10
+  min for a binary.
+- **Versions.** A release is `vX.Y.Z`; a `git describe` build
+  (`vX.Y.Z-N-gHASH[-dirty]`) is after `vX.Y.Z`; other builds (`dev`) are
+  unknown: they get no notice, nothing refuses them, and an update replaces
+  them. An update refuses a release that is not newer.
+- **The CLI.** `hostel update [--check] [--version v]` downloads the binary,
+  checks its checksum and that it prints the release version, and renames it
+  over the running binary (on Windows the running file moves to
+  `hostel.exe.old` first, and each start removes an old one). Exit codes: 0, 1,
+  69 (the source cannot be reached).
+- **Versions between guest and server.** Each guest request has the header
+  `X-Hostel-Version`, and each server answer too. The server refuses a known
+  guest version older than its minimum guest version (`v0.1.0`) with HTTP 426
+  (`update_required`); a request without the header passes. When the server
+  is newer, a guest command prints one line on stderr, at most once in 24 hours
+  (`~/.config/hostel/update-notice`).
+- **The server.** `update.Server` downloads and checks each file of
+  `helper_dir` that differs from the release (`hostel-*`, `mise-*`) into new
+  temporary files next to it, and only then renames them into place, then the
+  server binary (a
+  copy of its new helper file, checked with `--version`); it checks first that
+  the server's user can write both directories. The platform defaults are in
+  the binary. `hostel server update` on the server machine does it for the
+  binary that the service ran at its last start (`executable` in
+  `data_dir/server.json`), not for the binary that runs the command, and prints
+  the restart command. `POST /v1/server/update` (admin, section 11) does it in
+  the server; then the server stops as at a signal and starts the new binary in
+  the same process (`exec`, macOS and Linux), with the same arguments and
+  environment. Leases and jobs continue (a job runs under its supervisor on the
+  room); a guest stream through the gateway (`hostel run`, `hostel ssh`) ends
+  at the restart, and `hostel attach` continues a job. A signal during the
+  update stops it and the server, without the new binary. Rooms get the new
+  helper before their next lease (section 8).
+- **Machines that joined.** `hostel machine connect` sends
+  `SSH-2.0-hostel-<version>` as its SSH client version; the status has it as
+  `connect_version` of the machine while it is connected (`v0.1.0` for an
+  older service, which sends no version). `hostel machine
+  update` (as an administrator on the machine) downloads the server's binary
+  for the machine (`/v1/download`, with the TLS of the join), checks that it
+  runs, replaces the binary in the service directory, and restarts the
+  service. The service does not replace itself: it cannot write its directory.
+- **The app** reads the latest tag at start and every 6 hours
+  (`HOSTEL_NO_UPDATE_CHECK=1` turns it off; errors are silent): Update in the
+  main menu, Update the server in Front desk (admins), and "Out of date" on
+  machines whose connect service is older than the server.
 
 Dependencies. Use pure Go only, so that cross-compilation needs no C toolchain:
 
@@ -89,6 +148,8 @@ internal/roomops/      server-side operations on rooms (probe, upload, scripts, 
 internal/guest/        CLI commands, local state, sync client, port process
 internal/room/         helper commands
 internal/syncfs/       manifests, sync plans, safe file writes
+internal/update/       releases: source, signature, versions, updates (M10d)
+tools/signrelease/     signs SHA256SUMS in the release workflow
 test/e2e/              E2E tests (build tag e2e)
 test/fakeprovider/     external provider for tests; creates Docker rooms
 test/roomimage/        Dockerfile for test rooms
@@ -1233,6 +1294,7 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel status [room \| platform]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, time, lease ID), the machines without rooms, and the queues with their next lease. `hostel status <room>` prints the details of a room (hardware, leases with jobs, queue, events, room ID); `hostel status <platform>` prints the queue (position, user, task, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
 | `hostel agent-guide` | Prints short usage instructions for coding agents. |
+| `hostel update [--check] [--version v]` | Replaces this binary with a newer release (section 2, "Releases and updates"). |
 | `hostel screenshot [--device d] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
 
 Connection and users (M8, `multiplayer.md`): `hostel connect <invite code>`,
@@ -1341,11 +1403,13 @@ Progress goes to stderr. The final result goes to stdout.
 All requests except `POST /v1/connect` use `Authorization: Bearer <token>`. JSON
 in and out. A user can read and change only their own leases (from any of their
 computers); an admin can do everything. Any user can read `status`, `platforms`,
-and `users`. Room tokens can only read `GET /v1/info`.
+and `users`. Room tokens can only read `GET /v1/info`. Requests and answers
+have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 
 | Method and path | Effect |
 |---|---|
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
+| `POST /v1/server/update {"version"}`, `GET /v1/server/update` (admin) | Starts a remote update (`""`: the latest release; HTTP 202 with `{"state", "from", "to"}`; 409 while one runs or when the release is not newer); its state `{"state": "idle\|running\|failed", "from", "to", "error"}` (M10d). |
 | `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait, the keys of the machines that serve it, and `typical_lease_seconds` (the median of its last leases; M10b). |
 | `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
 | `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait` (at most 60 s and half of `poll_timeout`, so the guest polls again before the timeout). Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). The lease has `poll_timeout_ms` and `idle_timeout_ms` (the server settings), for the messages of the guest. |
@@ -1353,7 +1417,8 @@ and `users`. Room tokens can only read `GET /v1/info`.
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
 | `POST /v1/leases/{id}/release` | Releases or cancels. For another user's lease (admin), the end reason is "released by <admin> (admin)". |
 | `POST /v1/leases/{id}/move`, `/priority` (admin) | Queue control (section 5): `{"first": true}` or `{"before": "<lease id>"}`; `{"priority": "low|normal|high"}`. HTTP 409 for a lease that is not queued. |
-| `GET /v1/status[?since=R&wait=50s]` | Leases (with their user, ready time, and the estimated wait of queued leases), rooms (with hardware), the machines of the configuration, the server ID, the caller (user, role), and `revision` (a hash of the content without the wait estimates). With `since`, the answer waits (at most 50 s) until the revision differs from `R`; the server checks again on each lease change and every 2 s (M10). |
+| `GET /v1/status[?since=R&wait=50s]` | Leases (with their user, ready time, and the estimated wait of queued leases), rooms (with hardware), the machines of the configuration (with the
+`connect_version` of a connected machine, M10d), the server ID, the caller (user, role), and `revision` (a hash of the content without the wait estimates). With `since`, the answer waits (at most 50 s) until the revision differs from `R`; the server checks again on each lease change and every 2 s (M10). |
 | `GET /v1/rooms/{name}` | Room details (M10): the room, its machine, its leases, the jobs of its ready leases (the server asks the room helper, `job list`, all in one 10 s deadline; on an error `jobs_error` says "jobs unknown"), the queue of its platforms, its last 10 events, and the live use (`usage`, the helper command `usage` in the same deadline; M10b). A member gets the jobs and events of the member's own leases only (commands and messages can hold secrets). |
 | `POST /v1/connect` (no token) | `{"secret", "name", "computer"}` from an invite code; returns `{"server_id", "user", "role", "token"}` once. HTTP 403 for an invalid code, 409 `name_taken`, 429 after 10 failures per minute. |
 | `GET /v1/me`, `DELETE /v1/me` | The token's user, role, and computer; `DELETE` revokes the token (`hostel disconnect`). |

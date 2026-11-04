@@ -23,6 +23,7 @@ import (
 	"github.com/csansoon/hostel/internal/server"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/tlspin"
+	"github.com/csansoon/hostel/internal/update"
 )
 
 func serverCmd(args []string, stdout, stderr io.Writer) int {
@@ -34,9 +35,11 @@ func serverCmd(args []string, stdout, stderr io.Writer) int {
 			return serverInvite(args[1:], stdout, stderr)
 		case "run":
 			return serverRun(args[1:], stderr)
+		case "update":
+			return serverUpdate(args[1:], stdout, stderr)
 		}
 	}
-	fmt.Fprintln(stderr, "hostel: usage: hostel server init|invite|run [--config server.toml]")
+	fmt.Fprintln(stderr, "hostel: usage: hostel server init|invite|run|update [--config server.toml]")
 	return 2
 }
 
@@ -294,10 +297,17 @@ func serverRun(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
+	// The path before an update renames a new binary over it.
+	exe, exeErr := update.Executable()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log := slog.New(slog.NewJSONHandler(stderr, nil))
-	if err := server.Run(ctx, file, log); errors.Is(err, server.ErrConfig) {
+	err = server.Run(ctx, file, log)
+	if errors.Is(err, server.ErrRestart) && exeErr == nil {
+		stop()
+		err = restartSelf(exe)
+	}
+	if errors.Is(err, server.ErrConfig) {
 		fmt.Fprintln(stderr, "hostel: the server does not start:", err)
 		return 1
 	} else if err != nil {

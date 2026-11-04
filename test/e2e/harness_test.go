@@ -57,8 +57,8 @@ func (s *serverProc) waitRoom(machine, state string, timeout time.Duration) prot
 	return r
 }
 
-// hostelBin is the host binary that TestMain builds.
-var hostelBin string
+// hostelBin is the host binary that TestMain builds, in binDir.
+var hostelBin, binDir string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "hostel-e2e-bin-")
@@ -66,7 +66,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "e2e:", err)
 		os.Exit(1)
 	}
-	hostelBin = filepath.Join(dir, "hostel")
+	binDir, hostelBin = dir, filepath.Join(dir, "hostel")
 	build := exec.Command("go", "build", "-o", hostelBin, "../../cmd/hostel")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
@@ -103,6 +103,17 @@ type env struct {
 	slotUsers []string
 	// guests counts the member users of useGuestToken.
 	guests int
+	// bin and serverBin replace hostelBin for guest commands and for the
+	// server (the update tests run other versions).
+	bin, serverBin string
+}
+
+// guestBin is the binary of guest commands.
+func (e *env) guestBin() string {
+	if e.bin != "" {
+		return e.bin
+	}
+	return hostelBin
 }
 
 func newEnv(t *testing.T) *env {
@@ -151,7 +162,7 @@ func (e *env) hostel(args ...string) result {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, hostelBin, args...)
+	cmd := exec.CommandContext(ctx, e.guestBin(), args...)
 	cmd.Env = e.environ()
 	cmd.Dir = e.cwd
 	var stdout, stderr bytes.Buffer
@@ -300,7 +311,11 @@ func (e *env) startServer(token string) *serverProc {
 	addrFile := filepath.Join(e.dataDir(), "server.json")
 	os.Remove(addrFile)
 	s := &serverProc{e: e, token: token, done: make(chan struct{}), log: &syncBuffer{}}
-	s.cmd = exec.Command(hostelBin, "server", "run")
+	bin := hostelBin
+	if e.serverBin != "" {
+		bin = e.serverBin
+	}
+	s.cmd = exec.Command(bin, "server", "run")
 	s.cmd.Env = e.environ()
 	s.cmd.Stdout, s.cmd.Stderr = s.log, s.log
 	if err := s.cmd.Start(); err != nil {
@@ -392,11 +407,7 @@ func (s *serverProc) send(method, path, token string, body io.Reader, out any) i
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	// The test reaches its own server; the client commands check the pinned key.
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
-	resp, err := client.Do(req)
+	resp, err := insecureClient().Do(req)
 	if err != nil {
 		s.e.t.Fatalf("GET %s: %v", path, err)
 	}
@@ -407,6 +418,14 @@ func (s *serverProc) send(method, path, token string, body io.Reader, out any) i
 		}
 	}
 	return resp.StatusCode
+}
+
+// insecureClient reaches the test's own server; the client commands check
+// the pinned key.
+func insecureClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	return &http.Client{Timeout: 30 * time.Second, Transport: transport}
 }
 
 // waitFor polls cond until it is true. It fails the test after timeout.
@@ -483,6 +502,14 @@ func (e *env) mustHostel(args ...string) result {
 func (s *serverProc) restart() *serverProc {
 	s.e.t.Helper()
 	s.stop()
+	s.pinPorts()
+	return s.e.startServer(s.token)
+}
+
+// pinPorts writes the server's ports into server.toml, so that a new start
+// binds the same ports.
+func (s *serverProc) pinPorts() {
+	s.e.t.Helper()
 	file := filepath.Join(s.e.configDir(), "server.toml")
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -491,7 +518,6 @@ func (s *serverProc) restart() *serverProc {
 	cfg := strings.Replace(string(data), "\nlisten = \"127.0.0.1:0\"", fmt.Sprintf("\nlisten = %q", s.addr), 1)
 	cfg = strings.Replace(cfg, "\ngateway_listen = \"127.0.0.1:0\"", fmt.Sprintf("\ngateway_listen = %q", s.gateway), 1)
 	s.e.writeConfig(cfg)
-	return s.e.startServer(s.token)
 }
 
 // useGuestToken makes a member user and makes guest commands use its token.

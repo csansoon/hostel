@@ -27,6 +27,7 @@ import (
 	"github.com/csansoon/hostel/internal/provider"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/tlspin"
+	"github.com/csansoon/hostel/internal/update"
 	"github.com/csansoon/hostel/internal/version"
 )
 
@@ -61,6 +62,14 @@ type Server struct {
 	publicURLs []string
 	// logins are the provider CLI logins (M9).
 	logins logins
+	// exe is the server binary; update is the remote update, and restart
+	// stops Run with ErrRestart.
+	exe        string
+	update     selfUpdate
+	restart    func()
+	restarting atomic.Bool
+	// runCtx ends when Run stops: it stops a remote update too.
+	runCtx context.Context
 	// connectLimit limits failed POST /v1/connect attempts.
 	connectLimit connectLimiter
 	// lastReconcile and lastPresence are used only by the loop goroutine.
@@ -127,14 +136,30 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	exe, err := update.Executable()
+	if err != nil {
+		return fmt.Errorf("find the server binary: %w", err)
+	}
+	signalCtx := ctx
+	ctx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	rooms := gateway.NewRoomConns()
-	s := &Server{store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
+	s := &Server{exe: exe, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
 		rooms: rooms, kick: make(chan struct{}, 1), localData: start.local}
 	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, nil)
 	if err != nil {
 		return err
 	}
 	s.live.Store(lc)
+	s.runCtx = ctx
+	// A stop (a signal) that came first wins: the server then stops, and does
+	// not start the new binary.
+	s.restart = func() {
+		if ctx.Err() == nil {
+			s.restarting.Store(true)
+			stopRun()
+		}
+	}
 	st.SetLeaseHook(func(id string) {
 		s.notify.notify(id)
 		s.notify.notify(statusKey)
@@ -189,7 +214,7 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	defer gwLn.Close()
 
 	if err := writeJSONFile(filepath.Join(cfg.DataDir, "server.json"),
-		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String(), URL: listenURL}); err != nil {
+		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String(), URL: listenURL, Executable: exe}); err != nil {
 		httpServer.Close()
 		return err
 	}
@@ -216,6 +241,10 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 		return fmt.Errorf("stop http server: %w", err)
 	}
 	log.Info("server stopped")
+	// A signal during the restart wins: stop.
+	if s.restarting.Load() && signalCtx.Err() == nil {
+		return ErrRestart
+	}
 	return nil
 }
 
@@ -259,11 +288,32 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PUT /v1/config/platforms/{name}", s.auth(s.admin(s.handlePutPlatform)))
 	mux.HandleFunc("DELETE /v1/config/platforms/{name}", s.auth(s.admin(s.handleRemovePlatform)))
 	mux.HandleFunc("POST /v1/config/platforms/{name}/reset", s.auth(s.admin(s.handleResetPlatform)))
+	mux.HandleFunc("POST /v1/server/update", s.auth(s.admin(s.handleServerUpdate)))
+	mux.HandleFunc("GET /v1/server/update", s.auth(s.admin(s.handleServerUpdateState)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	// The gateway's SSH over a WebSocket; SSH authenticates inside.
 	mux.Handle("GET /v1/gateway", s.gateway)
-	return mux
+	return versioned(mux)
+}
+
+// minGuestVersion is the oldest guest that this server accepts. Raise it only
+// with a change that breaks the API (m10d-implementation.md).
+const minGuestVersion = "v0.1.0"
+
+// versioned adds the server version to each answer, and refuses a guest that
+// is older than minGuestVersion. A request without a version (v0.1.0, curl)
+// passes.
+func versioned(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(protocol.VersionHeader, version.Version)
+		if v := r.Header.Get(protocol.VersionHeader); update.Older(v, minGuestVersion) {
+			writeError(w, http.StatusUpgradeRequired, protocol.CodeUpdateRequired, fmt.Sprintf(
+				"this computer has Hostel %s; this server needs %s or later. Update this computer: run \"hostel update\"", v, minGuestVersion))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type tokenKey struct{}

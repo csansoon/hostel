@@ -17,6 +17,7 @@ import (
 type Paths struct {
 	DataDir      string
 	PlatformsDir string
+	HelperDir    string
 	Listen       string
 	TLS          string
 	PublicURLs   []string
@@ -28,6 +29,7 @@ func ReadPaths(file string) (Paths, error) {
 	var raw struct {
 		DataDir      string   `toml:"data_dir"`
 		PlatformsDir string   `toml:"platforms_dir"`
+		HelperDir    string   `toml:"helper_dir"`
 		Listen       string   `toml:"listen"`
 		TLS          string   `toml:"tls"`
 		PublicURLs   []string `toml:"public_urls"`
@@ -48,8 +50,11 @@ func ReadPaths(file string) (Paths, error) {
 	setStr(&raw.PlatformsDir, filepath.Join(home, ".config", "hostel", "platforms"))
 	setStr(&raw.Listen, "127.0.0.1:7410")
 	setStr(&raw.TLS, TLSOff)
+	dataDir := absPath(raw.DataDir, base, home)
+	setStr(&raw.HelperDir, filepath.Join(dataDir, "helpers"))
 	return Paths{
-		DataDir:      absPath(raw.DataDir, base, home),
+		DataDir:      dataDir,
+		HelperDir:    absPath(raw.HelperDir, base, home),
 		PlatformsDir: absPath(raw.PlatformsDir, base, home),
 		Listen:       raw.Listen,
 		TLS:          raw.TLS,

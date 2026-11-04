@@ -390,6 +390,22 @@ the one-line install works, and an agent that reads only the README and the
 skills sets up a server, adds a Linux machine with SSH as a room, connects, and
 runs a lease.
 
+## M10d. Updates
+
+Design: `m10d-implementation.md` (owner decisions of 2026-11-04).
+
+- Signed releases; `hostel update` (the CLI replaces itself); a notice when the
+  server is newer; the server refuses too old guests.
+- `hostel server update` on the server machine and from an admin's computer or
+  the app (the server restarts with the new binary); rooms follow the server.
+- Machines that joined: "Out of date" in the app, and `hostel machine update`.
+- The app checks for a new release in the background and shows Update.
+
+Done when: v0.2.0 is released and signed; on this Mac, a build with the version
+v0.1.99 updates itself to v0.2.0 from GitHub (`hostel update`, and the app's
+Update); an admin updates the server of a test deployment from the app; a joined
+Linux machine shows "Out of date" and `hostel machine update` fixes it.
+
 ## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor

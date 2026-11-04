@@ -30,6 +30,9 @@ type Addresses struct {
 	Gateway string `json:"gateway"`
 	// URL is the API on the listener: https:// with the server's own TLS.
 	URL string `json:"url"`
+	// Executable is the server binary ("hostel server update" on the server
+	// machine replaces it; M10d).
+	Executable string `json:"executable,omitempty"`
 }
 
 // Status is the response of GET /v1/status.
@@ -55,6 +58,9 @@ type MachineStatus struct {
 	Labels    []string `json:"labels"`
 	MaxRooms  int      `json:"max_rooms"`
 	Connect   bool     `json:"connect,omitempty"`
+	// ConnectVersion is the hostel version of the machine's connect service
+	// while it is connected (M10d; "" before).
+	ConnectVersion string `json:"connect_version,omitempty"`
 }
 
 // Hardware is what the room helper found at the last provisioning of the
@@ -362,6 +368,35 @@ type ConfigRevision struct {
 
 // CodeConflict: the configuration changed since the base revision.
 const CodeConflict = "conflict"
+
+// VersionHeader carries the hostel version: of the guest in each request, of
+// the server in each answer (M10d).
+const VersionHeader = "X-Hostel-Version"
+
+// ServerUpdate is the state of a remote server update (M10d):
+// GET/POST /v1/server/update.
+type ServerUpdate struct {
+	State string `json:"state"`
+	From  string `json:"from,omitempty"`
+	To    string `json:"to,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// ServerUpdateRequest is the body of POST /v1/server/update ("" for the
+// latest release).
+type ServerUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+const (
+	UpdateIdle    = "idle"
+	UpdateRunning = "running"
+	UpdateFailed  = "failed"
+)
+
+// CodeUpdateRequired: the guest is older than the server's minimum guest
+// version (HTTP 426).
+const CodeUpdateRequired = "update_required"
 
 // ConfigPlatform is a platform of the server's configuration (M9).
 type ConfigPlatform struct {

@@ -28,10 +28,14 @@ As an administrator on the server machine:
 
 ```sh
 curl -fsSL -o install.sh https://raw.githubusercontent.com/csansoon/hostel/main/install.sh
-sudo sh install.sh --dir /usr/local/bin --server /opt/hostel
+sudo sh install.sh --dir /opt/hostel/bin --server /opt/hostel
+sudo chown -R alice /opt/hostel          # the user that runs the service
+sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 ```
 
-`/opt/hostel/helpers` gets the binaries for all rooms (`hostel-<os>-<arch>`,
+`/opt/hostel/bin/hostel` is the server binary. The service's user owns
+`/opt/hostel`, so that an admin can update the server from the app or from a
+computer (section 9). `/opt/hostel/helpers` gets the binaries for all rooms (`hostel-<os>-<arch>`,
 `mise-<os>-<arch>`). `/opt/hostel/platforms` gets the platform scripts (only an
 old server imports them; the binary has the default platforms).
 
@@ -133,7 +137,7 @@ Wants=network-online.target
 
 [Service]
 User=alice
-ExecStart=/usr/local/bin/hostel server run
+ExecStart=/opt/hostel/bin/hostel server run
 Restart=on-failure
 RestartSec=5
 
@@ -208,13 +212,38 @@ sqlite3 ~/.local/share/hostel/hostel.db ".backup /var/backups/hostel.db"
 
 ## 9. Update
 
+From v0.2.0, the server updates itself. Each way checks the signature of the
+release, replaces the server binary and the room binaries in `helper_dir`, and
+refuses a release that is not newer. The server sends the new helper to each
+room before its next lease.
+
+- **From the app** (an admin): Front desk › Update the server shows when a
+  newer release exists. The server starts again by itself with the new binary.
+  Leases and their jobs continue; a `hostel run` that streams output at that
+  moment loses the stream (`hostel attach <job>` continues it).
+- **From a connected computer** (an admin): `hostel server update --remote`.
+  It waits until the server runs the new version.
+- **On the server machine**, as the service's user (or with `sudo` when that
+  user cannot write the files), then restart:
+
+  ```sh
+  hostel server update
+  sudo systemctl restart hostel
+  ```
+
+A remote update needs that the service's user can write the binary's directory
+and `helper_dir` (section 2); otherwise it fails with "this user cannot write
+…". `--version vX.Y.Z` selects a release. A server before v0.2.0, or one
+installed in `/usr/local/bin`: install again, then restart:
+
 ```sh
 curl -fsSL -o install.sh https://raw.githubusercontent.com/csansoon/hostel/main/install.sh
-sudo sh install.sh --dir /usr/local/bin --server /opt/hostel
+sudo sh install.sh --dir /opt/hostel/bin --server /opt/hostel
 sudo systemctl restart hostel
 ```
 
-The server sends the new helper to each room before its next lease.
+Machines that joined from behind NAT run their own copy of `hostel` for the
+connection: the app shows "Out of date" on them (`hostel-rooms`).
 
 ## Next
 

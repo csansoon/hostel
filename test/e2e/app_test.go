@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,8 +46,13 @@ func (e *env) startAppSized(cols int, home string, env ...string) *ptyApp {
 	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	e.t.Cleanup(cancel)
-	cmd := exec.CommandContext(ctx, hostelBin)
+	cmd := exec.CommandContext(ctx, e.guestBin())
 	cmd.Env = append([]string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir(), "TERM=xterm-256color"}, env...)
+	// The app reads the latest release in the background: only from the
+	// test's release source.
+	if !slices.ContainsFunc(env, func(v string) bool { return strings.HasPrefix(v, "HOSTEL_UPDATE_URL=") }) {
+		cmd.Env = append(cmd.Env, "HOSTEL_NO_UPDATE_CHECK=1")
+	}
 	cmd.Dir = home
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: appRows, Cols: uint16(cols)})
 	if err != nil {
@@ -150,7 +156,7 @@ func (a *ptyApp) quit() {
 			a.t.Fatalf("the app ended with %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		a.t.Fatal("q did not end the app")
+		a.t.Fatalf("q did not end the app within 10 s; screen:\n%s", a.screen())
 	}
 	select {
 	case <-a.read:

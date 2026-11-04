@@ -50,24 +50,46 @@ func (p *frontDesk) load(m *model) tea.Cmd {
 	}
 }
 
-// deskEntry is an entry of the Front desk: a page, or check out (nil).
+// deskEntry is an entry of the Front desk: a page, or an action that asks
+// first (run).
 type deskEntry struct {
 	icon, label, hint string
 	open              func() page
+	run               func(m *model) tea.Cmd
 }
 
 func (p *frontDesk) entries(m *model) []deskEntry {
 	var out []deskEntry
 	if m.admin() {
-		out = append(out, deskEntry{"✉", "Invite a guest", "Invite a guest: make an invite code for a new member or admin.", func() page { return &guestList{start: "invite"} }})
+		out = append(out, deskEntry{"✉", "Invite a guest", "Invite a guest: make an invite code for a new member or admin.", func() page { return &guestList{start: "invite"} }, nil})
 	} else {
-		out = append(out, deskEntry{"✉", "Add your other computer", "Add your other computer: make a code that connects it as you.", func() page { return &guestList{start: "self"} }})
+		out = append(out, deskEntry{"✉", "Add your other computer", "Add your other computer: make a code that connects it as you.", func() page { return &guestList{start: "self"} }, nil})
 	}
-	out = append(out, deskEntry{"☰", "Guest list", "Guest list: the people on this server; change a role, or remove someone.", func() page { return &guestList{} }})
+	out = append(out, deskEntry{"☰", "Guest list", "Guest list: the people on this server; change a role, or remove someone.", func() page { return &guestList{} }, nil})
 	if m.admin() {
-		out = append(out, deskEntry{"＋", "Add a room", "Add a room: connect a new machine to this server; it shows in Rooms.", func() page { return newAddMachine() }})
+		out = append(out, deskEntry{"＋", "Add a room", "Add a room: connect a new machine to this server; it shows in Rooms.", func() page { return newAddMachine() }, nil})
 	}
-	return append(out, deskEntry{"⏻", "Check out", "Check out: disconnect this computer from the server (its agents too).", nil})
+	if tag := m.serverUpdateAvailable(); tag != "" {
+		out = append(out, deskEntry{"⇪", "Update the server",
+			fmt.Sprintf("Update the server: install Hostel %s on the server (it runs %s); it starts again by itself; leases and jobs continue.", tag, m.info.Version),
+			nil, func(m *model) tea.Cmd {
+				m.ask(fmt.Sprintf("Update the server from %s to %s?", m.info.Version, tag), func() tea.Cmd { return m.startServerUpdate(tag) })
+				return nil
+			}})
+	}
+	return append(out, deskEntry{"⏻", "Check out", "Check out: disconnect this computer from the server (its agents too).", nil, checkOut})
+}
+
+// checkOut asks, then disconnects this computer.
+func checkOut(m *model) tea.Cmd {
+	g := m.guest
+	m.ask(fmt.Sprintf("Check out from %s? Agents on this computer lose the connection too.", g.URL()), func() tea.Cmd {
+		return func() tea.Msg {
+			warning, err := connect.Disconnect(context.Background(), g)
+			return checkedOutMsg{url: g.URL(), warning: warning, err: err}
+		}
+	})
+	return nil
 }
 
 func (p *frontDesk) body(m *model) string {
@@ -107,17 +129,11 @@ func (p *frontDesk) key(m *model, k tea.KeyMsg) tea.Cmd {
 		p.sel = move(p.sel, len(entries), k.String())
 		return nil
 	}
-	if e := entries[min(p.sel, len(entries)-1)]; e.open != nil {
+	e := entries[min(p.sel, len(entries)-1)]
+	if e.open != nil {
 		return m.open(e.open())
 	}
-	g := m.guest
-	m.ask(fmt.Sprintf("Check out from %s? Agents on this computer lose the connection too.", g.URL()), func() tea.Cmd {
-		return func() tea.Msg {
-			warning, err := connect.Disconnect(context.Background(), g)
-			return checkedOutMsg{url: g.URL(), warning: warning, err: err}
-		}
-	})
-	return nil
+	return e.run(m)
 }
 
 func (p *frontDesk) other(m *model, msg tea.Msg) tea.Cmd {

@@ -93,6 +93,10 @@ type model struct {
 	// one counts (an older answer can come later).
 	platformsSeq int
 	info         protocol.Info
+	// latest is the tag of the latest release (the background check);
+	// updated is true after the app's Update installed it.
+	latest  string
+	updated bool
 
 	pages []page
 	// err is the last data error; msg is the result of the last action.
@@ -186,9 +190,9 @@ func (m *model) checkOut(note string) {
 
 func (m *model) Init() tea.Cmd {
 	if m.c == nil {
-		return nil
+		return m.checkLatest()
 	}
-	return tea.Batch(m.pollStatus(""), m.readInfo())
+	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest())
 }
 
 func (m *model) top() page { return m.pages[len(m.pages)-1] }
@@ -260,13 +264,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			gen := m.gen
 			return m, tea.Tick(retryAfter, func(time.Time) tea.Msg { return pollMsg{gen: gen, rev: ""} })
 		}
+		// After an error (a server restart, for example after its update),
+		// the server info again.
+		reconnected := m.err != ""
 		m.st, m.loaded, m.err = msg.st, true, ""
 		if c := m.confirm; c != nil && c.stale != nil && c.stale() {
 			m.confirm, m.msg = nil, "The queue changed: the move is cancelled. Look again, and try again."
 		}
 		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readPlatforms()}
 		// The server info, until a read of it works.
-		if m.info.Version == "" {
+		if m.info.Version == "" || reconnected {
 			cmds = append(cmds, m.readInfo())
 		}
 		if l, ok := m.top().(loader); ok {
@@ -332,6 +339,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen == m.gen {
 			m.info = msg.info
 		}
+		return m, nil
+	case latestMsg:
+		if msg.tag != "" {
+			m.latest = msg.tag
+		}
+		return m, tea.Tick(latestEvery, func(time.Time) tea.Msg { return latestTick{} })
+	case latestTick:
+		return m, m.checkLatest()
+	case selfUpdated:
+		if msg.err != nil {
+			m.msg = "Update failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.updated, m.msg = true, msg.text
 		return m, nil
 	case checkedOutMsg:
 		// Handled here, not by Front desk: the user can leave the page while
@@ -430,7 +451,7 @@ func (m *model) handleKey(k tea.KeyMsg) tea.Cmd {
 	case "1", "2", "3":
 		// Jump to a section of the main menu from any page.
 		if _, ok := m.pages[0].(*mainMenu); ok {
-			e := menuEntries()[k.String()[0]-'1']
+			e := menuEntries(m)[k.String()[0]-'1']
 			m.pages = m.pages[:1]
 			return m.open(e.open())
 		}
