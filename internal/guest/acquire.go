@@ -114,12 +114,9 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		if code >= 0 {
 			return code
 		}
-		if *background {
-			// Ready at once: --background does not wait for the sync and
-			// the setup either.
-			fmt.Fprintf(stderr, "hostel: lease %s is ready; run the same command again to sync and set it up (a ready room waits a few minutes for you)\n", st.LeaseID)
-			return notFinished(stderr)
-		}
+		// --background only means "do not wait in the queue": a ready lease
+		// goes on to the sync and the setup, so that the same command, run
+		// again, always gets further.
 	}
 	steps := []struct {
 		name string

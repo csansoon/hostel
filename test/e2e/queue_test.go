@@ -264,15 +264,11 @@ func TestAcquireBackground(t *testing.T) {
 	f.e.mustHostel("release")
 	f.waitSlotFree()
 
-	// With a free slot, --background still returns at once: the lease is
-	// ready, and the next acquire syncs and sets it up.
+	// With a free slot, --background does not wait in the queue: the lease is
+	// ready, and the same command syncs and sets it up.
 	f.useRepo("repo2")
-	r = f.e.hostel("acquire", "fakedevice", "--task", "free slot", "--background")
-	if r.code != 75 || !strings.Contains(r.stderr, "is ready; run the same command again to sync and set it up") {
+	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "free slot", "--background"); !strings.Contains(r.stdout, "is ready") {
 		t.Fatalf("acquire --background with a free slot: %s", r)
-	}
-	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "free slot"); !strings.Contains(r.stdout, "is ready") {
-		t.Fatalf("acquire after a ready --background: %s", r)
 	}
 	f.e.mustHostel("release")
 }

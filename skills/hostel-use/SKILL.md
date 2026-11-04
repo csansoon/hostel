@@ -30,7 +30,7 @@ One lease per platform per worktree. Run `acquire` in the repository. Flags:
 | `--priority low\|normal\|high` | The queue lane. Change it only when the user asks. |
 | `--fresh` | A new on-demand room with empty caches. |
 | `--wait 100s` | How long `acquire` waits before it returns. |
-| `--background` | Return at once; a small background process keeps the place in the queue. |
+| `--background` | Do not wait in the queue: return at once, and a small background process keeps the place. A lease that is ready goes on to the sync and the setup as usual. |
 
 ## Wait in the queue and keep working
 
