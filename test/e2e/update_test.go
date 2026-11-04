@@ -469,7 +469,7 @@ func TestMachineUpdate(t *testing.T) {
 	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
 	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`)
 	a.in("2")
-	a.waitFor(10*time.Second, `home/box3\s+\S+\s+Out of date`)
+	a.waitFor(10*time.Second, `home/box3\s+\S.*\s+Out of date`)
 	for i := 0; i < 10 && !regexp.MustCompile(`❯ \S+ home/box3`).MatchString(a.screen()); i++ {
 		a.in("\x1b[B")
 		time.Sleep(100 * time.Millisecond)
