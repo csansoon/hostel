@@ -78,7 +78,8 @@ hostel server init --listen 0.0.0.0:7410 --url https://hostel.example.com:7410 -
 hostel server run
 ```
 
-Run these as the user of the service (not root), and open TCP 7410.
+Run `hostel server init` and `hostel server run` as the user of the service (not
+root), and open TCP 7410.
 `hostel server init` prints the invite code for your computer; use it within 24
 hours. Then open the app and add your machines in Front desk › Add a room. The
 [`hostel-server-setup`](skills/hostel-server-setup/SKILL.md) skill has the
