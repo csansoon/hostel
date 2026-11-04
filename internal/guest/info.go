@@ -88,8 +88,8 @@ Start
   A waiting lease keeps its place only while you run that command: after a
   few minutes without it (5 by default; acquire prints the time), the lease
   ends. To do other work while you wait, add --background: Hostel keeps the
-  place for you; run the same command again every few minutes to continue (a
-  ready lease waits 10 minutes, by default, for you). One worktree for each agent: agents in the same worktree share
+  place for you; run the same command again at least every 10 minutes (by
+  default; acquire prints the time): a ready lease waits only that long. One worktree for each agent: agents in the same worktree share
   one lease.
   Code 78: this computer is not connected to a Hostel server. Do not try to
   connect; ask the user to run "hostel connect <invite code>" with a code from

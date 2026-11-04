@@ -23,6 +23,9 @@ import (
 // pollWait is the long-poll time of one request (design, section 10).
 const pollWait = 50 * time.Second
 
+// backgroundLook bounds the look of acquire --background at the lease.
+const backgroundLook = 5 * time.Second
+
 // maxPollRetry is the longest pause before a poll after a network error.
 const maxPollRetry = 10 * time.Second
 
@@ -33,7 +36,7 @@ func keepNote(l protocol.Lease, background bool, stderr io.Writer) {
 		idle = FormatDuration(time.Duration(l.IdleTimeoutSeconds) * time.Second)
 	}
 	if background {
-		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again every few minutes: it continues the lease, and takes the room when it is ready (a ready room waits %s for you)\n", l.ID, idle)
+		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again at least every %s: it continues the lease, and takes the room when it is ready (a ready room waits only %s for you)\n", l.ID, idle, idle)
 		return
 	}
 	keep := "a few minutes"
@@ -102,15 +105,19 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 	l := &lease{repo: repo, st: st, api: api, background: *background}
 
 	if st.Access == nil {
-		until := deadline
+		until, look := deadline, ctx
 		if *background {
-			// A short look at the lease; then the keeper polls it.
+			// A short look at the lease, with its own deadline; then the
+			// keeper polls it.
 			if err := ensureKeeper(st); err != nil {
 				return fail(stderr, err)
 			}
 			until = time.Now().Add(2 * time.Second)
+			var cancel context.CancelFunc
+			look, cancel = context.WithTimeout(ctx, backgroundLook)
+			defer cancel()
 		}
-		code := waitReady(ctx, l, until, stderr)
+		code := waitReady(look, l, until, stderr)
 		if code >= 0 {
 			return code
 		}
@@ -240,6 +247,12 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 		var lease protocol.Lease
 		path := fmt.Sprintf("/v1/leases/%s?since=%d&wait=%ds", l.st.LeaseID, since, int(w.Seconds()))
 		if err := l.api.Do(ctx, "GET", path, nil, &lease); err != nil {
+			if l.background && ctx.Err() != nil {
+				// The server did not answer the short look: the keeper
+				// keeps the place.
+				fmt.Fprintf(stderr, "hostel: the server did not answer within %s; Hostel keeps the place of lease %s in the background\n", FormatDuration(backgroundLook), l.st.LeaseID)
+				return notFinished(stderr)
+			}
 			var apiErr *client.APIError
 			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
 				l.st.Final = true
