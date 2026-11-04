@@ -103,6 +103,19 @@ func (a *ptyApp) waitFor(timeout time.Duration, patterns ...string) {
 	}
 }
 
+// waitGone waits until the screen no longer matches pattern.
+func (a *ptyApp) waitGone(timeout time.Duration, pattern string) {
+	a.t.Helper()
+	re := regexp.MustCompile(pattern)
+	deadline := time.Now().Add(timeout)
+	for re.MatchString(a.screen()) {
+		if time.Now().After(deadline) {
+			a.t.Fatalf("the app still shows %q after %s; screen:\n%s", pattern, timeout, a.screen())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (a *ptyApp) in(s string) {
 	a.t.Helper()
 	if _, err := a.f.WriteString(s); err != nil {
@@ -369,9 +382,8 @@ func TestAppFrontDesk(t *testing.T) {
 	a.waitFor(10*time.Second, `Remove bob\? Their computers are disconnected and their leases end\. \[y/N\]`)
 	a.in("y")
 	a.waitFor(30*time.Second, `Removed bob\.`)
-	if regexp.MustCompile(`(?m)^. bob\s`).MatchString(a.screen()) {
-		t.Fatalf("bob is still on the Guest list:\n%s", a.screen())
-	}
+	// The message comes first; the guest list reloads after it.
+	a.waitGone(30*time.Second, `(?m)^. bob\s`)
 
 	a.in("\x1b")
 	a.waitFor(10*time.Second, `❯ ☰  Guest list`)
