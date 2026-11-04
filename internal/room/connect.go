@@ -22,6 +22,7 @@ import (
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/tlspin"
+	"github.com/csansoon/hostel/internal/version"
 )
 
 // Deadlines of "hostel room connect".
@@ -114,6 +115,7 @@ func connectOnce(ctx context.Context, server, token, sshAddr string, tlsConfig *
 	nc.SetDeadline(time.Now().Add(connectTimeout))
 	conn, chans, reqs, err := ssh.NewClientConn(nc, "hostel-gateway", &ssh.ClientConfig{
 		User:            "room",
+		ClientVersion:   gateway.ConnectVersionPrefix + version.Version,
 		Auth:            []ssh.AuthMethod{ssh.Password(token)},
 		HostKeyCallback: ssh.FixedHostKey(hostKey),
 		Timeout:         connectTimeout,

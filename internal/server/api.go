@@ -108,7 +108,11 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 		out.User, out.Role = tok.Name, tok.Role
 	}
 	for _, m := range lc.cfg.Machines() {
-		out.Machines = append(out.Machines, machineStatus(m))
+		ms := machineStatus(m)
+		if m.Connect {
+			ms.ConnectVersion = s.rooms.Version(m.Key())
+		}
+		out.Machines = append(out.Machines, ms)
 	}
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -384,4 +385,85 @@ func TestServerUpdate(t *testing.T) {
 	if binVersion(t, e.serverBin) != "hostel v1.2.0" {
 		t.Fatalf("after the local update, the server binary is %q", binVersion(t, e.serverBin))
 	}
+}
+
+// TestMachineUpdate: the status has the version of a joined machine's
+// connect service; "hostel machine update" (as root on the machine) replaces
+// the service binary with the server's.
+func TestMachineUpdate(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.serverBin = hostBin(t, "v1.1.0")
+	e.init()
+	e.usePlatform("fakedevice")
+	own := ownHelperDir(t, filepath.Join(e.home, "helpers"))
+	newHelper := versionBin(t, "linux", dockerArch, "v1.1.0")
+	data, err := os.ReadFile(newHelper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(own, "hostel-linux-"+dockerArch), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.writeConfig(strings.Replace(serverHeader(), fmt.Sprintf("helper_dir = %q", helperDir), fmt.Sprintf("helper_dir = %q", own), 1))
+	s := e.startServer("")
+
+	port := freePort(t)
+	name := "hostel-e2e-" + e.runID + "-update"
+	if _, err := docker("run", "-d", "--name", name, "--label", dockerLabel+"="+e.runID, "--network", "host",
+		"--entrypoint", "/bin/sh", roomImage, "-c",
+		fmt.Sprintf("ssh-keygen -A && exec /usr/sbin/sshd -D -e -p %d -o ListenAddress=127.0.0.1", port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := docker("cp", versionBin(t, "linux", dockerArch, "v1.0.0"), name+":/usr/local/bin/hostel"); err != nil {
+		t.Fatal(err)
+	}
+	r := e.adminHostel("config", "rooms", "add", "box3", "--platform", "fakedevice")
+	m := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(r.stdout)
+	if r.code != 0 || m == nil {
+		t.Fatalf("config rooms add: %s", r)
+	}
+	out, err := docker("exec", name, "/usr/local/bin/hostel", "machine", "join", m[1], "--no-service")
+	if err != nil {
+		t.Fatalf("machine join: %v\n%s", err, out)
+	}
+	connect := regexp.MustCompile(`Run as an administrator:\n   (\S+ machine connect .*)\n`).FindStringSubmatch(out)
+	if connect == nil {
+		t.Fatalf("machine join printed no connect command:\n%s", out)
+	}
+	startConnect := func() {
+		t.Helper()
+		if _, err := docker(append([]string{"exec", "-d", name}, append(strings.Fields(connect[1]), "--ssh", fmt.Sprintf("127.0.0.1:%d", port))...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startConnect()
+	connectVersion := func() string {
+		for _, ms := range s.status().Machines {
+			if ms.Key == "home/box3" {
+				return ms.ConnectVersion
+			}
+		}
+		return ""
+	}
+	e.waitFor("the connect version v1.0.0", roomReady, func() bool { return connectVersion() == "v1.0.0" })
+
+	if out, err := docker("exec", "-u", "hostel", name, "/etc/hostel/hostel", "machine", "update"); err == nil || !strings.Contains(err.Error()+out, "as an administrator") {
+		t.Fatalf("machine update as the room user: %v\n%s", err, out)
+	}
+	out, err = docker("exec", name, "/etc/hostel/hostel", "machine", "update")
+	if err != nil || !strings.Contains(out, "updated /etc/hostel/hostel from v1.0.0 to v1.1.0") || !strings.Contains(out, "no service is installed") {
+		t.Fatalf("machine update: %v\n%s", err, out)
+	}
+	if got, _ := docker("exec", name, "/etc/hostel/hostel", "--version"); got != "hostel v1.1.0" {
+		t.Fatalf("the service binary after the update: %q", got)
+	}
+	if out, err := docker("exec", name, "/etc/hostel/hostel", "machine", "update"); err != nil || !strings.Contains(out, "is up to date") {
+		t.Fatalf("a second machine update: %v\n%s", err, out)
+	}
+	if _, err := docker("exec", name, "sh", "-c", "pkill -f '[h]ostel machine connect' || true"); err != nil {
+		t.Fatal(err)
+	}
+	startConnect()
+	e.waitFor("the connect version v1.1.0", roomReady, func() bool { return connectVersion() == "v1.1.0" })
 }

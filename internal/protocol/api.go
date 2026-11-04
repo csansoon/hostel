@@ -55,6 +55,9 @@ type MachineStatus struct {
 	Labels    []string `json:"labels"`
 	MaxRooms  int      `json:"max_rooms"`
 	Connect   bool     `json:"connect,omitempty"`
+	// ConnectVersion is the hostel version of the machine's connect service
+	// while it is connected (M10d; "" before).
+	ConnectVersion string `json:"connect_version,omitempty"`
 }
 
 // Hardware is what the room helper found at the last provisioning of the

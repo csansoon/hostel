@@ -31,6 +31,7 @@ import (
 const machineUsage = `hostel: usage:
   hostel machine join <machine code> [--no-service]   add this machine as a room (as an administrator)
   hostel machine connect --server <url> --token-file <file> [--server-key k] [--ssh 127.0.0.1:22]
+  hostel machine update                               replace the binary of the connect service with the server's (as an administrator)
 An admin makes the code with "hostel config rooms add <name>".`
 
 // machineCmd is "hostel machine": commands on a room machine (M9).
@@ -41,6 +42,8 @@ func machineCmd(args []string, stdout, stderr io.Writer) int {
 			return machineJoin(args[1:], stdout, stderr)
 		case "connect":
 			return roomCmd(append([]string{"connect"}, args[1:]...), stdout, stderr)
+		case "update":
+			return machineUpdate(args[1:], stdout, stderr)
 		}
 	}
 	fmt.Fprintln(stderr, machineUsage)

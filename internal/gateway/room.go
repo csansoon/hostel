@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,26 @@ func (r *RoomConns) remove(machine string, c *ssh.ServerConn) {
 	if r.conns[machine].conn == c {
 		delete(r.conns, machine)
 	}
+}
+
+// ConnectVersionPrefix starts the SSH client version of "hostel machine
+// connect" (and "hostel room connect"): SSH-2.0-hostel-<version> (M10d).
+const ConnectVersionPrefix = "SSH-2.0-hostel-"
+
+// Version is the hostel version of a machine's connection ("" when it is not
+// connected, or older than M10d).
+func (r *RoomConns) Version(machine string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.conns[machine]
+	if !ok {
+		return ""
+	}
+	v, _ := strings.CutPrefix(string(c.conn.ClientVersion()), ConnectVersionPrefix)
+	if v == string(c.conn.ClientVersion()) {
+		return ""
+	}
+	return v
 }
 
 // CloseToken closes the connections that authenticated with the token (after
