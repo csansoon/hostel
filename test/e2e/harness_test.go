@@ -502,6 +502,14 @@ func (e *env) mustHostel(args ...string) result {
 func (s *serverProc) restart() *serverProc {
 	s.e.t.Helper()
 	s.stop()
+	s.pinPorts()
+	return s.e.startServer(s.token)
+}
+
+// pinPorts writes the server's ports into server.toml, so that a new start
+// binds the same ports.
+func (s *serverProc) pinPorts() {
+	s.e.t.Helper()
 	file := filepath.Join(s.e.configDir(), "server.toml")
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -510,7 +518,6 @@ func (s *serverProc) restart() *serverProc {
 	cfg := strings.Replace(string(data), "\nlisten = \"127.0.0.1:0\"", fmt.Sprintf("\nlisten = %q", s.addr), 1)
 	cfg = strings.Replace(cfg, "\ngateway_listen = \"127.0.0.1:0\"", fmt.Sprintf("\ngateway_listen = %q", s.gateway), 1)
 	s.e.writeConfig(cfg)
-	return s.e.startServer(s.token)
 }
 
 // useGuestToken makes a member user and makes guest commands use its token.

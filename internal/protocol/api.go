@@ -367,6 +367,27 @@ const CodeConflict = "conflict"
 // the server in each answer (M10d).
 const VersionHeader = "X-Hostel-Version"
 
+// ServerUpdate is the state of a remote server update (M10d):
+// GET/POST /v1/server/update.
+type ServerUpdate struct {
+	State string `json:"state"`
+	From  string `json:"from,omitempty"`
+	To    string `json:"to,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// ServerUpdateRequest is the body of POST /v1/server/update ("" for the
+// latest release).
+type ServerUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+const (
+	UpdateIdle    = "idle"
+	UpdateRunning = "running"
+	UpdateFailed  = "failed"
+)
+
 // CodeUpdateRequired: the guest is older than the server's minimum guest
 // version (HTTP 426).
 const CodeUpdateRequired = "update_required"

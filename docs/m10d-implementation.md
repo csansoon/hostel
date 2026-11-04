@@ -56,11 +56,12 @@ Owner decisions: `requirements.md`, section 3, 2026-11-04.
   with HTTP 426 and `update this computer: run "hostel update"`. A request
   without the header (v0.1.0, curl) passes. All 0.x versions work together
   until a change breaks the API; such a change raises the minimum.
-- **Server update.** `update.Server` replaces, in this order, each file of
-  `helper_dir` that differs from the release (`hostel-*`, `mise-*`; a file
-  with the same hash stays), `platforms_dir` (from `hostel-platforms.tar.gz`,
-  unpacked next to it and swapped with a rename), and the server binary. It
-  checks first that the server's user can write each of them.
+- **Server update.** `update.Server` replaces each file of `helper_dir` that
+  differs from the release (`hostel-*`, `mise-*`; a file with the same hash
+  stays), then the server binary (a copy of its new helper file, checked with
+  `--version`). The platform defaults are in the binary (`platforms_dir` is
+  read only at the M9 import), so they change with it. It checks first that
+  the server's user can write both directories.
   - `hostel server update [--version v] [--config f]` on the server machine
     does it and prints the restart command.
   - `POST /v1/server/update {"version"}` (admin) starts it in the server (one
@@ -72,9 +73,9 @@ Owner decisions: `requirements.md`, section 3, 2026-11-04.
     guests retry, so leases continue. `hostel server update --remote` (an
     admin's computer) starts it and waits (15 min) until `GET /v1/info` has the
     new version, or the update fails.
-  - The layout for remote updates: the service user owns the binary
-    (`/opt/hostel/bin/hostel`), `helper_dir`, and `platforms_dir`
-    (`install.sh --dir /opt/hostel/bin --server /opt/hostel`, then `chown`).
+  - The layout for remote updates: the service user owns the binary's
+    directory (`/opt/hostel/bin`) and `helper_dir` (`install.sh --dir
+    /opt/hostel/bin --server /opt/hostel`, then `chown`).
 - **Machines that joined.** `hostel machine connect` (and `hostel room
   connect`) sends its version in the SSH client version
   (`SSH-2.0-hostel-<version>`); the gateway keeps it with the connection, and
@@ -119,8 +120,8 @@ files of two test versions, built with `-X …version.Version`, and a test key):
 - `TestUpdateNotice`: a newer server; the notice once, not on the next command.
 - `TestGuestTooOld`: a request with an old version gets HTTP 426.
 - `TestServerUpdate`: a server from a v1.0.0 copy; `hostel server update
-  --remote` starts v1.1.0 in the same process; `helper_dir` and
-  `platforms_dir` have the new files; a ready lease continues. The local
+  --remote` starts v1.1.0 in the same process; `helper_dir` has the new
+  files; a ready lease continues; the next lease gets the new helper. The local
   command on a stopped server.
 - `TestMachineUpdate` (in `TestMachineJoin`): the connect version in the
   status; `hostel machine update` in the container replaces the service binary.

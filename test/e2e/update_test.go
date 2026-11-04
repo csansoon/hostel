@@ -281,3 +281,107 @@ func TestUpdateNotice(t *testing.T) {
 		t.Fatalf("a guest v0.0.9: HTTP %d, server version %q", resp.StatusCode, resp.Header.Get(protocol.VersionHeader))
 	}
 }
+
+// ownHelperDir is a helper_dir for one test: a copy of the hostel helper and a
+// link to the shared mise.
+func ownHelperDir(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "hostel-linux-" + dockerArch
+	data, err := os.ReadFile(filepath.Join(helperDir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mise, err := filepath.EvalSymlinks(filepath.Join(helperDir, "mise-linux-"+dockerArch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mise, filepath.Join(dir, "mise-linux-"+dockerArch)); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestServerUpdate: an admin updates the server from a computer (--remote);
+// the server replaces its binary and helper_dir and starts the new binary in
+// the same process, on the same ports; a ready lease continues. A member
+// cannot; an update that is not newer is refused. Then the local command on
+// the server machine.
+func TestServerUpdate(t *testing.T) {
+	e := newEnv(t)
+	e.init()
+	rel := newFakeRelease(t)
+	rel.use(e)
+	own := ownHelperDir(t, filepath.Join(e.home, "opt", "helpers"))
+	e.serverBin = copyBin(t, hostBin(t, "v1.0.0"), filepath.Join(e.home, "opt", "bin"))
+	f := newFixtureWithEnv(t, e, &fixtureOpts{helperDir: own})
+	f.acquire()
+	f.s.pinPorts()
+	pid := f.s.cmd.Process.Pid
+
+	linux := "hostel-linux-" + dockerArch
+	newHelper := versionBin(t, "linux", dockerArch, "v1.1.0")
+	rel.add("v1.1.0", map[string]string{
+		update.BinaryName(runtime.GOOS, runtime.GOARCH): hostBin(t, "v1.1.0"),
+		linux: newHelper,
+	})
+
+	r := e.hostel("server", "update", "--remote")
+	if r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
+		t.Fatalf("server update --remote as a member: %s", r)
+	}
+	member := e.vars["HOSTEL_TOKEN"]
+	e.vars["HOSTEL_TOKEN"] = e.admin
+	r = e.mustHostel("server", "update", "--remote")
+	if !strings.Contains(r.stdout, "the server updates from v1.0.0 to v1.1.0") || !strings.Contains(r.stdout, "the server runs v1.1.0") {
+		t.Fatalf("server update --remote: %s", r)
+	}
+	select {
+	case <-f.s.done:
+		t.Fatalf("the server process ended:\n%s", f.s.log.String())
+	default:
+	}
+	if f.s.cmd.Process.Pid != pid || binVersion(t, e.serverBin) != "hostel v1.1.0" {
+		t.Fatalf("after the update: pid %d (was %d), binary %q", f.s.cmd.Process.Pid, pid, binVersion(t, e.serverBin))
+	}
+	if update.FileSHA256(filepath.Join(own, linux)) != update.FileSHA256(newHelper) {
+		t.Fatal("helper_dir does not have the new helper")
+	}
+	r = e.hostel("server", "update", "--remote")
+	if r.code != 1 || !strings.Contains(r.stderr, "the server has v1.1.0; v1.1.0 is not newer") {
+		t.Fatalf("a second server update: %s", r)
+	}
+
+	e.vars["HOSTEL_TOKEN"] = member
+	if r := e.mustHostel("run", "--", "echo still here"); !strings.Contains(r.stdout, "still here") {
+		t.Fatalf("the lease after the update: %s", r)
+	}
+	e.mustHostel("release")
+	f.waitSlotFree()
+	// The next lease gets the new helper.
+	f.acquire()
+	if v := f.c.sh("/home/hostel/hostel/bin/hostel --version"); v != "hostel v1.1.0" {
+		t.Fatalf("the room's helper after the next lease: %q", v)
+	}
+	e.mustHostel("release")
+
+	// On the server machine: the local command, with the server binary.
+	f.s.stop()
+	rel.add("v1.2.0", map[string]string{
+		update.BinaryName(runtime.GOOS, runtime.GOARCH): hostBin(t, "v1.2.0"),
+		linux: versionBin(t, "linux", dockerArch, "v1.2.0"),
+	})
+	e.bin = e.serverBin
+	r = e.mustHostel("server", "update")
+	if !strings.Contains(r.stdout, "from v1.1.0 to v1.2.0") || !strings.Contains(r.stdout, "restart the server") {
+		t.Fatalf("server update: %s", r)
+	}
+	if binVersion(t, e.serverBin) != "hostel v1.2.0" {
+		t.Fatalf("after the local update, the server binary is %q", binVersion(t, e.serverBin))
+	}
+}

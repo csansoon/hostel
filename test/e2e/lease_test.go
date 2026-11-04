@@ -38,6 +38,8 @@ type fixtureOpts struct {
 	platforms map[string]map[string]string
 	// slotUsers are extra users of the room container.
 	slotUsers []string
+	// helperDir replaces the shared helper_dir (a test that changes it).
+	helperDir string
 }
 
 func defaultRepoFiles() map[string]string {
@@ -69,7 +71,11 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	for name, files := range opts.platforms {
 		e.writePlatform(name, files)
 	}
-	e.writeConfig(serverHeaderWith(opts.agentDevice) + opts.serverKeys + fmt.Sprintf(`
+	header := serverHeaderWith(opts.agentDevice)
+	if opts.helperDir != "" {
+		header = strings.Replace(header, fmt.Sprintf("helper_dir = %q", helperDir), fmt.Sprintf("helper_dir = %q", opts.helperDir), 1)
+	}
+	e.writeConfig(header + opts.serverKeys + fmt.Sprintf(`
 [providers.home]
 kind = "static"
 

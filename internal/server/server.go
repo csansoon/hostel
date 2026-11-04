@@ -62,6 +62,12 @@ type Server struct {
 	publicURLs []string
 	// logins are the provider CLI logins (M9).
 	logins logins
+	// exe is the server binary; update is the remote update, and restart
+	// stops Run with ErrRestart.
+	exe        string
+	update     selfUpdate
+	restart    func()
+	restarting atomic.Bool
 	// connectLimit limits failed POST /v1/connect attempts.
 	connectLimit connectLimiter
 	// lastReconcile and lastPresence are used only by the loop goroutine.
@@ -128,14 +134,24 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	exe, err := update.Executable()
+	if err != nil {
+		return fmt.Errorf("find the server binary: %w", err)
+	}
+	ctx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	rooms := gateway.NewRoomConns()
-	s := &Server{store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
+	s := &Server{exe: exe, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
 		rooms: rooms, kick: make(chan struct{}, 1), localData: start.local}
 	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, nil)
 	if err != nil {
 		return err
 	}
 	s.live.Store(lc)
+	s.restart = func() {
+		s.restarting.Store(true)
+		stopRun()
+	}
 	st.SetLeaseHook(func(id string) {
 		s.notify.notify(id)
 		s.notify.notify(statusKey)
@@ -217,6 +233,9 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 		return fmt.Errorf("stop http server: %w", err)
 	}
 	log.Info("server stopped")
+	if s.restarting.Load() {
+		return ErrRestart
+	}
 	return nil
 }
 
@@ -260,6 +279,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PUT /v1/config/platforms/{name}", s.auth(s.admin(s.handlePutPlatform)))
 	mux.HandleFunc("DELETE /v1/config/platforms/{name}", s.auth(s.admin(s.handleRemovePlatform)))
 	mux.HandleFunc("POST /v1/config/platforms/{name}/reset", s.auth(s.admin(s.handleResetPlatform)))
+	mux.HandleFunc("POST /v1/server/update", s.auth(s.admin(s.handleServerUpdate)))
+	mux.HandleFunc("GET /v1/server/update", s.auth(s.admin(s.handleServerUpdateState)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))
 	mux.HandleFunc("DELETE /v1/tokens/{id}", s.auth(s.admin(s.handleRevokeToken)))
 	// The gateway's SSH over a WebSocket; SSH authenticates inside.
