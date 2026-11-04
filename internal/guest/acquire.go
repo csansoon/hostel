@@ -232,6 +232,8 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 	var retry time.Duration
 	last := ""
 	var seen protocol.Lease
+	// polled: a poll was sent (also a failed one). Each acquire sends at
+	// least one; after that, the deadline counts.
 	polled := false
 	for {
 		remaining := time.Until(deadline)
@@ -248,6 +250,7 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 		w := min(pollWait, remaining)
 		var lease protocol.Lease
 		path := fmt.Sprintf("/v1/leases/%s?since=%d&wait=%ds", l.st.LeaseID, since, int(w.Seconds()))
+		polled = true
 		if err := l.api.Do(ctx, "GET", path, nil, &lease); err != nil {
 			if l.background && ctx.Err() != nil {
 				// The server did not answer the short look: the keeper
@@ -267,6 +270,10 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 				fmt.Fprintf(stderr, "hostel: %v; retrying\n", err)
 			}
 			retry = min(max(2*retry, time.Second), maxPollRetry)
+			if time.Until(deadline) < time.Second {
+				// No time for another try: the loop ends at the deadline.
+				continue
+			}
 			select {
 			case <-time.After(min(retry, time.Until(deadline))):
 			case <-ctx.Done():
@@ -274,7 +281,7 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 			}
 			continue
 		}
-		retry, polled = 0, true
+		retry = 0
 		since, seen = lease.Revision, lease
 		line := describe(lease)
 		if line != last {
