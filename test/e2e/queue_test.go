@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -224,6 +225,22 @@ func TestAcquireBackground(t *testing.T) {
 	dropped := createdID(t, r)
 	f.e.waitFor("the end of the lease without polls", time.Minute, func() bool { return f.lease(dropped).State != protocol.LeaseQueued })
 
+	// "acquire --wait 1s", run again before poll_timeout, keeps a place too:
+	// each run polls the lease at least once.
+	f.e.newRepoNamed("repo4", defaultRepoFiles())
+	r = f.e.hostel("acquire", "fakedevice", "--task", "short waits", "--wait", "1s")
+	short := createdID(t, r)
+	for start := time.Now(); time.Since(start) < 15*time.Second; {
+		time.Sleep(2 * time.Second) // the agent's other work, shorter than poll_timeout
+		if r := f.e.hostel("acquire", "fakedevice", "--task", "short waits", "--wait", "1s"); r.code != 75 {
+			t.Fatalf("acquire --wait 1s: %s", r)
+		}
+	}
+	if st := f.lease(short).State; st != protocol.LeaseQueued {
+		t.Fatalf("a lease kept by acquire --wait 1s: %s, want queued", st)
+	}
+	f.e.mustHostel("release")
+
 	// The kept lease outlives 3 poll timeouts without an acquire of its own.
 	start := time.Now()
 	f.e.waitFor("3 poll timeouts", time.Minute, func() bool { return time.Since(start) > 18*time.Second })
@@ -254,10 +271,28 @@ func TestAcquireBackground(t *testing.T) {
 		t.Fatalf("a second acquire --background: %s", r)
 	}
 	again := createdID(t, r)
-	f.e.waitFor("the keeper of the new lease", 30*time.Second, func() bool {
+	keeperPID := func() int {
+		var b struct {
+			LeaseID string `json:"lease_id"`
+			PID     int    `json:"pid"`
+		}
 		data, err := os.ReadFile(beat)
-		return err == nil && strings.Contains(string(data), `"lease_id":"`+again+`"`)
-	})
+		if err != nil || json.Unmarshal(data, &b) != nil || b.LeaseID != again {
+			return 0
+		}
+		return b.PID
+	}
+	f.e.waitFor("the keeper of the new lease", 30*time.Second, func() bool { return keeperPID() > 0 })
+	// A keeper killed hard leaves its heartbeat; the next acquire --background
+	// starts a new keeper anyway.
+	old := keeperPID()
+	if p, err := os.FindProcess(old); err == nil {
+		p.Kill()
+	}
+	if r := f.e.hostel("acquire", "fakedevice", "--task", "again", "--background"); r.code != 75 {
+		t.Fatalf("acquire --background after the keeper was killed: %s", r)
+	}
+	f.e.waitFor("a new keeper", 30*time.Second, func() bool { p := keeperPID(); return p > 0 && p != old })
 	f.e.mustHostel("release")
 	f.e.waitFor("the keeper stops after release", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
 	f.useRepo("repo")

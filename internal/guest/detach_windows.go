@@ -27,3 +27,18 @@ func startDetached(exe string, args []string, logFile *os.File) error {
 	}
 	return start(detachedProcess | newProcessGroup)
 }
+
+// processAlive reports whether a process with this ID runs.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	const queryLimitedInformation, stillActive = 0x1000, 259
+	h, err := syscall.OpenProcess(queryLimitedInformation, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(h)
+	var code uint32
+	return syscall.GetExitCodeProcess(h, &code) == nil && code == stillActive
+}

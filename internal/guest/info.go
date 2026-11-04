@@ -26,6 +26,9 @@ func FormatWait(seconds int) string {
 
 // FormatDuration formats a timeout: "45 s", "5 min".
 func FormatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%d ms", d.Milliseconds())
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%d s", int(d.Seconds()))
 	}

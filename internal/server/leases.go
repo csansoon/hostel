@@ -341,7 +341,7 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	out := protocol.Lease{ID: l.ID, State: l.State, Revision: l.Revision, Position: l.Position, Reason: l.Reason,
 		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority),
 		Provider: l.Provider, Machine: l.Machine, CreatedAt: l.CreatedAt, EndReason: l.EndReason,
-		PollTimeoutSeconds: int(s.config().PollTimeout.D().Seconds()), IdleTimeoutSeconds: int(s.config().IdleTimeout.D().Seconds())}
+		PollTimeoutMS: s.config().PollTimeout.D().Milliseconds(), IdleTimeoutMS: s.config().IdleTimeout.D().Milliseconds()}
 	if l.State == protocol.LeaseQueued {
 		out.EstimatedWaitSeconds = s.leaseWait(r.Context(), l)
 	}

@@ -32,16 +32,16 @@ const maxPollRetry = 10 * time.Second
 // keepNote says how the place of a waiting lease is kept.
 func keepNote(l protocol.Lease, background bool, stderr io.Writer) {
 	idle := "a few minutes"
-	if l.IdleTimeoutSeconds > 0 {
-		idle = FormatDuration(time.Duration(l.IdleTimeoutSeconds) * time.Second)
+	if l.IdleTimeoutMS > 0 {
+		idle = FormatDuration(time.Duration(l.IdleTimeoutMS) * time.Millisecond)
 	}
 	if background {
 		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again at least every %s: it continues the lease, and takes the room when it is ready (a ready room waits only %s for you)\n", l.ID, idle, idle)
 		return
 	}
 	keep := "a few minutes"
-	if l.PollTimeoutSeconds > 0 {
-		keep = FormatDuration(time.Duration(l.PollTimeoutSeconds) * time.Second)
+	if l.PollTimeoutMS > 0 {
+		keep = FormatDuration(time.Duration(l.PollTimeoutMS) * time.Millisecond)
 	}
 	fmt.Fprintf(stderr, "hostel: the server keeps the place of lease %s for %s without this command; run it again before then, or add --background to keep the place while you do other work\n", l.ID, keep)
 }
@@ -232,11 +232,13 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 	var retry time.Duration
 	last := ""
 	var seen protocol.Lease
+	polled := false
 	for {
 		remaining := time.Until(deadline)
-		// Less than 1 s left: a poll would ask for wait=0 and answer at once
-		// (a burst of polls); stop here.
-		if remaining < time.Second {
+		// Less than 1 s left after a poll: another one would ask for wait=0
+		// and answer at once (a burst of polls); stop here. The first poll
+		// always runs: it is what keeps the place of a waiting lease.
+		if remaining < time.Second && polled {
 			if seen.State == protocol.LeaseQueued || seen.State == protocol.LeaseAssigned ||
 				seen.State == protocol.LeaseProvisioning || seen.State == protocol.LeasePreparing {
 				keepNote(seen, l.background || keeperAlive(l.st), stderr)
@@ -272,7 +274,7 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 			}
 			continue
 		}
-		retry = 0
+		retry, polled = 0, true
 		since, seen = lease.Revision, lease
 		line := describe(lease)
 		if line != last {

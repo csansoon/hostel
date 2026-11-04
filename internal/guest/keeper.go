@@ -35,6 +35,7 @@ const (
 type keeperBeat struct {
 	ID      string    `json:"id"`
 	LeaseID string    `json:"lease_id"`
+	PID     int       `json:"pid"`
 	At      time.Time `json:"at"`
 }
 
@@ -80,10 +81,11 @@ func ensureKeeper(st *State) error {
 	return nil
 }
 
-// keeperAlive reports a keeper with a fresh heartbeat for the lease of st.
+// keeperAlive reports a keeper with a fresh heartbeat for the lease of st
+// whose process still runs (a keeper killed hard leaves its heartbeat).
 func keeperAlive(st *State) bool {
 	b, ok := readBeat(st)
-	return ok && b.LeaseID == st.LeaseID && time.Since(b.At) < keeperFresh
+	return ok && b.LeaseID == st.LeaseID && time.Since(b.At) < keeperFresh && processAlive(b.PID)
 }
 
 // KeepPlace is the hidden command "hostel keep-place --dir <state dir>": it
@@ -109,7 +111,7 @@ func KeepPlace(args []string, stdout, stderr io.Writer) int {
 	beat := func() {
 		// A failed write (for example a reader that holds the file on
 		// Windows) is not fatal: the next poll writes again.
-		if err := writeBeat(st, keeperBeat{ID: me, LeaseID: st.LeaseID, At: time.Now()}); err != nil {
+		if err := writeBeat(st, keeperBeat{ID: me, LeaseID: st.LeaseID, PID: os.Getpid(), At: time.Now()}); err != nil {
 			fmt.Fprintf(stderr, "hostel keep-place: heartbeat: %v\n", err)
 		}
 	}
