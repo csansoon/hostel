@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/csansoon/hostel/internal/cli"
@@ -14,7 +17,6 @@ import (
 	"github.com/csansoon/hostel/internal/guest"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/update"
-	"github.com/csansoon/hostel/internal/version"
 )
 
 const serverUpdateUsage = `Usage: hostel server update [--version vX.Y.Z] [--config server.toml]
@@ -64,7 +66,24 @@ func localServerUpdate(path, want string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// The binary of the service (from its last start), not the binary that
+	// runs this command: they can differ (/opt/hostel/bin and a copy on the
+	// PATH).
+	exe, err := update.Executable()
+	if err != nil {
+		return err
+	}
+	var addrs protocol.Addresses
+	if data, err := os.ReadFile(filepath.Join(paths.DataDir, "server.json")); err == nil && json.Unmarshal(data, &addrs) == nil && addrs.Executable != "" {
+		exe = addrs.Executable
+	} else {
+		fmt.Fprintf(stdout, "the server has not started yet (%s/server.json): this command updates %s\n", paths.DataDir, exe)
+	}
 	ctx := context.Background()
+	have := binaryVersion(ctx, exe)
+	if have == "" {
+		return fmt.Errorf("the server binary %s does not run", exe)
+	}
 	src, err := update.Default()
 	if err != nil {
 		return err
@@ -75,22 +94,18 @@ func localServerUpdate(path, want string, stdout io.Writer) error {
 			return err
 		}
 	}
-	if _, known := update.Parse(version.Version); known && !update.Newer(tag, version.Version) {
-		fmt.Fprintf(stdout, "Hostel %s is up to date (the release is %s)\n", version.Version, tag)
+	if _, known := update.Parse(have); known && !update.Newer(tag, have) {
+		fmt.Fprintf(stdout, "the server binary %s has %s: up to date (the release is %s)\n", exe, have, tag)
 		return nil
 	}
 	r, err := src.Release(ctx, tag)
 	if err != nil {
 		return err
 	}
-	exe, err := update.Executable()
-	if err != nil {
-		return err
-	}
 	if err := update.Server(ctx, src, r, exe, paths.HelperDir); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "updated %s and %s from %s to %s\nrestart the server now, for example: sudo systemctl restart hostel\n", exe, paths.HelperDir, version.Version, tag)
+	fmt.Fprintf(stdout, "updated %s and %s from %s to %s\nrestart the server now, for example: sudo systemctl restart hostel\n", exe, paths.HelperDir, have, tag)
 	return nil
 }
 

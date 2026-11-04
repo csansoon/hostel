@@ -47,8 +47,8 @@ func InstallBinary(ctx context.Context, s *Source, r *Release, target string) er
 	if err := CheckWritable(filepath.Dir(target)); err != nil {
 		return fmt.Errorf("cannot write %s: %w", filepath.Dir(target), err)
 	}
-	tmp := tempNext(target)
-	if err := s.Download(ctx, r, BinaryName(runtime.GOOS, runtime.GOARCH), tmp); err != nil {
+	tmp, err := s.Download(ctx, r, BinaryName(runtime.GOOS, runtime.GOARCH), target)
+	if err != nil {
 		return err
 	}
 	if err := checkRuns(ctx, tmp, r.Tag); err != nil {
@@ -72,18 +72,19 @@ func checkRuns(ctx context.Context, bin, tag string) error {
 	return nil
 }
 
-// Replace renames src over dst. On Windows a running binary cannot be
-// replaced, only renamed: dst moves to dst.old first (CleanOld removes it
-// later).
+// Replace renames src over dst; src is removed on an error. On Windows a
+// running binary cannot be replaced, only renamed: dst moves aside first to a
+// new name (an older one can still be in use), and CleanOld removes it later.
 func Replace(src, dst string) error {
 	if runtime.GOOS == "windows" {
-		old := dst + ".old"
-		os.Remove(old)
+		old := fmt.Sprintf("%s.old-%d", dst, time.Now().UnixNano())
 		if err := os.Rename(dst, old); err != nil && !os.IsNotExist(err) {
+			os.Remove(src)
 			return fmt.Errorf("move %s aside: %w", dst, err)
 		}
 		if err := os.Rename(src, dst); err != nil {
 			os.Rename(old, dst)
+			os.Remove(src)
 			return fmt.Errorf("put the new binary at %s: %w", dst, err)
 		}
 		return nil
@@ -95,13 +96,16 @@ func Replace(src, dst string) error {
 	return nil
 }
 
-// CleanOld removes the binary that an update on Windows moved aside (best
-// effort: it fails while the old binary still runs).
+// CleanOld removes the binaries that updates on Windows moved aside (best
+// effort: a removal fails while an old binary still runs).
 func CleanOld() {
 	if runtime.GOOS != "windows" {
 		return
 	}
 	if exe, err := Executable(); err == nil {
-		os.Remove(exe + ".old")
+		olds, _ := filepath.Glob(exe + ".old-*")
+		for _, o := range olds {
+			os.Remove(o)
+		}
 	}
 }

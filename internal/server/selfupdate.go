@@ -81,7 +81,7 @@ func (s *Server) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runUpdate(src *update.Source, tag string) {
-	ctx, cancel := context.WithTimeout(context.Background(), updateTimeout)
+	ctx, cancel := context.WithTimeout(s.runCtx, updateTimeout)
 	defer cancel()
 	err := func() error {
 		rel, err := src.Release(ctx, tag)
@@ -96,6 +96,9 @@ func (s *Server) runUpdate(src *update.Source, tag string) {
 		s.log.Error("server update failed", "to", tag, "err", err)
 		s.update.state.State, s.update.state.Error = protocol.UpdateFailed, err.Error()
 		return
+	}
+	if s.runCtx.Err() != nil {
+		return // the server stops; the new binary starts at its next start
 	}
 	s.log.Info("server updated; restarting", "from", version.Version, "to", tag)
 	s.restart()

@@ -53,8 +53,12 @@ func (r *RoomConns) remove(machine string, c *ssh.ServerConn) {
 // connect" (and "hostel room connect"): SSH-2.0-hostel-<version> (M10d).
 const ConnectVersionPrefix = "SSH-2.0-hostel-"
 
+// beforeM10d is the version of a connection without the prefix: the only
+// release before M10d.
+const beforeM10d = "v0.1.0"
+
 // Version is the hostel version of a machine's connection ("" when it is not
-// connected, or older than M10d).
+// connected; v0.1.0 for a service older than M10d, which sends no version).
 func (r *RoomConns) Version(machine string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -62,9 +66,9 @@ func (r *RoomConns) Version(machine string) string {
 	if !ok {
 		return ""
 	}
-	v, _ := strings.CutPrefix(string(c.conn.ClientVersion()), ConnectVersionPrefix)
-	if v == string(c.conn.ClientVersion()) {
-		return ""
+	v, found := strings.CutPrefix(string(c.conn.ClientVersion()), ConnectVersionPrefix)
+	if !found {
+		return beforeM10d
 	}
 	return v
 }

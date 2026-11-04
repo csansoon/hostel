@@ -324,7 +324,8 @@ func TestServerUpdate(t *testing.T) {
 	f := newFixtureWithEnv(t, e, &fixtureOpts{helperDir: own})
 	f.acquire()
 	f.s.pinPorts()
-	pid := f.s.cmd.Process.Pid
+	// A job that runs during the update keeps running on the room.
+	job := jobID(t, e.mustHostel("run", "--detach", "--", "sleep 6; echo job-done"))
 
 	linux := "hostel-linux-" + dockerArch
 	newHelper := versionBin(t, "linux", dockerArch, "v1.1.0")
@@ -348,8 +349,8 @@ func TestServerUpdate(t *testing.T) {
 		t.Fatalf("the server process ended:\n%s", f.s.log.String())
 	default:
 	}
-	if f.s.cmd.Process.Pid != pid || binVersion(t, e.serverBin) != "hostel v1.1.0" {
-		t.Fatalf("after the update: pid %d (was %d), binary %q", f.s.cmd.Process.Pid, pid, binVersion(t, e.serverBin))
+	if v := binVersion(t, e.serverBin); v != "hostel v1.1.0" {
+		t.Fatalf("after the update, the server binary is %q", v)
 	}
 	if update.FileSHA256(filepath.Join(own, linux)) != update.FileSHA256(newHelper) {
 		t.Fatal("helper_dir does not have the new helper")
@@ -360,6 +361,9 @@ func TestServerUpdate(t *testing.T) {
 	}
 
 	e.vars["HOSTEL_TOKEN"] = member
+	if r := e.mustHostel("attach", job, "--wait", "60s"); !strings.Contains(r.stdout, "job-done") {
+		t.Fatalf("the job after the update: %s", r)
+	}
 	if r := e.mustHostel("run", "--", "echo still here"); !strings.Contains(r.stdout, "still here") {
 		t.Fatalf("the lease after the update: %s", r)
 	}
@@ -372,19 +376,26 @@ func TestServerUpdate(t *testing.T) {
 	}
 	e.mustHostel("release")
 
-	// On the server machine: the local command, with the server binary.
+	// On the server machine: the local command updates the service's binary
+	// (from server.json), not the CLI that runs it.
 	f.s.stop()
 	rel.add("v1.2.0", map[string]string{
 		update.BinaryName(runtime.GOOS, runtime.GOARCH): hostBin(t, "v1.2.0"),
 		linux: versionBin(t, "linux", dockerArch, "v1.2.0"),
 	})
-	e.bin = e.serverBin
+	e.bin = copyBin(t, hostBin(t, "v1.1.0"), filepath.Join(e.home, "cli"))
 	r = e.mustHostel("server", "update")
 	if !strings.Contains(r.stdout, "from v1.1.0 to v1.2.0") || !strings.Contains(r.stdout, "restart the server") {
 		t.Fatalf("server update: %s", r)
 	}
 	if binVersion(t, e.serverBin) != "hostel v1.2.0" {
 		t.Fatalf("after the local update, the server binary is %q", binVersion(t, e.serverBin))
+	}
+	if v := binVersion(t, e.bin); v != "hostel v1.1.0" {
+		t.Fatalf("the local update changed the CLI that ran it: %q", v)
+	}
+	if left, _ := filepath.Glob(filepath.Join(e.home, "opt", "*", ".*.new-*")); len(left) > 0 {
+		t.Fatalf("the updates left temporary files: %v", left)
 	}
 }
 

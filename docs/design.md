@@ -94,18 +94,27 @@ platform scripts; it checks each file against `SHA256SUMS`.
   (`update_required`); a request without the header passes. When the server
   is newer, a guest command prints one line on stderr, at most once in 24 hours
   (`~/.config/hostel/update-notice`).
-- **The server.** `update.Server` replaces each file of `helper_dir` that
-  differs from the release (`hostel-*`, `mise-*`), then the server binary (a
+- **The server.** `update.Server` downloads and checks each file of
+  `helper_dir` that differs from the release (`hostel-*`, `mise-*`) into new
+  temporary files next to it, and only then renames them into place, then the
+  server binary (a
   copy of its new helper file, checked with `--version`); it checks first that
   the server's user can write both directories. The platform defaults are in
-  the binary. `hostel server update` on the server machine does it and prints
+  the binary. `hostel server update` on the server machine does it for the
+  binary that the service ran at its last start (`executable` in
+  `data_dir/server.json`), not for the binary that runs the command, and prints
   the restart command. `POST /v1/server/update` (admin, section 11) does it in
   the server; then the server stops as at a signal and starts the new binary in
   the same process (`exec`, macOS and Linux), with the same arguments and
-  environment. Rooms get the new helper before their next lease (section 8).
+  environment. Leases and jobs continue (a job runs under its supervisor on the
+  room); a guest stream through the gateway (`hostel run`, `hostel ssh`) ends
+  at the restart, and `hostel attach` continues a job. A signal during the
+  update stops it and the server, without the new binary. Rooms get the new
+  helper before their next lease (section 8).
 - **Machines that joined.** `hostel machine connect` sends
   `SSH-2.0-hostel-<version>` as its SSH client version; the status has it as
-  `connect_version` of the machine while it is connected. `hostel machine
+  `connect_version` of the machine while it is connected (`v0.1.0` for an
+  older service, which sends no version). `hostel machine
   update` (as an administrator on the machine) downloads the server's binary
   for the machine (`/v1/download`, with the TLS of the join), checks that it
   runs, replaces the binary in the service directory, and restarts the

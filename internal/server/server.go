@@ -68,6 +68,8 @@ type Server struct {
 	update     selfUpdate
 	restart    func()
 	restarting atomic.Bool
+	// runCtx ends when Run stops: it stops a remote update too.
+	runCtx context.Context
 	// connectLimit limits failed POST /v1/connect attempts.
 	connectLimit connectLimiter
 	// lastReconcile and lastPresence are used only by the loop goroutine.
@@ -138,6 +140,7 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("find the server binary: %w", err)
 	}
+	signalCtx := ctx
 	ctx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	rooms := gateway.NewRoomConns()
@@ -148,9 +151,14 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 		return err
 	}
 	s.live.Store(lc)
+	s.runCtx = ctx
+	// A stop (a signal) that came first wins: the server then stops, and does
+	// not start the new binary.
 	s.restart = func() {
-		s.restarting.Store(true)
-		stopRun()
+		if ctx.Err() == nil {
+			s.restarting.Store(true)
+			stopRun()
+		}
 	}
 	st.SetLeaseHook(func(id string) {
 		s.notify.notify(id)
@@ -206,7 +214,7 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	defer gwLn.Close()
 
 	if err := writeJSONFile(filepath.Join(cfg.DataDir, "server.json"),
-		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String(), URL: listenURL}); err != nil {
+		protocol.Addresses{Listen: ln.Addr().String(), Gateway: gwLn.Addr().String(), URL: listenURL, Executable: exe}); err != nil {
 		httpServer.Close()
 		return err
 	}
@@ -233,7 +241,8 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 		return fmt.Errorf("stop http server: %w", err)
 	}
 	log.Info("server stopped")
-	if s.restarting.Load() {
+	// A signal during the restart wins: stop.
+	if s.restarting.Load() && signalCtx.Err() == nil {
 		return ErrRestart
 	}
 	return nil

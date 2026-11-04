@@ -48,8 +48,8 @@ Owner decisions: `requirements.md`, section 3, 2026-11-04.
   error, 69 when the release source cannot be reached.
 - **Notice.** Each server answer has the header `X-Hostel-Version`. When the
   server is newer than the CLI, a CLI command prints one line on stderr, at most
-  once in 24 hours: `hostel: Hostel vB is available (this computer has vA); run
-  "hostel update"`. The time of the last notice is in the guest configuration
+  once in 24 hours: `hostel: the server runs Hostel vB and this computer has vA;
+  run "hostel update"`. The time of the last notice is in the guest configuration
   directory (`update-notice`).
 - **Version check.** Each guest request has `X-Hostel-Version`. The server
   refuses a known version older than its minimum guest version (`v0.1.0` now)
@@ -63,7 +63,8 @@ Owner decisions: `requirements.md`, section 3, 2026-11-04.
   read only at the M9 import), so they change with it. It checks first that
   the server's user can write both directories.
   - `hostel server update [--version v] [--config f]` on the server machine
-    does it and prints the restart command.
+    does it for the service's binary (`executable` in `data_dir/server.json`)
+    and prints the restart command.
   - `POST /v1/server/update {"version"}` (admin) starts it in the server (one
     at a time; 202). `GET /v1/server/update` returns
     `{"state": "idle|running|failed", "from", "to", "error"}`. After a
@@ -71,7 +72,7 @@ Owner decisions: `requirements.md`, section 3, 2026-11-04.
     binary in the same process (`exec`, macOS and Linux), with the same
     arguments and environment. Workers are idempotent (design, section 4) and
     guests retry, so leases continue. `hostel server update --remote` (an
-    admin's computer) starts it and waits (15 min) until `GET /v1/info` has the
+    admin's computer) starts it and waits (25 min) until `GET /v1/info` has the
     new version, or the update fails.
   - The layout for remote updates: the service user owns the binary's
     directory (`/opt/hostel/bin`) and `helper_dir` (`install.sh --dir

@@ -30,6 +30,9 @@ type Addresses struct {
 	Gateway string `json:"gateway"`
 	// URL is the API on the listener: https:// with the server's own TLS.
 	URL string `json:"url"`
+	// Executable is the server binary ("hostel server update" on the server
+	// machine replaces it; M10d).
+	Executable string `json:"executable,omitempty"`
 }
 
 // Status is the response of GET /v1/status.

@@ -168,40 +168,41 @@ func (s *Source) get(ctx context.Context, tag, file string) (*http.Response, err
 	return resp, nil
 }
 
-// Download writes the release file to dst (mode 0755) and checks its SHA-256
-// against r. dst is removed on an error.
-func (s *Source) Download(ctx context.Context, r *Release, file, dst string) (err error) {
+// Download writes the release file to a new temporary file next to dst (the
+// same file system, so that a rename replaces dst), checks its SHA-256
+// against r, and returns its path. The file is removed on an error.
+func (s *Source) Download(ctx context.Context, r *Release, file, dst string) (tmp string, err error) {
 	want, ok := r.Sums[file]
 	if !ok {
-		return fmt.Errorf("release %s has no file %s", r.Tag, file)
+		return "", fmt.Errorf("release %s has no file %s", r.Tag, file)
 	}
 	ctx, cancel := context.WithTimeout(ctx, fileTimeout)
 	defer cancel()
 	resp, err := s.get(ctx, r.Tag, file)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
-	f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	f, err := TempNext(dst)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() {
 		if cerr := f.Close(); err == nil {
 			err = cerr
 		}
 		if err != nil {
-			os.Remove(dst)
+			os.Remove(f.Name())
 		}
 	}()
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
-		return fmt.Errorf("%w: download %s: %v", ErrUnreachable, file, err)
+		return "", fmt.Errorf("%w: download %s: %v", ErrUnreachable, file, err)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != want {
-		return fmt.Errorf("the checksum of %s is not the one of release %s: do not install it", file, r.Tag)
+		return "", fmt.Errorf("the checksum of %s is not the one of release %s: do not install it", file, r.Tag)
 	}
-	return os.Chmod(dst, 0o755)
+	return f.Name(), os.Chmod(f.Name(), 0o755)
 }
 
 // FileSHA256 is the SHA-256 (hex) of a file ("" when it is missing).
@@ -218,8 +219,8 @@ func FileSHA256(file string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// tempNext is a temporary file name next to file (the same file system, so a
-// rename replaces file).
-func tempNext(file string) string {
-	return filepath.Join(filepath.Dir(file), "."+filepath.Base(file)+".new")
+// TempNext creates a new temporary file next to file (a unique name, never
+// an existing file or link).
+func TempNext(file string) (*os.File, error) {
+	return os.CreateTemp(filepath.Dir(file), "."+filepath.Base(file)+".new-*")
 }

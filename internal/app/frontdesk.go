@@ -71,7 +71,7 @@ func (p *frontDesk) entries(m *model) []deskEntry {
 	}
 	if tag := m.serverUpdateAvailable(); tag != "" {
 		out = append(out, deskEntry{"⇪", "Update the server",
-			fmt.Sprintf("Update the server: install Hostel %s on the server (it runs %s); it starts again by itself, and leases continue.", tag, m.info.Version),
+			fmt.Sprintf("Update the server: install Hostel %s on the server (it runs %s); it starts again by itself; leases and jobs continue.", tag, m.info.Version),
 			nil, func(m *model) tea.Cmd {
 				m.ask(fmt.Sprintf("Update the server from %s to %s?", m.info.Version, tag), func() tea.Cmd { return m.startServerUpdate(tag) })
 				return nil

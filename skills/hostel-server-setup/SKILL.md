@@ -218,8 +218,9 @@ refuses a release that is not newer. The server sends the new helper to each
 room before its next lease.
 
 - **From the app** (an admin): Front desk › Update the server shows when a
-  newer release exists. The server starts again by itself with the new binary;
-  leases continue.
+  newer release exists. The server starts again by itself with the new binary.
+  Leases and their jobs continue; a `hostel run` that streams output at that
+  moment loses the stream (`hostel attach <job>` continues it).
 - **From a connected computer** (an admin): `hostel server update --remote`.
   It waits until the server runs the new version.
 - **On the server machine**, as the service's user (or with `sudo` when that

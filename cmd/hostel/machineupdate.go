@@ -55,7 +55,7 @@ func updateServiceBinary(osName string) (string, error) {
 	var st joinState
 	data, err := os.ReadFile(filepath.Join(dir, "join.json"))
 	if err != nil || json.Unmarshal(data, &st) != nil || st.Server == "" {
-		return "", fmt.Errorf("this machine has not joined a server (%s/join.json): run \"hostel machine join <code>\" first", dir)
+		return "", fmt.Errorf("this machine has not joined a server (%s/join.json is missing). A machine that joined runs this command; on a machine that you set up by hand (\"hostel room connect\"), install the new binary yourself and restart its connection", dir)
 	}
 	bin := filepath.Join(dir, "hostel")
 	if osName == config.OSWindows {
@@ -82,11 +82,11 @@ func updateServiceBinary(osName string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s from %s: HTTP %d", name, st.Server, resp.StatusCode)
 	}
-	tmp := bin + ".new"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	f, err := update.TempNext(bin)
 	if err != nil {
 		return "", err
 	}
+	tmp := f.Name()
 	_, err = io.Copy(f, resp.Body)
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -113,6 +113,10 @@ func updateServiceBinary(osName string) (string, error) {
 		runSetup("schtasks.exe", "/End", "/TN", "Hostel machine connect")
 	}
 	if err := update.Replace(tmp, bin); err != nil {
+		if osName == config.OSWindows {
+			// The old binary is in place again: start the service again.
+			restartService(osName)
+		}
 		return "", err
 	}
 	res := fmt.Sprintf("updated %s from %s to %s", bin, have, newer)
