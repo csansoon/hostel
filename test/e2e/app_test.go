@@ -156,7 +156,7 @@ func (a *ptyApp) quit() {
 			a.t.Fatalf("the app ended with %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		a.t.Fatal("q did not end the app")
+		a.t.Fatalf("q did not end the app within 10 s; screen:\n%s", a.screen())
 	}
 	select {
 	case <-a.read:
