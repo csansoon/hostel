@@ -55,9 +55,11 @@ hostel acquire ios --task "QA the sign-in screen" --wait 1s
 ```
 
 With `--background`, a detached `hostel keep-place` process polls the lease
-until it is ready or ends, then stops. A ready lease then lives for
-`idle_timeout` (default 10 minutes) without a `hostel` command, so come back
-soon. `hostel release` ends the lease and the process.
+until it is ready or ends, then stops. Run the same `acquire` command again
+every few minutes: it continues the lease and takes the room when it is ready.
+A ready lease lives for `idle_timeout` (default 10 minutes) without a `hostel`
+command, and it holds the room meanwhile. `hostel release` ends the lease and
+the process.
 
 Exit codes of `acquire`:
 

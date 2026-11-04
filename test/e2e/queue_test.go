@@ -3,7 +3,7 @@
 package e2e
 
 import (
-	"os/exec"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -238,9 +238,28 @@ func TestAcquireBackground(t *testing.T) {
 	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "in the background"); !strings.Contains(r.stdout, "Lease "+kept+" is ready") {
 		t.Fatalf("acquire after the background wait: %s", r)
 	}
-	f.e.waitFor("the keeper stops", time.Minute, func() bool {
-		out, _ := exec.Command("pgrep", "-f", "keep-place --dir "+filepath.Join(f.e.home, "repo2")).Output()
-		return len(strings.TrimSpace(string(out))) == 0
+	// The keeper stops and removes its heartbeat.
+	beat := filepath.Join(f.e.home, "repo2", ".git", "hostel", "fakedevice", "keeper.json")
+	f.e.waitFor("the keeper stops", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
+
+	// A new waiting lease in the same worktree gets its own keeper at once;
+	// release stops it.
+	f.e.mustHostel("release")
+	f.waitSlotFree()
+	f.useRepo("repo")
+	f.acquire()
+	f.useRepo("repo2")
+	r = f.e.hostel("acquire", "fakedevice", "--task", "again", "--background")
+	if r.code != 75 {
+		t.Fatalf("a second acquire --background: %s", r)
+	}
+	again := createdID(t, r)
+	f.e.waitFor("the keeper of the new lease", 30*time.Second, func() bool {
+		data, err := os.ReadFile(beat)
+		return err == nil && strings.Contains(string(data), `"lease_id":"`+again+`"`)
 	})
+	f.e.mustHostel("release")
+	f.e.waitFor("the keeper stops after release", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
+	f.useRepo("repo")
 	f.e.mustHostel("release")
 }

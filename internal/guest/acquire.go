@@ -28,12 +28,12 @@ const maxPollRetry = 10 * time.Second
 
 // keepNote says how the place of a waiting lease is kept.
 func keepNote(l protocol.Lease, background bool, stderr io.Writer) {
-	idle := "soon"
+	idle := "a few minutes"
 	if l.IdleTimeoutSeconds > 0 {
-		idle = "within " + FormatDuration(time.Duration(l.IdleTimeoutSeconds)*time.Second)
+		idle = FormatDuration(time.Duration(l.IdleTimeoutSeconds) * time.Second)
 	}
 	if background {
-		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background; do other work, and run the same command again to continue (when the lease is ready, %s, or it ends)\n", l.ID, idle)
+		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again every few minutes: it continues the lease, and takes the room when it is ready (a ready room waits %s for you)\n", l.ID, idle)
 		return
 	}
 	keep := "a few minutes"
@@ -224,10 +224,12 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 	var seen protocol.Lease
 	for {
 		remaining := time.Until(deadline)
-		if remaining <= 0 {
+		// Less than 1 s left: a poll would ask for wait=0 and answer at once
+		// (a burst of polls); stop here.
+		if remaining < time.Second {
 			if seen.State == protocol.LeaseQueued || seen.State == protocol.LeaseAssigned ||
 				seen.State == protocol.LeaseProvisioning || seen.State == protocol.LeasePreparing {
-				keepNote(seen, l.background, stderr)
+				keepNote(seen, l.background || keeperAlive(l.st), stderr)
 			}
 			return notFinished(stderr)
 		}

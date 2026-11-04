@@ -23,16 +23,19 @@ const (
 	// keeper writes one after each poll, at most pollWait apart).
 	keeperFresh = 2*pollWait + 15*time.Second
 	// keeperGiveUp: a keeper stops after this long without an answer from the
-	// server (the server ends the waiting lease anyway after poll_timeout).
-	keeperGiveUp = 10 * time.Minute
+	// server. It is long: after a restart, the server gives waiting leases a
+	// new poll_timeout, so a keeper that waits out an outage keeps the place.
+	keeperGiveUp = time.Hour
 	// keeperMaxLife bounds a keeper in any case.
 	keeperMaxLife = 24 * time.Hour
 )
 
-// keeperBeat is keeper.json in the lease's state directory.
+// keeperBeat is keeper.json in the lease's state directory: the keeper's own
+// ID, the lease that it keeps, and its last heartbeat.
 type keeperBeat struct {
-	ID string    `json:"id"`
-	At time.Time `json:"at"`
+	ID      string    `json:"id"`
+	LeaseID string    `json:"lease_id"`
+	At      time.Time `json:"at"`
 }
 
 func keeperPath(st *State) string { return filepath.Join(st.Dir, "keeper.json") }
@@ -59,7 +62,7 @@ func writeBeat(st *State, b keeperBeat) error {
 // none runs: a detached process that polls the lease, so that the server keeps
 // its place in the queue while the agent does other work.
 func ensureKeeper(st *State) error {
-	if b, ok := readBeat(st); ok && time.Since(b.At) < keeperFresh {
+	if keeperAlive(st) {
 		return nil
 	}
 	exe, err := os.Executable()
@@ -77,6 +80,12 @@ func ensureKeeper(st *State) error {
 	return nil
 }
 
+// keeperAlive reports a keeper with a fresh heartbeat for the lease of st.
+func keeperAlive(st *State) bool {
+	b, ok := readBeat(st)
+	return ok && b.LeaseID == st.LeaseID && time.Since(b.At) < keeperFresh
+}
+
 // KeepPlace is the hidden command "hostel keep-place --dir <state dir>": it
 // polls a waiting lease until it is ready or ends. It stops when another
 // keeper takes over, when the worktree has another lease, after keeperGiveUp
@@ -89,15 +98,29 @@ func KeepPlace(args []string, stdout, stderr io.Writer) int {
 	}
 	st, ok, err := loadStateDir(*dir)
 	if err != nil || !ok || st.Final {
+		fmt.Fprintf(stderr, "hostel keep-place: no waiting lease in %s (%v); stopping\n", *dir, err)
 		return 0
 	}
 	id := make([]byte, 8)
-	rand.Read(id)
-	me := hex.EncodeToString(id)
-	beat := func() error { return writeBeat(st, keeperBeat{ID: me, At: time.Now()}) }
-	if err := beat(); err != nil {
+	if _, err := rand.Read(id); err != nil {
 		return fail(stderr, err)
 	}
+	me := hex.EncodeToString(id)
+	beat := func() {
+		// A failed write (for example a reader that holds the file on
+		// Windows) is not fatal: the next poll writes again.
+		if err := writeBeat(st, keeperBeat{ID: me, LeaseID: st.LeaseID, At: time.Now()}); err != nil {
+			fmt.Fprintf(stderr, "hostel keep-place: heartbeat: %v\n", err)
+		}
+	}
+	beat()
+	// When it stops, the keeper removes its own heartbeat, so that the next
+	// acquire --background starts a new keeper at once.
+	defer func() {
+		if b, ok := readBeat(st); ok && b.ID == me {
+			os.Remove(keeperPath(st))
+		}
+	}()
 	api, err := apiClient()
 	if err != nil {
 		return fail(stderr, err)
@@ -119,7 +142,10 @@ func KeepPlace(args []string, stdout, stderr io.Writer) int {
 		cancel()
 		if err != nil {
 			var apiErr *client.APIError
-			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound || !transient(err) || time.Since(lastOK) > keeperGiveUp {
+			// Server errors (5xx) and network errors pass; a refused token,
+			// a gone lease, or a bad request end the keeper.
+			serverErr := errors.As(err, &apiErr) && apiErr.Status >= 500
+			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound || !serverErr && !transient(err) || time.Since(lastOK) > keeperGiveUp {
 				fmt.Fprintf(stderr, "hostel keep-place: lease %s: %v; stopping\n", leaseID, err)
 				return 0
 			}
@@ -128,9 +154,7 @@ func KeepPlace(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		retry, lastOK, since = 0, time.Now(), l.Revision
-		if err := beat(); err != nil {
-			return fail(stderr, err)
-		}
+		beat()
 		if l.State != protocol.LeaseQueued && l.State != protocol.LeaseAssigned && l.State != protocol.LeaseProvisioning && l.State != protocol.LeasePreparing {
 			fmt.Fprintf(stderr, "hostel keep-place: lease %s is %s; stopping\n", leaseID, l.State)
 			return 0
