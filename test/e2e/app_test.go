@@ -447,6 +447,8 @@ func TestAppFrontDesk(t *testing.T) {
 		t.Fatalf("the app printed no code after quit:\n%s", a.screen())
 	}
 	f.e.connect(code, "bob")
+	// aaron comes before bob in the list (names in order).
+	f.e.newUser("aaron", "member")
 
 	a = f.e.startApp(f.e.home, admin...)
 	openGuests(a)
@@ -454,6 +456,13 @@ func TestAppFrontDesk(t *testing.T) {
 	a.waitFor(10*time.Second, `▌ bob\s+member\s+▌ 1 computer`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `Make an admin\s+r`, `Remove\s+x`)
+	// The list changes while the popup is open (the list reloads with the
+	// next status answer, at the latest after the long poll): the options
+	// keep bob.
+	if r := f.e.adminHostel("config", "users", "remove", "aaron"); r.code != 0 {
+		t.Fatalf("remove aaron: %s", r)
+	}
+	a.waitGone(90*time.Second, `(?m)^ +aaron\s`)
 	a.in("r")
 	a.waitFor(10*time.Second, `Make bob an admin\?`)
 	a.in("y")

@@ -314,21 +314,23 @@ func (p *platformPage) keys(m *model) []binding {
 // line; each one runs the key of its letter.
 func (p *platformPage) actions(m *model, q []protocol.LeaseStatus, i int) []option {
 	l := q[i]
-	act := func(label, key string) option {
-		return option{label: label, key: key, run: func() tea.Cmd { return p.key(m, runeKey(key)) }}
+	// The options keep the lease and the queue of this moment; the popup
+	// closes when the queue changes (cancelOnChange).
+	act := func(label, key string, run func()) option {
+		return option{label: label, key: key, run: func() tea.Cmd { run(); return nil }}
 	}
 	var out []option
 	if p.canEnd(m, l) {
-		out = append(out, act("End the lease", "e"))
+		out = append(out, act("End the lease", "e", func() { p.endLease(m, l) }))
 	}
 	if m.admin() {
 		if i > 0 {
-			out = append(out, act("Move up", "K"))
+			out = append(out, act("Move up", "K", func() { p.moveUp(m, q, i) }))
 		}
 		if i < len(q)-1 {
-			out = append(out, act("Move down", "J"))
+			out = append(out, act("Move down", "J", func() { p.moveDown(m, q, i) }))
 		}
-		out = append(out, act("Change the priority", "p"))
+		out = append(out, act("Change the priority", "p", func() { p.priority(m, l) }))
 	}
 	return out
 }
@@ -367,6 +369,7 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	case "enter":
 		if acts := p.actions(m, q, i); len(acts) > 0 {
 			m.menu(clean(l.User), fmt.Sprintf("%q · %s priority", clean(l.Task), l.Priority), acts)
+			p.cancelOnChange(m, q)
 		}
 	case "up", "k":
 		if i > 0 {
@@ -381,50 +384,66 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 		}
 	case "e":
 		if p.canEnd(m, l) {
-			m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
-				return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
-			})
+			p.endLease(m, l)
 		}
 	case "shift+up", "K":
 		if m.admin() && i > 0 {
-			before := q[i-1]
-			m.ask("Move up", fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
-				return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: before.ID}, "Moved.")
-			})
-			p.cancelOnChange(m, q)
+			p.moveUp(m, q, i)
 		}
 	case "shift+down", "J":
 		if m.admin() && i < len(q)-1 {
-			next := q[i+1]
-			// Down: before the lease after the next one; at the end of the
-			// queue, the next lease moves up instead (the API has no "last").
-			move := func() tea.Cmd {
-				return m.do("POST", "/v1/leases/"+next.ID+"/move", protocol.MoveRequest{Before: l.ID}, "Moved.")
-			}
-			if i+2 < len(q) {
-				after := q[i+2]
-				move = func() tea.Cmd {
-					return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: after.ID}, "Moved.")
-				}
-			}
-			m.ask("Move down", fmt.Sprintf("Move %s (%q) down, after %s?", clean(l.User), clean(l.Task), clean(next.User)), move)
-			p.cancelOnChange(m, q)
+			p.moveDown(m, q, i)
 		}
 	case "p":
 		if m.admin() {
-			set := func(prio string) func() tea.Cmd {
-				return func() tea.Cmd {
-					return m.do("POST", "/v1/leases/"+l.ID+"/priority", protocol.PriorityRequest{Priority: prio}, "Priority of "+clean(l.User)+": "+prio+".")
-				}
-			}
-			m.menu("Priority", fmt.Sprintf("Priority of %s (%q), now %s.", clean(l.User), clean(l.Task), l.Priority), []option{
-				{label: "High", sub: "Before the normal and low leases", key: "h", run: set("high")},
-				{label: "Normal", sub: "The default", key: "n", run: set("normal")},
-				{label: "Low", sub: "After the high and normal leases", key: "l", run: set("low")},
-			})
+			p.priority(m, l)
 		}
 	}
 	return nil
+}
+
+func (p *platformPage) endLease(m *model, l protocol.LeaseStatus) {
+	m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+		return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
+	})
+}
+
+func (p *platformPage) moveUp(m *model, q []protocol.LeaseStatus, i int) {
+	l, before := q[i], q[i-1]
+	m.ask("Move up", fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
+		return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: before.ID}, "Moved.")
+	})
+	p.cancelOnChange(m, q)
+}
+
+func (p *platformPage) moveDown(m *model, q []protocol.LeaseStatus, i int) {
+	l, next := q[i], q[i+1]
+	// Down: before the lease after the next one; at the end of the queue,
+	// the next lease moves up instead (the API has no "last").
+	move := func() tea.Cmd {
+		return m.do("POST", "/v1/leases/"+next.ID+"/move", protocol.MoveRequest{Before: l.ID}, "Moved.")
+	}
+	if i+2 < len(q) {
+		after := q[i+2]
+		move = func() tea.Cmd {
+			return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: after.ID}, "Moved.")
+		}
+	}
+	m.ask("Move down", fmt.Sprintf("Move %s (%q) down, after %s?", clean(l.User), clean(l.Task), clean(next.User)), move)
+	p.cancelOnChange(m, q)
+}
+
+func (p *platformPage) priority(m *model, l protocol.LeaseStatus) {
+	set := func(prio string) func() tea.Cmd {
+		return func() tea.Cmd {
+			return m.do("POST", "/v1/leases/"+l.ID+"/priority", protocol.PriorityRequest{Priority: prio}, "Priority of "+clean(l.User)+": "+prio+".")
+		}
+	}
+	m.menu("Priority", fmt.Sprintf("Priority of %s (%q), now %s.", clean(l.User), clean(l.Task), l.Priority), []option{
+		{label: "High", sub: "Before the normal and low leases", key: "h", run: set("high")},
+		{label: "Normal", sub: "The default", key: "n", run: set("normal")},
+		{label: "Low", sub: "After the high and normal leases", key: "l", run: set("low")},
+	})
 }
 
 // cancelOnChange makes the open question stale when the queue order is not q

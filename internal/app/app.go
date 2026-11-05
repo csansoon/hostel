@@ -174,6 +174,7 @@ func (m *model) useGuest(g *config.Guest) {
 func (m *model) checkOut(note string) {
 	m.guest, m.c = nil, nil
 	m.gen++
+	m.st, m.loaded = protocol.Status{}, false
 	m.pages, m.pop, m.msg, m.err = []page{newCheckIn(note)}, nil, "", ""
 }
 
@@ -262,7 +263,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		reconnected := m.err != ""
 		m.st, m.loaded, m.err = msg.st, true, ""
 		if p := m.pop; p != nil && p.stale != nil && p.stale() {
-			m.pop, m.msg = nil, "The queue changed: the move is cancelled. Look again, and try again."
+			m.pop, m.msg = nil, "The queue changed: the question is cancelled. Look again, and try again."
 		}
 		now := time.Now()
 		for _, ms := range msg.st.Machines {

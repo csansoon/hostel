@@ -66,7 +66,9 @@ func checkOut(m *model) tea.Cmd {
 	}
 	m.warn("Check out", fmt.Sprintf("Check out from %s? Agents on this computer lose the connection too.", g.URL()), func() tea.Cmd {
 		return func() tea.Msg {
-			warning, err := connect.Disconnect(context.Background(), g)
+			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+			defer cancel()
+			warning, err := connect.Disconnect(ctx, g)
 			return checkedOutMsg{url: g.URL(), warning: warning, err: err}
 		}
 	})

@@ -63,6 +63,15 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--demo" {
+		// The app with made-up data, to try its screens without a server; it
+		// changes nothing on this computer.
+		if err := app.RunDemo(version.Version, stdout); err != nil {
+			fmt.Fprintln(stderr, "hostel:", err)
+			return 1
+		}
+		return 0
+	}
 	update.CleanOld()
 	if len(args) == 0 {
 		// People get the Hostel app; without a terminal (an agent, a pipe),
@@ -76,14 +85,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		printHelp(stderr)
 		return 2
-	}
-	if args[0] == "--demo" && len(args) == 1 {
-		// The app with made-up data, to try its screens without a server.
-		if err := app.RunDemo(version.Version, stdout); err != nil {
-			fmt.Fprintln(stderr, "hostel:", err)
-			return 1
-		}
-		return 0
 	}
 	switch args[0] {
 	case "--version":

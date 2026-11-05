@@ -403,21 +403,25 @@ func (p *machinePage) key(m *model, k tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		if i >= 0 && p.canEnd(m, leases[i]) {
+			// The option keeps the lease: the list can change meanwhile.
 			l := leases[i]
 			m.menu(clean(l.User), fmt.Sprintf("%q", clean(l.Task)), []option{
-				{label: "End the lease", key: "e", run: func() tea.Cmd { return p.key(m, runeKey("e")) }},
+				{label: "End the lease", key: "e", run: func() tea.Cmd { p.endLease(m, l); return nil }},
 			})
 		}
 	case "e":
 		if i >= 0 && p.canEnd(m, leases[i]) {
-			l := leases[i]
-			m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
-				p.loaded = time.Time{}
-				return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
-			})
+			p.endLease(m, leases[i])
 		}
 	}
 	return nil
+}
+
+func (p *machinePage) endLease(m *model, l protocol.LeaseStatus) {
+	m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+		p.loaded = time.Time{}
+		return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
+	})
 }
 
 // roomAdmin is Front desk › Rooms (admins): Add a room first, then the

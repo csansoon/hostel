@@ -63,6 +63,15 @@ func (m *model) moving() bool {
 			return true
 		}
 	}
+	// Turning glyphs show only on these pages.
+	switch m.top().(type) {
+	case *mainMenu, *lobby, *platformPage, *rooms, *roomAdmin, *machinePage:
+	default:
+		return false
+	}
+	if m.help {
+		return false
+	}
 	if slices.ContainsFunc(m.st.Leases, func(l protocol.LeaseStatus) bool { return l.State != protocol.LeaseReady }) {
 		return true
 	}

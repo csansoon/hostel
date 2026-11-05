@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,7 +67,14 @@ func (p *guestList) other(m *model, msg tea.Msg) tea.Cmd {
 			gen := m.gen
 			return tea.Tick(retryAfter, func(time.Time) tea.Msg { return usersRetryMsg{gen: gen} })
 		}
+		// The selection follows the person when the list changes.
+		old, onUser := p.user(m)
 		p.users, p.err = msg.users, ""
+		if onUser {
+			if i := slices.IndexFunc(p.users, func(u protocol.User) bool { return u.Name == old.Name }); i >= 0 {
+				p.sel = len(p.actions(m)) + i
+			}
+		}
 		p.sel = min(p.sel, len(p.actions(m))+max(len(p.users)-1, 0))
 	case usersRetryMsg:
 		if msg.gen == m.gen {
@@ -206,42 +214,45 @@ func (p *guestList) key(m *model, k tea.KeyMsg) tea.Cmd {
 		if acts := p.actions(m); p.sel < len(acts) {
 			return acts[p.sel].run(m)
 		}
+		// The options keep the person: the list can change while the
+		// popup is open.
 		if u, ok := p.user(m); ok && m.admin() {
 			m.menu(clean(u.Name), clean(u.Role), []option{
-				{label: map[bool]string{true: "Make a member", false: "Make an admin"}[u.Role == protocol.RoleAdmin], key: "r", run: func() tea.Cmd { return p.key(m, runeKey("r")) }},
-				{label: "Remove", key: "x", danger: true, run: func() tea.Cmd { return p.key(m, runeKey("x")) }},
+				{label: map[bool]string{true: "Make a member", false: "Make an admin"}[u.Role == protocol.RoleAdmin], key: "r", run: func() tea.Cmd { askRole(m, u); return nil }},
+				{label: "Remove", key: "x", danger: true, run: func() tea.Cmd { askRemove(m, u); return nil }},
 			})
 		}
 		return nil
 	}
 	u, ok := p.user(m)
-	if !ok {
-		p.sel = move(p.sel, len(p.actions(m))+len(p.users), k.String())
-		return nil
-	}
-	path := "/v1/users/" + url.PathEscape(u.Name)
-	switch k.String() {
-	case "r":
-		if m.admin() {
-			role := protocol.RoleAdmin
-			if u.Role == protocol.RoleAdmin {
-				role = protocol.RoleMember
-			}
-			title := map[string]string{protocol.RoleAdmin: "Make an admin", protocol.RoleMember: "Make a member"}[role]
-			m.ask(title, fmt.Sprintf("Make %s %s?", clean(u.Name), map[string]string{protocol.RoleAdmin: "an admin", protocol.RoleMember: "a member"}[role]), func() tea.Cmd {
-				return m.do("PATCH", path, protocol.SetUserRequest{Role: role}, clean(u.Name)+" is now "+role+".")
-			})
-		}
-	case "x":
-		if m.admin() {
-			m.warn("Remove", fmt.Sprintf("Remove %s? Their computers are disconnected and their leases end.", clean(u.Name)), func() tea.Cmd {
-				return m.do("DELETE", path, nil, "Removed "+clean(u.Name)+".")
-			})
-		}
+	switch {
+	case ok && m.admin() && k.String() == "r":
+		askRole(m, u)
+	case ok && m.admin() && k.String() == "x":
+		askRemove(m, u)
 	default:
 		p.sel = move(p.sel, len(p.actions(m))+len(p.users), k.String())
 	}
 	return nil
+}
+
+// askRole asks before u gets the other role.
+func askRole(m *model, u protocol.User) {
+	role := protocol.RoleAdmin
+	if u.Role == protocol.RoleAdmin {
+		role = protocol.RoleMember
+	}
+	title := map[string]string{protocol.RoleAdmin: "Make an admin", protocol.RoleMember: "Make a member"}[role]
+	m.ask(title, fmt.Sprintf("Make %s %s?", clean(u.Name), map[string]string{protocol.RoleAdmin: "an admin", protocol.RoleMember: "a member"}[role]), func() tea.Cmd {
+		return m.do("PATCH", "/v1/users/"+url.PathEscape(u.Name), protocol.SetUserRequest{Role: role}, clean(u.Name)+" is now "+role+".")
+	})
+}
+
+// askRemove asks before u is removed.
+func askRemove(m *model, u protocol.User) {
+	m.warn("Remove", fmt.Sprintf("Remove %s? Their computers are disconnected and their leases end.", clean(u.Name)), func() tea.Cmd {
+		return m.do("DELETE", "/v1/users/"+url.PathEscape(u.Name), nil, "Removed "+clean(u.Name)+".")
+	})
 }
 
 // addMachine makes a machine code (admins): the name, the platforms, and the

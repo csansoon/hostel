@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,8 +52,14 @@ func (m *model) popupKey(k tea.KeyMsg) tea.Cmd {
 			m.msg = "Cancelled."
 			return nil
 		}
-		m.msg = "Working …"
-		return o.run()
+		// "Working …" only when a request starts; an option can also open
+		// the next popup or do nothing.
+		m.msg = ""
+		cmd := o.run()
+		if cmd != nil && m.msg == "" {
+			m.msg = "Working …"
+		}
+		return cmd
 	}
 	switch k.String() {
 	case "up", "k":
@@ -114,7 +121,7 @@ func (p *popup) box(maxWidth int) []string {
 	}
 	add("")
 	border := dimStyle.Render
-	title := " " + accentStyle.Bold(true).Render(clean(p.title)) + " "
+	title := " " + accentStyle.Bold(true).Render(ansi.Truncate(clean(p.title), iw-6, "…")) + " "
 	hint := " " + mutedStyle.Render("↑↓ enter esc") + " "
 	out := []string{border("╭─") + title + border(strings.Repeat("─", max(iw-1-lipgloss.Width(title), 0))+"╮")}
 	for _, l := range body {
@@ -128,14 +135,18 @@ func (p *popup) box(maxWidth int) []string {
 // overlay draws the popup over the body lines, which turn gray.
 func (p *popup) overlay(lines []string, w int) []string {
 	box := p.box(min(w-4, 76))
-	bw := lipgloss.Width(box[0])
+	bw := lipgloss.Width(box[len(box)-1])
 	x := max((w-bw)/2, 0)
-	y := max((len(lines)-len(box))/3, 1)
+	y := max(min((len(lines)-len(box))/3, len(lines)-len(box)), 0)
 	out := make([]string, len(lines))
 	for i, l := range lines {
-		gray := dimStyle.Render(cell(ansi.Strip(l), w))
+		plain := cell(ansi.Strip(l), w)
+		gray := dimStyle.Render(plain)
 		if j := i - y; j >= 0 && j < len(box) {
-			gray = cell(ansi.Cut(gray, 0, x), x) + "\x1b[0m" + box[j] + dimStyle.Render(ansi.Cut(cell(ansi.Strip(l), w), x+bw, w))
+			// The box and the text after it start at fixed columns (CHA):
+			// an emoji behind the box can be one or two cells wide.
+			gray = dimStyle.Render(ansi.Cut(plain, 0, x)) + fmt.Sprintf("\x1b[0m\x1b[%dG", x+1) + box[j] +
+				fmt.Sprintf("\x1b[%dG", x+bw+1) + dimStyle.Render(ansi.Cut(plain, x+bw, w))
 		}
 		out[i] = gray
 	}
