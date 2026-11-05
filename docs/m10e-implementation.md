@@ -403,12 +403,17 @@ What remains:
   repository's mise tools in general words only (the server does not know the
   repository). `install.sh --server` still copies the platform scripts, and a
   `server.toml` with `platforms_dir` (written by it before M10e) stops the
-  server at start: make the key a warning, or tell the owner to delete it.
+  server at start. Decision: the server ignores `platforms_dir` and logs a
+  warning (the update never makes the server unreachable), and the install
+  script no longer copies tools. "Waiting behind N" counts only leases that
+  still wait (a lease that the scheduler placed does not wait).
 - **Phase 6 (app).** The Lobby shows the tools of `GET /v1/tools` in the
   simplest way (the tool page still says "Devices" for the options); the
   machine page shows the configured tools, not the inventory; the demo data
   uses the old names (ios, android, macos, windows, linux) as tool names.
 - **Estimated wait.** It is (waiting behind + 1) × the median lease time on the
   candidate machines ÷ their slots, without the creation time of a new room.
+  Phase 5 adds the median creation time when a new room is necessary (design
+  section 5).
 - **Smoke tests** (real machines) are moved to the tools (`macos-desktop`,
   `windows-desktop`, a lease without tools) but did not run.
