@@ -300,7 +300,10 @@ mise files. `install.sh --server` no longer copies the tools (phase 5): the
 server uses the tools in its binary.
 The stored platform revisions are dropped; the default tools come with the
 binary. Leases that are open at the update end with the reason "the server was
-updated to tools; acquire again". The minimum guest version goes up to the M10e
+updated to tools; acquire again". Update a server with no open lease: the cleanup
+of a lease from before M10e has no tool data, so it cannot stop an old emulator
+or simulator, and its slot can stay broken until an admin repairs the room
+(owner decision: no code for the old leases). The minimum guest version goes up to the M10e
 release (M10d: HTTP 426 and "run hostel update").
 
 ## 9. Build order (phases; each ends with review, tests, a commit)
