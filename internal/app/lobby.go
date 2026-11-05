@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
@@ -74,29 +75,51 @@ func (p *lobby) body(m *model) string {
 	case !m.platformsRead:
 		return "\n  Reading the platforms …\n"
 	case len(m.platforms) == 0:
-		return "\n  No platform has a machine yet. An admin adds a machine in Front desk.\n"
+		return "\n  No platform has a machine yet. An admin adds a machine in Front desk › Rooms.\n"
 	}
 	stale := ""
 	if m.platformsErr != "" {
 		stale = "  " + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n"
 	}
-	var rows [][]string
-	for _, pl := range m.platforms {
-		free, total := freeMachines(m, pl), len(onlineMachines(m, pl))
-		vacant := fg(colGreen).Render(fmt.Sprintf("%d of %d vacant", free, total))
-		switch {
-		case total == 0:
-			vacant = mutedStyle.Render("no machine online")
-		case free == 0:
-			vacant = fg(colBlue).Render(fmt.Sprintf("0 of %d vacant", total))
-		}
-		line := mutedStyle.Render("nobody waiting")
-		if pl.Queue > 0 {
-			line = fg(colYellow).Render(fmt.Sprintf("%d waiting", pl.Queue)) + mutedStyle.Render(" · next room "+waitText(pl.EstimatedWaitSeconds))
-		}
-		rows = append(rows, []string{clean(pl.Name), vacant, line})
+	w := contentWidth(m)
+	var b strings.Builder
+	b.WriteString(stale + "\n")
+	for i, pl := range m.platforms {
+		total := len(onlineMachines(m, pl))
+		sub := clean(pl.Description) + " · " + plural(len(pl.Machines), "machine")
+		b.WriteString(item(w, i == p.sel, clean(pl.Name), sub, m.vacancy(pl), waitLine(pl, total)) + "\n\n")
 	}
-	return stale + "\n" + table(rows, p.sel, []string{"PLATFORM", "MACHINES", "WAITING LINE"})
+	return b.String()
+}
+
+// vacancy is a platform's free machines: ● 2 vacant, ◉ all occupied, or no
+// machine online; it glows when it changes.
+func (m *model) vacancy(pl protocol.Platform) string {
+	free, total := freeMachines(m, pl), len(onlineMachines(m, pl))
+	s := state{fmt.Sprintf("%d vacant", free), colGreen, ""}
+	glyph := "●"
+	switch {
+	case total == 0:
+		return mutedStyle.Render("○ no machine online")
+	case free == 0:
+		s, glyph = state{"all occupied", colBlue, ""}, "◉"
+	}
+	if m.glowing("p:" + pl.Name) {
+		return fg(s.color).Render(glyph) + " " + lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(s.word)
+	}
+	return fg(s.color).Render(glyph + " " + s.word)
+}
+
+// waitLine is a platform's waiting line in a few words.
+func waitLine(pl protocol.Platform, online int) string {
+	if pl.Queue == 0 {
+		return mutedStyle.Render("nobody waiting")
+	}
+	next := "next room " + waitText(pl.EstimatedWaitSeconds)
+	if online == 0 {
+		next = "no machine online"
+	}
+	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", pl.Queue)) + mutedStyle.Render(" · "+next)
 }
 
 func (p *lobby) hint(m *model) string {
@@ -111,7 +134,7 @@ func (p *lobby) keys(m *model) []binding { return []binding{{"↑↓", "move"}, 
 
 func (p *lobby) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if k.String() == "enter" && p.sel < len(m.platforms) {
-		return m.open(&platformPage{name: m.platforms[p.sel].Name})
+		return m.open(&platformPage{name: m.platforms[p.sel].Name, onMachines: true})
 	}
 	p.sel = move(p.sel, len(m.platforms), k.String())
 	return nil
@@ -158,77 +181,73 @@ func (p *platformPage) body(m *model) string {
 		return "\n  This platform is not on the server any more.\n"
 	}
 	now := time.Now()
-	w := m.screenWidth()
-	var about strings.Builder
-	if len(pl.Devices) > 0 {
-		about.WriteString(field("Devices", chips(pl.Devices, colBlue)+mutedStyle.Render(fmt.Sprintf("  up to %d", pl.MaxDevices))) + "\n")
-	}
-	typical := mutedStyle.Render("not known yet")
-	if pl.TypicalLeaseSeconds > 0 {
-		typical = boldStyle.Render(ago(time.Duration(pl.TypicalLeaseSeconds) * time.Second))
-	}
-	about.WriteString(field("Typical stay", typical) + "\n")
-	next := fg(colGreen).Render("now")
-	if pl.EstimatedWaitSeconds > 0 {
-		next = fg(colYellow).Render(waitText(pl.EstimatedWaitSeconds))
-	}
-	about.WriteString(field("Next room", next))
-
-	lw, rw, wide := side(w)
+	w := contentWidth(m)
 	machines := p.machines(m, pl)
-	var mrows [][]string
-	for _, ms := range machines {
-		s := machineState(m.st, ms, now)
-		mrows = append(mrows, []string{s.dot() + " " + clean(ms.Key), fg(s.color).Render(s.word)})
-	}
-	msel := -1
-	if p.onMachines {
-		_, msel = p.selectedMachine(m, pl)
-	}
-	free := freeMachines(m, pl)
-	vacantColor := colGreen
-	if free == 0 {
-		vacantColor = colBlue
-	}
-	mbody := table(mrows, msel, nil)
-	if len(mrows) == 0 {
-		mbody = mutedStyle.Render("No machine for " + clean(pl.Name) + " is online.")
-	}
-	mcard := card(boldStyle.Render("Machines")+" "+fg(vacantColor).Render(fmt.Sprintf("%d of %d vacant", free, len(machines))), mbody, lw, p.onMachines)
-
-	q, sel := p.selected(m)
-	var qbody string
+	q, qsel := p.selected(m)
 	if len(q) == 0 {
-		qbody = mutedStyle.Render("Nobody is waiting.")
-	} else {
-		var rows [][]string
-		for _, l := range q {
-			pos := "-"
-			if l.Position > 0 {
-				pos = fmt.Sprintf("%d", l.Position)
-			}
-			prio := mutedStyle.Render("○ " + l.Priority)
-			switch l.Priority {
-			case "high":
-				prio = fg(colRed).Render("● high")
-			case "normal":
-				prio = fg(colYellow).Render("● normal")
-			}
-			rows = append(rows, []string{accentStyle.Render(pos), clean(l.User), clean(l.Task), prio, ago(now.Sub(l.CreatedAt)), fg(colYellow).Render(waitText(l.EstimatedWaitSeconds))})
-		}
-		if p.onMachines {
-			sel = -1
-		}
-		qbody = table(rows, sel, []string{"#", "GUEST", "TASK", "PRIORITY", "WAITING", "ROOM IN"})
+		p.onMachines = true
 	}
-	qcard := card(boldStyle.Render("Waiting line")+" "+fg(colYellow).Render(fmt.Sprint(len(q))), qbody, rw, !p.onMachines)
-
-	head := boldStyle.Render(clean(pl.Name)) + mutedStyle.Render(" · "+clean(pl.Description))
-	stale := ""
+	var b strings.Builder
 	if m.platformsErr != "" {
-		stale = "  " + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n"
+		b.WriteString(margin + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n")
 	}
-	return stale + "\n" + card(head, about.String(), w, false) + "\n" + join(mcard, qcard, wide)
+
+	typical := "typical stay not known yet"
+	if pl.TypicalLeaseSeconds > 0 {
+		typical = "typical stay " + ago(time.Duration(pl.TypicalLeaseSeconds)*time.Second)
+	}
+	b.WriteString(head(clean(pl.Name), clean(pl.Description), m.vacancy(pl)+"     "+waitLine(pl, len(machines))+"     "+mutedStyle.Render(typical)))
+
+	// The machines: one line each.
+	b.WriteString(heading("Machines", w) + "\n\n")
+	if len(machines) == 0 {
+		b.WriteString(margin + "   " + mutedStyle.Render("No machine for "+clean(pl.Name)+" is online.") + "\n")
+	}
+	_, msel := p.selectedMachine(m, pl)
+	nameW := 0
+	for _, ms := range machines {
+		nameW = max(nameW, lipgloss.Width(clean(ms.Key)))
+	}
+	for i, ms := range machines {
+		s := machineState(m.st, ms, now)
+		word := m.word("m:"+ms.Key, s)
+		line := s.dot() + " " + cell(boldStyle.Render(clean(ms.Key)), nameW) + "   " + cell(word, len("No new leases")) + "   " + mutedStyle.Render(s.detail)
+		b.WriteString(row(w, p.onMachines && i == msel, line) + "\n")
+	}
+
+	// The waiting line: two lines each.
+	b.WriteString("\n\n" + heading("Waiting line", w) + "\n\n")
+	if len(q) == 0 {
+		b.WriteString(margin + "   " + mutedStyle.Render("Nobody is waiting.") + "\n\n")
+	}
+	for i, l := range q {
+		pos := "–"
+		if l.Position > 0 {
+			pos = fmt.Sprint(l.Position)
+		}
+		prio := l.Priority + " priority"
+		switch l.Priority {
+		case "high":
+			prio = fg(colRed).Render("▲ high priority")
+		case "low":
+			prio = mutedStyle.Render("▼ low priority")
+		}
+		title := pos + "  " + clean(l.User) + "  " + fmt.Sprintf("%q", clean(l.Task))
+		sub := "   " + prio + mutedStyle.Render(" · waiting "+ago(now.Sub(l.CreatedAt)))
+		right := fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + " room in " + waitText(l.EstimatedWaitSeconds))
+		b.WriteString(item(w, !p.onMachines && i == qsel, title, sub, right, "") + "\n\n")
+	}
+
+	// The devices.
+	if len(pl.Devices) > 0 {
+		b.WriteString("\n\n" + heading("Devices", w) + "\n\n")
+		var ds []string
+		for _, d := range pl.Devices {
+			ds = append(ds, fg(colBlue).Render(clean(d)))
+		}
+		b.WriteString(margin + "   " + strings.Join(ds, "    ") + "      " + mutedStyle.Render(fmt.Sprintf("up to %d at the same time", pl.MaxDevices)) + "\n")
+	}
+	return b.String()
 }
 
 // selectedMachine returns the machines of the card and the index of the
@@ -276,22 +295,48 @@ func (p *platformPage) canEnd(m *model, l protocol.LeaseStatus) bool {
 }
 
 func (p *platformPage) keys(m *model) []binding {
-	ks := []binding{{"↑↓", "move"}, {"tab", "next card"}}
+	ks := []binding{{"↑↓", "move"}, {"tab", "next section"}}
 	if p.onMachines {
-		return append(ks, binding{"enter", "open the machine"})
+		pl, _ := p.platform(m)
+		if ms, _ := p.selectedMachine(m, pl); len(ms) > 0 {
+			ks = append(ks, binding{"enter", "open the machine"})
+		}
+		return ks
 	}
 	q, sel := p.selected(m)
-	if sel >= 0 && p.canEnd(m, q[sel]) {
-		ks = append(ks, binding{"e", "end lease"})
-	}
-	if m.admin() && len(q) > 0 {
-		if len(q) > 1 {
-			ks = append(ks, binding{"⇧↑↓", "reorder"})
-		}
-		ks = append(ks, binding{"p", "priority"})
+	if sel >= 0 && len(p.actions(m, q, sel)) > 0 {
+		ks = append(ks, binding{"enter", "actions"})
 	}
 	return ks
 }
+
+// actions are what the user can do with the selected lease of the waiting
+// line; each one runs the key of its letter.
+func (p *platformPage) actions(m *model, q []protocol.LeaseStatus, i int) []option {
+	l := q[i]
+	// The options keep the lease and the queue of this moment; the popup
+	// closes when the queue changes (cancelOnChange).
+	act := func(label, key string, run func()) option {
+		return option{label: label, key: key, run: func() tea.Cmd { run(); return nil }}
+	}
+	var out []option
+	if p.canEnd(m, l) {
+		out = append(out, act("End the lease", "e", func() { p.endLease(m, l) }))
+	}
+	if m.admin() {
+		if i > 0 {
+			out = append(out, act("Move up", "K", func() { p.moveUp(m, q, i) }))
+		}
+		if i < len(q)-1 {
+			out = append(out, act("Move down", "J", func() { p.moveDown(m, q, i) }))
+		}
+		out = append(out, act("Change the priority", "p", func() { p.priority(m, l) }))
+	}
+	return out
+}
+
+// runeKey is the key message of a letter.
+func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
 func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if k.String() == "tab" || k.String() == "shift+tab" {
@@ -301,6 +346,11 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if p.onMachines {
 		pl, _ := p.platform(m)
 		ms, i := p.selectedMachine(m, pl)
+		// Down from the last machine goes on to the waiting line.
+		if q, _ := p.selected(m); (k.String() == "down" || k.String() == "j") && i == len(ms)-1 && len(q) > 0 {
+			p.onMachines, p.sel = false, q[0].ID
+			return nil
+		}
 		if i < 0 {
 			return nil
 		}
@@ -316,9 +366,17 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	}
 	l := q[i]
 	switch k.String() {
+	case "enter":
+		if acts := p.actions(m, q, i); len(acts) > 0 {
+			m.menu(clean(l.User), fmt.Sprintf("%q · %s priority", clean(l.Task), l.Priority), acts)
+			p.cancelOnChange(m, q)
+		}
 	case "up", "k":
 		if i > 0 {
 			p.sel = q[i-1].ID
+		} else if pl, _ := p.platform(m); len(p.machines(m, pl)) > 0 {
+			ms := p.machines(m, pl)
+			p.onMachines, p.machineSel = true, ms[len(ms)-1].Key
 		}
 	case "down", "j":
 		if i < len(q)-1 {
@@ -326,47 +384,66 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 		}
 	case "e":
 		if p.canEnd(m, l) {
-			m.ask(fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
-				return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
-			})
+			p.endLease(m, l)
 		}
 	case "shift+up", "K":
 		if m.admin() && i > 0 {
-			before := q[i-1]
-			m.ask(fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
-				return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: before.ID}, "Moved.")
-			})
-			p.cancelOnChange(m, q)
+			p.moveUp(m, q, i)
 		}
 	case "shift+down", "J":
 		if m.admin() && i < len(q)-1 {
-			next := q[i+1]
-			// Down: before the lease after the next one; at the end of the
-			// queue, the next lease moves up instead (the API has no "last").
-			move := func() tea.Cmd {
-				return m.do("POST", "/v1/leases/"+next.ID+"/move", protocol.MoveRequest{Before: l.ID}, "Moved.")
-			}
-			if i+2 < len(q) {
-				after := q[i+2]
-				move = func() tea.Cmd {
-					return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: after.ID}, "Moved.")
-				}
-			}
-			m.ask(fmt.Sprintf("Move %s (%q) down, after %s?", clean(l.User), clean(l.Task), clean(next.User)), move)
-			p.cancelOnChange(m, q)
+			p.moveDown(m, q, i)
 		}
 	case "p":
 		if m.admin() {
-			set := func(prio string) func() tea.Cmd {
-				return func() tea.Cmd {
-					return m.do("POST", "/v1/leases/"+l.ID+"/priority", protocol.PriorityRequest{Priority: prio}, "Priority of "+clean(l.User)+": "+prio+".")
-				}
-			}
-			m.choose(fmt.Sprintf("Priority of %s (%q), now %s: h high · n normal · l low · another key cancels", clean(l.User), clean(l.Task), l.Priority),
-				map[string]func() tea.Cmd{"h": set("high"), "n": set("normal"), "l": set("low")})
+			p.priority(m, l)
 		}
 	}
 	return nil
+}
+
+func (p *platformPage) endLease(m *model, l protocol.LeaseStatus) {
+	m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+		return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
+	})
+}
+
+func (p *platformPage) moveUp(m *model, q []protocol.LeaseStatus, i int) {
+	l, before := q[i], q[i-1]
+	m.ask("Move up", fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
+		return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: before.ID}, "Moved.")
+	})
+	p.cancelOnChange(m, q)
+}
+
+func (p *platformPage) moveDown(m *model, q []protocol.LeaseStatus, i int) {
+	l, next := q[i], q[i+1]
+	// Down: before the lease after the next one; at the end of the queue,
+	// the next lease moves up instead (the API has no "last").
+	move := func() tea.Cmd {
+		return m.do("POST", "/v1/leases/"+next.ID+"/move", protocol.MoveRequest{Before: l.ID}, "Moved.")
+	}
+	if i+2 < len(q) {
+		after := q[i+2]
+		move = func() tea.Cmd {
+			return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: after.ID}, "Moved.")
+		}
+	}
+	m.ask("Move down", fmt.Sprintf("Move %s (%q) down, after %s?", clean(l.User), clean(l.Task), clean(next.User)), move)
+	p.cancelOnChange(m, q)
+}
+
+func (p *platformPage) priority(m *model, l protocol.LeaseStatus) {
+	set := func(prio string) func() tea.Cmd {
+		return func() tea.Cmd {
+			return m.do("POST", "/v1/leases/"+l.ID+"/priority", protocol.PriorityRequest{Priority: prio}, "Priority of "+clean(l.User)+": "+prio+".")
+		}
+	}
+	m.menu("Priority", fmt.Sprintf("Priority of %s (%q), now %s.", clean(l.User), clean(l.Task), l.Priority), []option{
+		{label: "High", sub: "Before the normal and low leases", key: "h", run: set("high")},
+		{label: "Normal", sub: "The default", key: "n", run: set("normal")},
+		{label: "Low", sub: "After the high and normal leases", key: "l", run: set("low")},
+	})
 }
 
 // cancelOnChange makes the open question stale when the queue order is not q
@@ -380,5 +457,5 @@ func (p *platformPage) cancelOnChange(m *model, q []protocol.LeaseStatus) {
 		return out
 	}
 	want, name := ids(q), p.name
-	m.confirm.stale = func() bool { return !slices.Equal(want, ids(queued(m.st, name))) }
+	m.pop.stale = func() bool { return !slices.Equal(want, ids(queued(m.st, name))) }
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,21 +19,23 @@ func newMainMenu() *mainMenu { return &mainMenu{} }
 // description for the footer, and its page (nil for Update, which asks and
 // runs).
 type menuEntry struct {
-	icon, label, hint string
-	count             func(m *model) string
-	open              func() page
+	icon, label, sub, hint string
+	count                  func(m *model) string
+	open                   func() page
 }
 
 func menuEntries(m *model) []menuEntry {
 	entries := []menuEntry{
-		{"⌂", "Lobby", "Lobby: the platforms, what each can run, which machines are free, and who waits.",
+		{"🛎️", "Front desk", "People, rooms, this server, check out", "Front desk: the people on this server, its rooms, the server itself, and check out.",
+			func(m *model) string { return "" }, func() page { return newFrontDesk() }},
+		{"🛋️", "Lobby", "Platforms, and who waits for each one", "Lobby: the platforms, what each can run, which machines are free, and who waits.",
 			func(m *model) string {
 				if n := waiting(m.st); n > 0 {
-					return fg(colYellow).Render(fmt.Sprintf("%d waiting", n))
+					return fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + fmt.Sprintf(" %d waiting", n))
 				}
 				return mutedStyle.Render("nobody waiting")
 			}, func() page { return &lobby{} }},
-		{"▦", "Rooms", "Rooms: the machines where agents run, and who uses each one now.",
+		{"🚪", "Rooms", "Machines, and who uses each one now", "Rooms: the machines where agents run, and who uses each one now.",
 			func(m *model) string {
 				vacant, used := 0, 0
 				for _, ms := range m.st.Machines {
@@ -43,14 +46,12 @@ func menuEntries(m *model) []menuEntry {
 						used++
 					}
 				}
-				return fg(colGreen).Render(fmt.Sprintf("%d vacant", vacant)) + mutedStyle.Render(" · ") +
-					fg(colBlue).Render(fmt.Sprintf("%d occupied", used))
+				return fg(colGreen).Render(fmt.Sprintf("● %d vacant", vacant)) + "   " +
+					fg(colBlue).Render(fmt.Sprintf("◉ %d occupied", used))
 			}, func() page { return &rooms{} }},
-		{"⚿", "Front desk", "Front desk: this server, the people on it, invites, new machines, and check out.",
-			func(m *model) string { return "" }, func() page { return newFrontDesk() }},
 	}
 	if tag := m.updateAvailable(); tag != "" {
-		entries = append(entries, menuEntry{"⇪", "Update",
+		entries = append(entries, menuEntry{"⬆️", "Update", "Install " + tag + " on this computer",
 			fmt.Sprintf("Update: install Hostel %s on this computer (it has %s); then open hostel again.", tag, m.version),
 			func(m *model) string { return fg(colYellow).Render(tag + " available") }, nil})
 	}
@@ -63,11 +64,16 @@ func (p *mainMenu) body(m *model) string {
 	if !m.loaded && m.err == "" {
 		return "\n  Reading the status …\n"
 	}
-	var rows [][]string
-	for i, e := range menuEntries(m) {
-		rows = append(rows, []string{fmt.Sprintf("%d  %s  %s", i+1, accentStyle.Render(e.icon), e.label), e.count(m)})
+	w := contentWidth(m)
+	var b strings.Builder
+	// The street needs 6 lines; a short screen shows the entries only.
+	if m.height == 0 || m.height >= 30 {
+		b.WriteString("\n" + m.street.draw(m) + "\n\n")
 	}
-	return "\n" + table(rows, p.sel, nil)
+	for i, e := range menuEntries(m) {
+		b.WriteString(iconItem(w, i == p.sel, e.icon, e.label, e.sub, e.count(m), "") + "\n\n")
+	}
+	return b.String()
 }
 
 func (p *mainMenu) hint(m *model) string {
@@ -87,7 +93,7 @@ func (p *mainMenu) key(m *model, k tea.KeyMsg) tea.Cmd {
 			return m.open(e.open())
 		}
 		tag := m.updateAvailable()
-		m.ask(fmt.Sprintf("Install Hostel %s on this computer?", tag), func() tea.Cmd { return m.runSelfUpdate(tag) })
+		m.ask("Install", fmt.Sprintf("Install Hostel %s on this computer?", tag), func() tea.Cmd { return m.runSelfUpdate(tag) })
 		return nil
 	}
 	p.sel = move(p.sel, len(entries), k.String())

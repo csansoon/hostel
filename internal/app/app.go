@@ -45,6 +45,11 @@ func Run(version string, stdout io.Writer) error {
 	return err
 }
 
+// api is the server for the app: a client, or the demo world.
+type api interface {
+	Do(ctx context.Context, method, path string, in, out any) error
+}
+
 // page is one screen of the app. The model keeps a stack of pages; Esc goes
 // back to the page below.
 type page interface {
@@ -78,7 +83,9 @@ type model struct {
 	width, height int
 
 	guest *config.Guest
-	c     *client.Client
+	c     api
+	// demo: made-up data, no server (RunDemo); nothing changes this computer.
+	demo bool
 	// gen counts connections: answers for an older connection are dropped.
 	gen int
 
@@ -101,12 +108,14 @@ type model struct {
 	pages []page
 	// err is the last data error; msg is the result of the last action.
 	err, msg string
-	// confirm asks "… ? [y/N]" before a change.
-	confirm *confirmation
+	// pop is the open popup: a choice, or a question before a change.
+	pop *popup
 	// keep is the text to print after quit (codes and commands to copy).
 	keep []string
 	// help shows all keys.
-	help bool
+	help   bool
+	anim   animState
+	street street
 }
 
 // binding is a key and what it does, for the footer and the key list.
@@ -132,26 +141,6 @@ func wrap(s string, width int) string {
 		s = s[width:]
 	}
 	return strings.Join(append(lines, s), "\n")
-}
-
-// confirmation is a question before a change: a key of choices runs its
-// change, another key cancels.
-type confirmation struct {
-	text    string
-	choices map[string]func() tea.Cmd
-	// stale, when set, reports that the data that the question shows has
-	// changed; the question is then cancelled.
-	stale func() bool
-}
-
-// ask asks "<text> [y/N]"; y runs the change.
-func (m *model) ask(text string, run func() tea.Cmd) {
-	m.confirm, m.msg = &confirmation{text: text + " [y/N]", choices: map[string]func() tea.Cmd{"y": run, "Y": run}}, ""
-}
-
-// choose asks a question with several answers (the text names the keys).
-func (m *model) choose(text string, choices map[string]func() tea.Cmd) {
-	m.confirm, m.msg = &confirmation{text: text, choices: choices}, ""
 }
 
 func newModel(version string) *model {
@@ -185,14 +174,15 @@ func (m *model) useGuest(g *config.Guest) {
 func (m *model) checkOut(note string) {
 	m.guest, m.c = nil, nil
 	m.gen++
-	m.pages, m.confirm, m.msg, m.err = []page{newCheckIn(note)}, nil, "", ""
+	m.st, m.loaded = protocol.Status{}, false
+	m.pages, m.pop, m.msg, m.err = []page{newCheckIn(note)}, nil, "", ""
 }
 
 func (m *model) Init() tea.Cmd {
 	if m.c == nil {
 		return m.checkLatest()
 	}
-	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest())
+	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest(), m.startCars())
 }
 
 func (m *model) top() page { return m.pages[len(m.pages)-1] }
@@ -250,7 +240,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tea.KeyMsg:
-		return m, m.handleKey(msg)
+		// A key can open a page with turning glyphs, or close the help: the
+		// frames start again (frame does nothing while they run).
+		cmd := m.handleKey(msg)
+		return m, tea.Batch(cmd, m.frame())
+	case frameMsg:
+		return m, m.onFrame()
+	case carMsg:
+		return m, m.onCar()
 	case statusMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -268,10 +265,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the server info again.
 		reconnected := m.err != ""
 		m.st, m.loaded, m.err = msg.st, true, ""
-		if c := m.confirm; c != nil && c.stale != nil && c.stale() {
-			m.confirm, m.msg = nil, "The queue changed: the move is cancelled. Look again, and try again."
+		if p := m.pop; p != nil && p.stale != nil && p.stale() {
+			m.pop, m.msg = nil, "The queue changed: the question is cancelled. Look again, and try again."
 		}
-		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readPlatforms()}
+		now := time.Now()
+		for _, ms := range msg.st.Machines {
+			m.note("m:"+ms.Key, machineState(msg.st, ms, now).word)
+		}
+		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readPlatforms(), m.frame()}
 		// The server info, until a read of it works.
 		if m.info.Version == "" || reconnected {
 			cmds = append(cmds, m.readInfo())
@@ -296,7 +297,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(retryAfter, func(time.Time) tea.Msg { return platformsRetryMsg{gen: gen} })
 		}
 		m.platforms, m.platformsRead = msg.p, true
-		return m, nil
+		for _, pl := range m.platforms {
+			m.note("p:"+pl.Name, fmt.Sprint(freeMachines(m, pl), pl.Queue))
+		}
+		return m, m.frame()
 	case platformsRetryMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -404,8 +408,8 @@ func (m *model) handleKey(k tea.KeyMsg) tea.Cmd {
 	// question).
 	if k.Type == tea.KeyRunes && !typing && (len(k.Runes) > 1 || k.Paste) {
 		if k.Paste {
-			if m.confirm != nil {
-				m.confirm, m.msg = nil, "Cancelled."
+			if m.pop != nil {
+				m.pop, m.msg = nil, "Cancelled."
 			}
 			return nil
 		}
@@ -415,14 +419,8 @@ func (m *model) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 		return tea.Sequence(cmds...)
 	}
-	if c := m.confirm; c != nil {
-		m.confirm = nil
-		if run, ok := c.choices[k.String()]; ok {
-			m.msg = "Working …"
-			return run()
-		}
-		m.msg = "Cancelled."
-		return nil
+	if m.pop != nil {
+		return m.popupKey(k)
 	}
 	if typing {
 		return p.key(m, k)
@@ -555,8 +553,8 @@ func (m *model) View() string {
 	var foot []string
 	foot = append(foot, line)
 	switch {
-	case m.confirm != nil:
-		foot = append(foot, promptStyle.Render(clean(m.confirm.text)))
+	case m.pop != nil:
+		foot = append(foot, mutedStyle.Render("Choose with ↑↓ and enter, or press the letter of an option. Esc cancels."))
 	case m.msg != "":
 		foot = append(foot, clean(m.msg))
 	default:
@@ -573,11 +571,21 @@ func (m *model) View() string {
 		foot = append(foot, errStyle.Render("! "+clean(m.err)+" (trying again)"))
 	}
 	foot = append(foot, keyLine(m.footerKeys()))
-	return head + fitScreen(body, strings.Join(foot, "\n"), w, m.height-2)
+	footText := strings.Join(foot, "\n")
+	screen := fitScreen(body, footText, w, m.height-2)
+	if m.pop != nil {
+		lines := strings.Split(screen, "\n")
+		nb := len(lines) - strings.Count(footText, "\n") - 1
+		screen = strings.Join(append(m.pop.overlay(lines[:nb], w), lines[nb:]...), "\n")
+	}
+	return head + screen
 }
 
 // footerKeys are the page's keys and the keys of the app.
 func (m *model) footerKeys() []binding {
+	if m.pop != nil {
+		return []binding{{"↑↓", "choose"}, {"enter", "select"}, {"esc", "cancel"}}
+	}
 	if m.help {
 		return []binding{{"?", "close"}, {"esc", "close"}, {"q", "quit"}}
 	}
@@ -601,19 +609,20 @@ func keyLine(ks []binding) string {
 
 // keyList is the "?" page: all keys of the current page and of the app.
 func (m *model) keyList() string {
-	var rows [][]string
 	help := m.help
 	m.help = false
 	keys := m.footerKeys()
 	m.help = help
-	for _, k := range keys {
-		rows = append(rows, []string{keyStyle.Render(k.key), k.label})
-	}
 	if _, ok := m.pages[0].(*mainMenu); ok {
-		rows = append(rows, []string{keyStyle.Render("1 2 3"), "go to Lobby, Rooms, Front desk"})
+		keys = append(keys, binding{"1 2 3", "go to Front desk, Lobby, Rooms"})
 	}
-	rows = append(rows, []string{keyStyle.Render("ctrl+c"), "quit at once"})
-	return card("Keys", table(rows, -1, nil)+"\n"+mutedStyle.Render("Press ? or esc to close."), min(m.screenWidth(), 60), true)
+	keys = append(keys, binding{"ctrl+c", "quit at once"})
+	var b strings.Builder
+	b.WriteString("\n" + section("Keys", contentWidth(m), false))
+	for _, k := range keys {
+		b.WriteString(line(cell(accentStyle.Render(k.key), 10) + k.label))
+	}
+	return b.String() + "\n" + note("Press ? or esc to close.")
 }
 
 // plural is "1 room" or "2 rooms".

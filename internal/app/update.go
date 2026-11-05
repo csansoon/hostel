@@ -34,7 +34,7 @@ type (
 // checkLatest reads the latest release tag in the background (owner
 // decision, 2026-11-04). HOSTEL_NO_UPDATE_CHECK=1 turns it off.
 func (m *model) checkLatest() tea.Cmd {
-	if os.Getenv("HOSTEL_NO_UPDATE_CHECK") == "1" {
+	if m.demo || os.Getenv("HOSTEL_NO_UPDATE_CHECK") == "1" {
 		return nil
 	}
 	return func() tea.Msg {
@@ -91,7 +91,7 @@ func (m *model) startServerUpdate(tag string) tea.Cmd {
 		if err := c.Do(ctx, http.MethodPost, "/v1/server/update", protocol.ServerUpdateRequest{Version: tag}, &st); err != nil {
 			return actionMsg{gen: gen, err: err}
 		}
-		return actionMsg{gen: gen, text: fmt.Sprintf("The server updates from %s to %s. It starts again by itself; then Reception shows the new version.", st.From, st.To)}
+		return actionMsg{gen: gen, text: fmt.Sprintf("The server updates from %s to %s. It starts again by itself; then This server shows the new version.", st.From, st.To)}
 	}
 }
 

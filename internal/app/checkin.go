@@ -47,22 +47,29 @@ func (p *checkIn) typing() bool { return p.step == 1 || p.step == 2 }
 func (p *checkIn) body(m *model) string {
 	var b strings.Builder
 	if p.note != "" {
-		b.WriteString("\n" + clean(p.note) + "\n")
+		b.WriteString("\n" + line(clean(p.note)))
 	}
-	w := min(m.screenWidth(), 90)
+	w := contentWidth(m)
 	switch p.step {
 	case 0:
-		b.WriteString("\n  This computer is not connected to a Hostel server.\n\n")
-		b.WriteString(table([][]string{{accentStyle.Render("⚿") + "  Check in"}, {accentStyle.Render("⏻") + "  Leave"}}, p.sel, nil))
+		b.WriteString(head("Welcome", "This computer is not connected to a Hostel server.", ""))
+		b.WriteString(iconItem(w, p.sel == 0, "🔑", "Check in", "Connect with an invite code", "", "") + "\n\n")
+		b.WriteString(iconItem(w, p.sel == 1, "👋", "Leave", "Quit the app", "", "") + "\n")
 	case 1:
-		b.WriteString("\n" + card("Check in", "Paste the invite code from an admin of your server.\n\n"+p.field.View(), w, true) + "\n")
+		b.WriteString(head("Check in", "Connect this computer to a Hostel server", ""))
+		b.WriteString(section("Step 1 of 2", w, false))
+		b.WriteString(line("Paste the invite code from an admin of your server:") + "\n" + line(p.field.View()))
 	case 2:
-		b.WriteString("\n" + card("Check in", field("Server", clean(strings.Join(p.code.Addresses, ", ")))+"\n\nYour name on this server:\n\n"+p.field.View(), w, true) + "\n")
+		b.WriteString(head("Check in", "Connect this computer to a Hostel server", ""))
+		b.WriteString(section("Step 2 of 2", w, false))
+		b.WriteString(line(field("Server", clean(strings.Join(p.code.Addresses, ", ")))) + "\n")
+		b.WriteString(line("Your name on this server:") + "\n" + line(p.field.View()))
 	case 3:
-		b.WriteString("\n  Checking in …\n")
+		b.WriteString(head("Check in", "Connect this computer to a Hostel server", ""))
+		b.WriteString(note("Checking in …"))
 	}
 	if p.err != "" {
-		b.WriteString("\n  " + errStyle.Render(clean(p.err)) + "\n")
+		b.WriteString("\n" + line(errStyle.Render(clean(p.err))))
 	}
 	return b.String()
 }
@@ -71,7 +78,7 @@ func (p *checkIn) hint(m *model) string {
 	switch p.step {
 	case 0:
 		if p.sel == 0 {
-			return "Check in: connect this computer with an invite code. An admin makes one in Front desk › Guest list."
+			return "Check in: connect this computer with an invite code. An admin makes one in Front desk › Guests."
 		}
 		return "Leave: quit the app."
 	case 1:
