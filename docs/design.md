@@ -672,8 +672,10 @@ secrets.
 | `list` | `{"prefix"}` | `{"rooms": [{"id", "name", "state"}]}` |
 | `access` | `{"id"}` | same as the `provision` response |
 
-`provision` must install `server_key` in the user's `authorized_keys`. The E2E tests
-use this contract with Docker (`test/fakeprovider`).
+`provision` must install `server_key` in the user's `authorized_keys`. A provider
+must refuse a request without a name: a server that stops during a call can leave
+stdin empty or cut. The E2E tests use this contract with Docker
+(`test/fakeprovider`).
 
 ## 8. Rooms: layout, helper, and scripts
 

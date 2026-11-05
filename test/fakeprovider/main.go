@@ -190,6 +190,10 @@ func exists(name string) error {
 // provision is idempotent by name, also under concurrent calls: a lock file
 // for each name makes a second call wait, and it then returns the room.
 func provision(req request) (any, error) {
+	// A server that dies before it writes the request leaves stdin empty.
+	if req.Name == "" {
+		return nil, errors.New("provision: the request has no name")
+	}
 	dir := os.Getenv("FAKE_STATE_DIR")
 	lock, err := os.OpenFile(filepath.Join(dir, req.Name+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
