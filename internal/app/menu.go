@@ -22,8 +22,8 @@ func newMainMenu() *mainMenu { return &mainMenu{} }
 // runs).
 type menuEntry struct {
 	icon, label, sub, hint string
-	count             func(m *model) string
-	open              func() page
+	count                  func(m *model) string
+	open                   func() page
 }
 
 func menuEntries(m *model) []menuEntry {
