@@ -1,6 +1,6 @@
 ---
 name: hostel-use
-description: Use a Hostel room from a repository - acquire a lease, run builds and tests, sync files, take screenshots, open tunnels, and release. Use it when the user or agent says "build on iOS", "run the tests on Windows/Linux/macOS", "QA on the Android emulator", "take a screenshot of the simulator", "reach my local API from the room", "write hostel.toml", or "tell my agent to use Hostel".
+description: Use a Hostel room from a repository - acquire a lease with the tools that you need, run builds and tests, sync files, take screenshots, open tunnels, and release. Use it when the user or agent says "build the Android/iOS app", "run the tests on Windows/Linux/macOS", "QA on the Android emulator", "take a screenshot of the simulator", "reach my local API from the room", "write hostel.toml", or "tell my agent to use Hostel".
 ---
 
 # Use a room
@@ -10,32 +10,73 @@ commands there, and deletes the changes at the end of the lease. The computer
 must be connected (`hostel-install`).
 
 **`hostel agent-guide` is the source of truth.** Run it at the start of a task
-and follow it. This skill summarizes it.
+and follow it. It also has the guide of each tool of your server. This skill
+summarizes it.
+
+## The rule
+
+- **Ask for the tools that you need.** `hostel tools` lists them;
+  `hostel tools <tool>` shows one with its guide.
+- **Ask for a screen tool** (an emulator, a simulator, a desktop) **only when
+  you must see or drive the app.** It takes time and memory. A build needs no
+  screen.
+- **All software of the machine is usable in the lease**, also the tools that
+  you did not ask for. Asking for a tool only selects a machine that has it.
+- The tools of the repository's mise files (node, pnpm, Python) are set up on
+  every machine. Do not ask for them.
+- **One lease for each worktree.** For work on two machines at the same time,
+  use a second worktree (`git worktree add`).
+- **When the lease is ready, read the machine facts** that `acquire` prints:
+  the OS, the hardware, all tools with their environment names, and the
+  screens that started. `hostel info` prints them again.
 
 ## Start
 
 ```sh
-hostel platforms                 # PLATFORM, KIND, DEVICES, FREE, QUEUE, EST. WAIT
-hostel status                    # rooms, leases, queues (plain text)
-hostel acquire ios --task "QA the sign-in screen on iPhone"
+hostel agent-guide               # the rules and the guide of each tool
+hostel tools                     # TOOL, OPTIONS, SCREEN, MACHINES, FREE, WAITING, EST. WAIT
+hostel status                    # rooms, leases, the waiting line (plain text)
+hostel acquire android-sdk jdk --task "build the Android app"
 ```
 
-One lease per platform per worktree. Run `acquire` in the repository. Flags:
+Examples:
+
+```sh
+# Android: build without an emulator, then QA on an emulator (the SDK comes with it)
+hostel acquire android-sdk jdk --task "build"
+hostel run -- ./gradlew assembleDebug
+hostel acquire android-emulator:pixel-9 --task "QA settings"
+
+# iOS: build with Xcode, then QA on a simulator (Xcode comes with it)
+hostel acquire xcode --task "build"
+hostel acquire ios-simulator:iphone-17-pro --task "QA login"
+
+# Desktop apps (the lease takes the whole machine)
+hostel acquire xcode macos-desktop --task "QA the Mac app"
+hostel acquire dotnet windows-desktop --task "QA the editor"
+
+# Any free machine
+hostel acquire --task "API tests"
+```
+
+A tool is `name` or `name:option`. The option is a version (`node:22`
+matches `22.11.0`) or a phone or tablet of a screen tool. Without tools on the
+command line, `acquire` uses `tools` of `hostel.toml`, else any machine. A
+second `acquire` with other tools in the same worktree fails: release first.
+Run `acquire` in the repository. Flags:
 
 | Flag | Meaning |
 |---|---|
 | `--task "..."` | Required: what the lease is for. Others see it. |
-| `--device d` | A device of the platform; repeat for several (`hostel platforms` lists them). |
-| `--require label` | A machine label, for example `desktop`; repeat for several. |
-| `--priority low\|normal\|high` | The queue lane. Change it only when the user asks. |
+| `--priority low\|normal\|high` | The lane in the waiting line. Change it only when the user asks. |
 | `--fresh` | A new on-demand room with empty caches. |
 | `--wait 100s` | How long `acquire` waits before it returns. |
-| `--background` | Do not wait in the queue: return at once, and a small background process keeps the place. A lease that is ready goes on to the sync and the setup as usual. |
+| `--background` | Do not wait in the waiting line: return at once, and a small background process keeps the place. A lease that is ready goes on to the sync and the setup as usual. |
 
-## Wait in the queue and keep working
+## Wait in the waiting line and keep working
 
-The place in the queue belongs to the lease, and the lease ID is in the
-worktree (`$(git rev-parse --git-dir)/hostel/<platform>/lease.json`). Running
+The place in the waiting line belongs to the lease, and the lease ID is in the
+worktree (`$(git rev-parse --git-dir)/hostel/lease/lease.json`). Running
 the same `acquire` command again continues that lease in the same place; it
 never takes another agent's place. Use one worktree for each agent: agents in
 the same worktree share one lease.
@@ -46,12 +87,12 @@ time. Two ways to keep the place while you do other work:
 
 ```sh
 # 1. Return at once and let Hostel keep the place:
-hostel acquire ios --task "QA the sign-in screen" --background
+hostel acquire ios-simulator --task "QA the sign-in screen" --background
 # ... other work ...
-hostel acquire ios --task "QA the sign-in screen"   # continue; wait until ready
+hostel acquire ios-simulator --task "QA the sign-in screen"   # continue; wait until ready
 
 # 2. Or return quickly and run the command again before the timeout:
-hostel acquire ios --task "QA the sign-in screen" --wait 1s
+hostel acquire ios-simulator --task "QA the sign-in screen" --wait 1s
 ```
 
 With `--background`, a detached `hostel keep-place` process polls the lease
@@ -72,15 +113,16 @@ Exit codes of `acquire`:
 
 | Code | Meaning | Do |
 |---|---|---|
-| 0 | The lease is ready, files are synced, and setup ran. | Work. |
-| 75 | Not finished (queued or preparing). | Run the **same** command again. It continues the same lease. |
-| 69 | No machine can serve the request (unknown platform, device, or label). | Do not retry. Tell the user. |
+| 0 | The lease is ready, files are synced, and setup ran. | Read the machine facts. Work. |
+| 75 | Not finished (waiting or preparing). | Run the **same** command again. It continues the same lease. |
+| 69 | No machine can serve the request (an unknown tool or option, or no machine with all the tools together). The message says why. | Do not retry. Change the tools, or tell the user. |
 | 78 | This computer is not connected. | Do not connect yourself. Ask the user to run `hostel connect <invite code>`. |
 | 1 | Error, for example the setup job failed (the lease stays ready). | Read the message; fix the code; `hostel sync --setup`. |
 
 ## Work
 
 ```sh
+hostel info                                # the machine facts of the lease again
 hostel run -- "make test"                 # one argument: runs with sh -c (PowerShell on Windows)
 hostel run -- xcodebuild -version          # several arguments: no shell
 hostel run --detach -- "npm run dev"       # start a job, print its ID
@@ -92,7 +134,7 @@ hostel sync --setup                        # run the repository setup again
 hostel diff                                # changes on the room since the last sync
 hostel cp ./fixture.json :tmp/fixture.json # local -> room work directory
 hostel cp :build/app.log ./app.log         # room -> local
-hostel screenshot -o screen.png            # --device d for another device
+hostel screenshot -o screen.png            # --tool android-emulator:pixel-tablet for another screen
 hostel ssh                                 # interactive shell (ssh -- <command> for one command)
 hostel ssh-config                          # an ssh_config file for ssh -F
 ```
@@ -103,16 +145,16 @@ hostel ssh-config                          # an ssh_config file for ssh -F
 - `job <id> is still running` (exit code 75): run `hostel attach <id>`. Do
   **not** run `hostel run` again: that starts a second job.
 
-`--json` prints the result as JSON on stdout. `--platform <p>` selects the lease
-when the worktree has several. On Windows, a background process ends with its
-job: use `hostel run --detach` for a server.
+`--json` prints the result as JSON on stdout. On Windows, a background process
+ends with its job: use `hostel run --detach` for a server.
 
-Devices: commands get the device facts in their environment. iOS:
-`SIMULATOR_UDID`, `SIMULATOR_UDIDS`. Android: `ANDROID_SERIAL`,
-`ANDROID_SERIALS`, `ANDROID_HOME`. To tap, type, and read the screen, use
-`agent-device` on the room (`hostel run -- agent-device help`). Desktop apps:
-`hostel acquire macos --require desktop` or `hostel acquire windows --require
-desktop`; the agent guide shows the commands (`open`, `desktop`, `winapp`).
+Tool facts: commands get the environment of the machine's tools (for example
+`ANDROID_HOME`) and the facts of the screens that started (`ANDROID_SERIAL`,
+`SIMULATOR_UDID`). The guide of each tool names them. To tap, type, and read a
+screen, use the driver that its guide names: `agent-device` on the room
+(`hostel run -- agent-device help`), and `desktop` and `winapp` for
+`windows-desktop`. `hostel screenshot` needs `--tool` only when the lease has
+more than one screen.
 
 ## Tunnels and forwards
 
@@ -138,37 +180,44 @@ hostel forward stop 8080
 ## `hostel.toml` in the repository
 
 ```toml
-include = [".env"]               # extra files that git ignores (glob patterns)
-# mise = false                   # skip the repository mise install
+tools = ["android-sdk", "jdk:21"]  # what "hostel acquire" asks for when no tools are given
+include = [".env"]                 # extra files that git ignores (glob patterns)
+setup = ["./gradlew --version"]    # after mise install, in every lease
+env = { APP_ENV = "test" }         # in every lease
+# mise = false                     # skip the repository mise install
 
-[tunnels.api]                    # room -> this computer
-local_port_env = "PORT"          # or local_port = 3000 (exactly one)
-# room_port = 4000               # fixed room port (1024-65535); default: from the slot's pool
+[tunnels.api]                      # room -> this computer
+local_port_env = "PORT"            # or local_port = 3000 (exactly one)
+# room_port = 4000                 # fixed room port (1024-65535); default: from the slot's pool
 
-[platforms.ios]
-devices = ["iphone-17-pro"]      # default devices for this repository
-# requires = ["xcode-26.5"]      # labels that this repository needs
-setup = ["cd apps/ios && make deps"]
-env = { API_URL = "http://localhost:{tunnels.api.port}" }
+[tool.android-emulator]            # only when the lease has this tool
+env = { APP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
 
-[platforms.android]
-env = { API_URL = "http://10.0.2.2:{tunnels.api.port}" }
+[tool.ios-simulator]
+setup = ["tuist install && tuist generate --no-open"]
+env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 ```
 
 - Files: tracked and untracked files that git does not ignore, plus `include`.
 - Setup: `mise install` in the work directory (the repository's `mise.toml`,
-  `.tool-versions`, `.nvmrc`, ...), then each `setup` command in order. The
-  first failure stops it.
+  `.tool-versions`, `.nvmrc`, ...), then each top-level `setup` command, then
+  the `setup` of each `[tool.<name>]` of the lease. The first failure stops it.
+- The `env` of a `[tool.<name>]` replaces keys of the top-level `env`.
+- Tools on the command line replace `tools`.
 - `{tunnels.<name>.port}` becomes the tunnel's room port.
-- Do not put `desktop` in `requires`: every lease would take the whole machine.
+- Do not put a desktop tool in `tools` unless every lease needs it: each such
+  lease takes the whole machine.
 - Check the file: `hostel admin config check --repo hostel.toml`.
 
-## The queue
+## The waiting line
 
-Each platform has one queue. Order: leases that an admin placed, then the lane
-(`high`, `normal`, `low`), then the request time. An old `low` lease stays behind
-a new `normal` one. Admins move leases and change lanes in the app (Lobby).
-`hostel status ios` prints the queue of a platform.
+There is one waiting line for all tools. Order: leases that an admin placed,
+then the lane (`high`, `normal`, `low`), then the request time. An old `low`
+lease stays behind a new `normal` one. Each waiting lease takes the first free
+machine that has its tools, so a lease for one machine does not block a lease
+for another. `acquire` prints "waiting behind N leases". Admins move leases and
+change lanes in the app (Lobby). `hostel status <tool>` prints the waiting
+leases that asked for a tool.
 
 ## End
 
@@ -186,9 +235,10 @@ If a command prints `run "hostel update"`, tell the user. Do not update
 
 ## Status
 
-- `hostel status` prints plain text: rooms with their leases (user, task, time,
-  lease ID), and the queues. `hostel status <room>` shows details and events;
-  `hostel status <platform>` shows its queue. Agents use this.
+- `hostel status` prints plain text: rooms with their leases (user, task,
+  tools, time, lease ID), and the waiting line. `hostel status <room>` shows
+  details, the inventory, and events; `hostel status <tool>` shows the waiting
+  leases for a tool. Agents use this.
 - People run `hostel` alone for the Hostel app (Lobby, Rooms, Front desk).
 
 ## Instructions for the agent's file
@@ -198,11 +248,13 @@ Put this paragraph into the repository's `AGENTS.md` or `CLAUDE.md`:
 ```markdown
 ## Remote machines (Hostel)
 
-For builds, tests, or UI QA on another platform (iOS, Android, macOS, Windows,
-Linux), use Hostel. First run `hostel agent-guide` and follow it. Get a lease
-with `hostel acquire <platform> --task "<what you do>"`; if it exits with 75, run
-the same command again; with 69, stop and tell me; with 78, ask me to connect
-this computer. Run commands with `hostel run -- "<command>"` and read its last
+For builds, tests, or UI QA on another machine (Android, iOS, macOS, Windows,
+Linux), use Hostel. First run `hostel agent-guide` and follow it. Ask only for
+the tools that you need, for example `hostel acquire android-sdk jdk --task
+"<what you do>"`; ask for a screen tool (`android-emulator`, `ios-simulator`)
+only when you must see the app. If acquire exits with 75, run the same command
+again; with 69, change the tools or tell me; with 78, ask me to connect this
+computer. Run commands with `hostel run -- "<command>"` and read its last
 stderr line; run `hostel sync` after each local edit. Run `hostel release` when
 you are done. Do not change `--priority` unless I ask.
 ```

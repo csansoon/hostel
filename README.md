@@ -2,21 +2,23 @@
 
 Short, temporary, exclusive access to remote machines for coding agents.
 
-![Guests (agents on your machines) check in at the Hostel front desk, wait in one queue for each platform, and get a room (iOS, Android, macOS, Windows)](docs/images/hostel.gif)
+![Guests (agents on your machines) check in at the Hostel front desk, wait in one line, and get a room with the tools that they need (Android, iOS, macOS, Windows)](docs/images/hostel.gif)
 
-Coding agents edit code on your computer. When they need another platform for a
-build, a UI check, or a device test (an iOS simulator, an Android emulator, a
-macOS or Windows desktop app, Linux), they ask Hostel for a **lease**. The Hostel
-server keeps one queue for each platform, gives the agent a **room** (one of your
+Coding agents edit code on your computer. When they need another machine for a
+build, a UI check, or a device test (an Android SDK, an iOS simulator, an Android
+emulator, a macOS or Windows desktop app, Linux), they ask Hostel for a **lease**
+with the **tools** that they need. The Hostel server keeps one waiting line,
+gives the agent a **room** (one of your
 machines, or an on-demand cloud machine), and deletes everything that the lease
 left when it ends. The agent's code stays local: Hostel sends the changed files.
 
-- Many agents, many people, few machines: leases are exclusive and queued, with
+- Many agents, many people, few machines: leases are exclusive and wait in line, with
   priorities and wait estimates.
 - Your own machines (a Mac, a Windows PC, a Linux box; also behind NAT) and
   on-demand machines (Namespace, or your own provider script).
-- iOS, Android, macOS, Windows, and Linux: clean devices for each lease,
-  screenshots, desktop app control, and tunnels from the room to your local
+- Tools for Android, iOS, macOS, Windows, and Linux: a build needs no screen,
+  and a lease that asks for one gets a clean emulator, simulator, or desktop,
+  with screenshots, desktop app control, and tunnels from the room to your local
   servers.
 
 ## Install
@@ -48,9 +50,9 @@ hostel
 - **Check in**: the first time, paste the invite code that an admin of your
   server gave you. The app connects your computer, and your agents use the same
   connection.
-- **Lobby**: each platform (iOS, Android, macOS, …) with its free machines and
-  its waiting line. Open a platform to see the whole queue; admins move entries
-  and change priorities.
+- **Lobby**: each tool (screen tools first) with its free machines and its
+  waiting line. Open a tool to see its options, machines, and waiting leases;
+  admins move entries and change priorities.
 - **Rooms**: each machine, its state (Vacant, Occupied, Offline, …), and who uses
   it. Open a machine to see its hardware, its live CPU and memory use, and the
   current lease with its branch and running job. You can end your own lease;
@@ -109,17 +111,19 @@ skill fits a task.
   behind NAT (`hostel config rooms add`, then `hostel machine join` on the
   machine), or on demand (Namespace, or an `external` provider); limits, warm
   rooms, drain, repair, remove; offline machines.
-- [**`hostel-platforms`**](skills/hostel-platforms/SKILL.md): what each platform
-  needs on a machine (Xcode and its label for iOS; Java, and KVM on Linux, for
-  Android, whose SDK Hostel downloads; the `desktop` label for desktop apps),
-  devices, labels, and your own platforms with their scripts.
+- [**`hostel-tools`**](skills/hostel-tools/SKILL.md): the tools of a machine
+  (`android-sdk`, `android-emulator`, `xcode`, `ios-simulator`, `macos-desktop`,
+  `windows-desktop`, and any mise tool such as `jdk:21`), what each needs on the
+  machine (Xcode; KVM on Linux for the emulator; a desktop session), options,
+  and your own tools with their scripts.
 - [**`hostel-users`**](skills/hostel-users/SKILL.md): invite people
   (`hostel config users invite`), roles (admin, member), a code for another
   computer, remove a user or one computer.
 - [**`hostel-use`**](skills/hostel-use/SKILL.md): the work loop:
-  `hostel platforms`, `hostel acquire <platform> --task "…"` (exit code 75: run it
-  again), `hostel run`, `hostel sync`, `hostel screenshot`, `hostel release`;
-  `hostel.toml` in a repository for setup commands and tunnels to a local API.
+  `hostel tools`, `hostel acquire <tool[:option]>... --task "…"` (exit code 75:
+  run it again), `hostel run`, `hostel sync`, `hostel screenshot`, `hostel release`;
+  `hostel.toml` in a repository for its usual tools, setup commands, and tunnels
+  to a local API.
 - [**`hostel-troubleshoot`**](skills/hostel-troubleshoot/SKILL.md): room and lease
   states, offline and broken machines, repair and changed host keys, logs,
   common errors (exit codes 69 and 78, a changed TLS key).
@@ -127,8 +131,8 @@ skill fits a task.
 A typical lease:
 
 ```sh
-hostel platforms
-hostel acquire ios --task "check the sign-in screen"
+hostel tools
+hostel acquire ios-simulator:iphone-17-pro --task "check the sign-in screen"
 hostel run -- 'xcodebuild test -scheme MyApp -destination "id=$SIMULATOR_UDID"'
 hostel screenshot -o screen.png
 hostel release
@@ -141,9 +145,9 @@ to their instructions file (for example `AGENTS.md` or `CLAUDE.md`):
 ```markdown
 ## Remote machines (Hostel)
 
-This computer can borrow remote machines for builds, UI QA, and device tests on
-other platforms. Before the first use in a session, run `hostel agent-guide`
-and follow it. Always run `hostel release` when you are done.
+This computer can borrow remote machines for builds, UI QA, and device tests.
+Before the first use in a session, run `hostel agent-guide` and follow it. Ask
+only for the tools that you need; ask for a screen tool only to see the app. Always run `hostel release` when you are done.
 ```
 
 ## Documentation

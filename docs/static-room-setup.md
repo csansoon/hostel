@@ -9,7 +9,7 @@ Two machines take part:
 - **The room Mac**: the spare MacBook.
 
 Do not install Hostel on the room Mac. The server connects to it over SSH and
-installs everything itself (the helper binary, mise, the platform scripts, and the
+installs everything itself (the helper binary, mise, the tool scripts, and the
 simulators). Except where a step says "on the server Mac", do the steps on the room
 Mac.
 
@@ -93,7 +93,8 @@ administrator.
 As an administrator:
 
 1. Install Xcode 26.5 to `/Applications/Xcode.app` (App Store or
-   developer.apple.com). The machine label `xcode-26.5` states this version.
+   developer.apple.com). The `xcode` tool reports this version (its `check`
+   script); a guest can ask for `xcode:26`.
 2. Select it, accept the license, and install the extra components:
 
    ```sh
@@ -116,12 +117,12 @@ As an administrator:
 
    The list must have "iOS 26.5".
 
-Do not create simulators. The `ios` platform scripts create and delete their own
-simulators.
+Do not create simulators. The `ios-simulator` tool scripts create and delete
+their own simulators.
 
 ## 6. Desktop session
 
-The `macos` platform takes desktop screenshots, and the iOS Simulator app needs a
+The `macos-desktop` tool takes desktop screenshots, and the iOS Simulator app needs a
 desktop session to show a window. For this, the `hostel` user must be logged in at
 the console after each restart.
 
@@ -141,7 +142,7 @@ the console after each restart.
    Privacy & Security > Screen & System Audio Recording. Click "+", press
    Cmd-Shift-G, type `/usr/libexec/sshd-keygen-wrapper`, and add it. M2 verified
    this entry on 2026-10-22.
-5. Optional, for future macOS desktop support (not needed for iOS): let UI
+5. Optional, for the `macos-desktop` tool (not needed for `ios-simulator`): let UI
    automation of desktop apps run without a password prompt. `agent-device`
    drives macOS apps with XCTest, and macOS asks for an administrator before it
    allows this (Automation Mode). As an administrator:
@@ -161,6 +162,12 @@ Mac control its desktop through UI automation, without a password.
 
 ## 7. Check and send the details
 
+Then list the tools of the machine in the configuration (`hostel config edit`):
+
+```toml
+tools = ["xcode", "ios-simulator", "macos-desktop"]   # add "android-emulator" and "jdk:21" for Android
+```
+
 On the server Mac:
 
 ```sh
@@ -172,8 +179,8 @@ command.
 
 ## Windows (M6)
 
-A Windows machine is a static room for command-line work (the `windows` OS
-platform): builds and tests over SSH, not desktop UI. The reference room is the
+A Windows machine is a static room for command-line work: builds and tests
+over SSH. Desktop UI needs the `windows-desktop` tool (step 6). The reference room is the
 owner's Cloud PC `win-pc`. Do these steps as an administrator, in PowerShell.
 
 1. **OpenSSH Server.** It must run and start automatically
@@ -210,12 +217,13 @@ owner's Cloud PC `win-pc`. Do these steps as an administrator, in PowerShell.
    address = "hostel@localhost"   # with connect = true, only the user is used
    os = "windows"
    connect = true
+   tools = ["dotnet:9"]           # mise tools; add "windows-desktop" after step 6
    ```
 
 5. **`room connect`** as a scheduled task of `LOCAL SERVICE`:
    `deploy-vps.md`, section 6.
-6. **Desktop (M7, optional).** For desktop leases (the machine label
-   `desktop`), a user must be signed in to the desktop, and the desktop must
+6. **Desktop (M7, optional).** For desktop leases (the tool
+   `windows-desktop`), a user must be signed in to the desktop, and the desktop must
    stay connected and unlocked. SSH sessions cannot show windows, take
    screenshots, or use UI Automation. So a scheduled task of the desktop user
    starts `hostel room desktop serve` as `hostel` in the desktop session, and
@@ -256,7 +264,7 @@ owner's Cloud PC `win-pc`. Do these steps as an administrator, in PowerShell.
    Start-ScheduledTask -TaskName 'Hostel desktop'
    ```
 
-   Add `labels = ["desktop"]` to the machine. The `hostel` user cannot read
+   Add `windows-desktop` to the machine's `tools`. The `hostel` user cannot read
    `cred`. Until the server installs the helper (the first provisioning), the
    task tries again every 10 seconds. A lease can send keys and clicks to any
    window on this desktop that is not elevated, also to the desktop user's
