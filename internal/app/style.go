@@ -43,20 +43,11 @@ func pill(text string, c lipgloss.Color) string {
 	return lipgloss.NewStyle().Background(c).Foreground(colInk).Padding(0, 1).Render(text)
 }
 
-// chips draws names in brackets: [ios] [macos].
-func chips(names []string, c lipgloss.Color) string {
-	var out []string
-	for _, n := range names {
-		out = append(out, fg(c).Render("["+clean(n)+"]"))
-	}
-	return strings.Join(out, " ")
-}
-
 // gauge draws a bar of width cells for a share (0 to 1).
 func gauge(share float64, width int, c lipgloss.Color) string {
 	share = min(max(share, 0), 1)
 	n := int(share*float64(width) + 0.5)
-	return fg(c).Render(strings.Repeat("█", n)) + dimStyle.Render(strings.Repeat("░", width-n))
+	return fg(c).Render(strings.Repeat("━", n)) + fg(colChip).Render(strings.Repeat("━", width-n))
 }
 
 // shareColor is green, then yellow, then red as a share grows.
@@ -70,90 +61,9 @@ func shareColor(share float64) lipgloss.Color {
 	return colGreen
 }
 
-// card draws a box with rounded borders and its title in the top border. A
-// focused card (it has the keyboard) has an amber border.
-func card(title, body string, width int, focused bool) string {
-	border := dimStyle
-	if focused {
-		border = accentStyle
-	}
-	inner := max(width-4, 4)
-	head := " " + ansi.Truncate(title, max(width-6, 1), "…") + " "
-	fill := max(width-3-lipgloss.Width(head), 0)
-	var b strings.Builder
-	b.WriteString(border.Render("╭─") + head + border.Render(strings.Repeat("─", fill)+"╮") + "\n")
-	for _, l := range strings.Split(strings.TrimRight(body, "\n"), "\n") {
-		l = ansi.Truncate(l, inner, "…")
-		b.WriteString(border.Render("│") + " " + l + strings.Repeat(" ", inner-lipgloss.Width(l)) + " " + border.Render("│") + "\n")
-	}
-	b.WriteString(border.Render("╰" + strings.Repeat("─", max(width-2, 0)) + "╯"))
-	return b.String()
-}
-
-// side puts two cards side by side when the screen is wide, else one under
-// the other. It returns the widths to use for the two cards.
-func side(width int) (left, right int, wide bool) {
-	if width >= 100 {
-		left = width * 2 / 5
-		return left, width - left - 1, true
-	}
-	return width, width, false
-}
-
-func join(a, b string, wide bool) string {
-	if wide {
-		return lipgloss.JoinHorizontal(lipgloss.Top, a, " ", b)
-	}
-	return a + "\n" + b
-}
-
 // field is a "Label   value" line of a card.
 func field(label, value string) string {
 	return mutedStyle.Render(fmt.Sprintf("%-12s", label)) + " " + value
-}
-
-// table draws rows with aligned columns; the selected row has the marker. The
-// cells may be styled.
-func table(rows [][]string, sel int, header []string) string {
-	var widths []int
-	measure := func(cells []string) {
-		for i, c := range cells {
-			for len(widths) <= i {
-				widths = append(widths, 0)
-			}
-			widths[i] = max(widths[i], lipgloss.Width(c))
-		}
-	}
-	measure(header)
-	for _, r := range rows {
-		measure(r)
-	}
-	line := func(cells []string) string {
-		var out []string
-		for i, c := range cells {
-			if i < len(cells)-1 {
-				c += strings.Repeat(" ", widths[i]-lipgloss.Width(c))
-			}
-			out = append(out, c)
-		}
-		return strings.TrimRight(strings.Join(out, "  "), " ")
-	}
-	var b strings.Builder
-	if header != nil {
-		var hs []string
-		for _, h := range header {
-			hs = append(hs, dimStyle.Render(h))
-		}
-		b.WriteString("  " + line(hs) + "\n")
-	}
-	for n, r := range rows {
-		mark := "  "
-		if n == sel {
-			mark = accentStyle.Render(selMark)
-		}
-		b.WriteString(mark + line(r) + "\n")
-	}
-	return b.String()
 }
 
 // fitScreen cuts the lines to the width and the body to the height, so that
@@ -178,15 +88,12 @@ func fitScreen(body, foot string, width, height int) string {
 }
 
 // window keeps at most room lines: the first lines, and around the selected
-// line (with "❯ ") when the body is longer; "…" marks cut lines.
+// item (with the bar) when the body is longer; "…" marks cut lines.
 func window(lines []string, room int) []string {
 	if len(lines) <= room {
 		return lines
 	}
-	sel := slices.IndexFunc(lines, func(l string) bool {
-		l = ansi.Strip(l)
-		return strings.Contains(l, selMark) || strings.Contains(l, barMark)
-	})
+	sel := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(ansi.Strip(l), barMark) })
 	start := 0
 	if sel >= 0 {
 		start = min(max(sel-room/2, 0), len(lines)-room)
@@ -202,12 +109,8 @@ func window(lines []string, room int) []string {
 	return out
 }
 
-// selMark marks the selected row of a table, barMark the selected list
-// item; window() looks for them to scroll.
-const (
-	selMark = "❯ "
-	barMark = "▌"
-)
+// barMark marks the selected list item; window() looks for it to scroll.
+const barMark = "▌"
 
 // clean replaces control characters (also newlines and tabs) with spaces:
 // names and tasks come from users and must not move the screen. It also
@@ -217,8 +120,6 @@ func clean(s string) string {
 		switch {
 		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
 			return ' '
-		case r == '❯':
-			return '>'
 		case r == '▌':
 			return '|'
 		}
@@ -285,4 +186,33 @@ func heading(title string, width int) string {
 // cell pads a styled text to width cells.
 func cell(s string, width int) string {
 	return s + strings.Repeat(" ", max(width-lipgloss.Width(s), 0))
+}
+
+// head is the top of a detail page: the name, what it is, and a summary
+// line.
+func head(name, sub, summary string) string {
+	out := "\n" + margin + "   " + accentStyle.Bold(true).Render(name) + "\n"
+	if sub != "" {
+		out += margin + "   " + mutedStyle.Render(sub) + "\n"
+	}
+	if summary != "" {
+		out += "\n" + margin + "   " + summary + "\n"
+	}
+	return out + "\n\n"
+}
+
+// line is a body line at the indent of the list items.
+func line(s string) string { return margin + "   " + s + "\n" }
+
+// note is a dim line at the indent of the list items.
+func note(s string) string { return line(mutedStyle.Render(s)) }
+
+// section is a heading with an empty line after it; more puts two empty
+// lines before it.
+func section(title string, width int, more bool) string {
+	pre := ""
+	if more {
+		pre = "\n\n"
+	}
+	return pre + heading(title, width) + "\n\n"
 }

@@ -181,7 +181,7 @@ func TestAppCheckIn(t *testing.T) {
 	conn := filepath.Join(home, ".config", "hostel", "config.toml")
 
 	a := e.startApp(home)
-	a.waitFor(30*time.Second, `This computer is not connected to a Hostel server\.`, `❯ ⚿  Check in`, `Check in: connect this computer with an invite code`)
+	a.waitFor(30*time.Second, `This computer is not connected to a Hostel server\.`, `▌ ⚿  Check in`, `Check in: connect this computer with an invite code`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `Paste the invite code from an admin`)
 	a.in("hostel1-wrong\r")
@@ -189,14 +189,14 @@ func TestAppCheckIn(t *testing.T) {
 	a.in("\x15" + code + "\r")
 	a.waitFor(10*time.Second, `Your name on this server:`)
 	a.in("\x15Ana Pérez\r")
-	a.waitFor(30*time.Second, `Checked in to https://\S+ as Ana Pérez \(member\)`, `❯ 1  ⌂  Lobby`, `  3  ⚿  Front desk`)
+	a.waitFor(30*time.Second, `Checked in to https://\S+ as Ana Pérez \(member\)`, `▌ ⌂  Lobby`, `⚿  Front desk`)
 	if data, err := os.ReadFile(conn); err != nil || !strings.Contains(string(data), "token") {
 		t.Fatalf("the connection file after check in: %v\n%s", err, data)
 	}
 
 	a.in("\x1b[B\x1b[B\r")
-	a.waitFor(10*time.Second, `⌂ HOSTEL\s+https://\S+ › Front desk\s+Ana Pérez\s+member`, `│ Server\s+https://`, `│ Server ID\s+e2e`, `│ You\s+Ana Pérez\s+member`,
-		`│ Computer\s+\S+`, `❯ ✉  Add your other computer`, `  ☰  Guest list`)
+	a.waitFor(10*time.Second, `⌂ HOSTEL\s+https://\S+ › Front desk\s+Ana Pérez\s+member`, `THIS SERVER`, `Server\s+https://`, `Server ID\s+e2e`, `You\s+Ana Pérez · member`,
+		`Computer\s+\S+`, `▌ ✉  Add your other computer`, `☰  Guest list`)
 	if s := a.screen(); strings.Contains(s, "Add a room") || strings.Contains(s, "Invite a guest") {
 		t.Fatalf("a member sees an admin entry:\n%s", s)
 	}
@@ -207,7 +207,7 @@ func TestAppCheckIn(t *testing.T) {
 	a.in("\r")
 	a.waitFor(10*time.Second, `\[y/N\]`)
 	a.in("y")
-	a.waitFor(30*time.Second, `Checked out from https://\S+\.`, `❯ ⚿  Check in`)
+	a.waitFor(30*time.Second, `Checked out from https://\S+\.`, `▌ ⚿  Check in`)
 	if _, err := os.Stat(conn); !os.IsNotExist(err) {
 		t.Fatalf("the connection file after check out: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestAppCheckIn(t *testing.T) {
 	if r := e.adminHostel("config", "users", "remove", "Bob"); r.code != 0 {
 		t.Fatalf("remove Bob: %s", r)
 	}
-	a.waitFor(time.Minute, `The server refused this computer's connection`, `❯ ⚿  Check in`)
+	a.waitFor(time.Minute, `The server refused this computer's connection`, `▌ ⚿  Check in`)
 	a.quit()
 }
 
@@ -242,14 +242,17 @@ func TestAppLobby(t *testing.T) {
 	f.e.newRepoNamed("repo3", defaultRepoFiles())
 	q2 := f.queued()
 
-	// The member (on a narrow screen: the cards stack): no queue actions
-	// except for the own lease.
+	// The member (on a narrow screen): no queue actions except for the own
+	// lease.
 	mv := f.e.startAppSized(80, f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+ana)...)
-	mv.waitFor(30*time.Second, `❯ 1  ⌂  Lobby\s+2 waiting`)
+	mv.waitFor(30*time.Second, `▌ ⌂  Lobby\s+\S 2 waiting`)
 	mv.in("\r")
-	mv.waitFor(10*time.Second, `❯ fakedevice\s+0 of 1 vacant\s+2 waiting · next room ~`)
+	mv.waitFor(10*time.Second, `▌ fakedevice\s+◉ all occupied`, `\S 2 waiting · next room ~`)
 	mv.in("\r")
-	mv.waitFor(10*time.Second, `tab  next card   e  end lease   esc  back`, `(?m)^╭─ Machines 0 of 1 vacant`, `(?m)^╭─ Waiting line 2 `)
+	mv.waitFor(10*time.Second, `MACHINES`, `WAITING LINE`, `▌ ◉ home/box\s+Occupied`, `enter  open the machine`)
+	// Down from the last machine goes to the waiting line.
+	mv.in("\x1b[B")
+	mv.waitFor(10*time.Second, `▌ 1  ana  "wait"`, `tab  next section   e  end lease   esc  back`)
 	// The admin keys do nothing for a member.
 	for _, k := range []string{"p", "J", "\x1b[1;2B"} {
 		mv.in(k)
@@ -263,18 +266,19 @@ func TestAppLobby(t *testing.T) {
 	mv.quit()
 
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
-	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`)
+	a.waitFor(30*time.Second, `▌ ⌂  Lobby`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `PLATFORM\s+MACHINES\s+WAITING LINE`, `❯ fakedevice\s+0 of 1 vacant\s+2 waiting`)
+	a.waitFor(10*time.Second, `▌ fakedevice\s+◉ all occupied`, `\S 2 waiting · next room`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `Machines 0 of 1 vacant`, `● home/box\s+Occupied`, `Waiting line 2 `,
-		`│ ❯ 1\s+ana\s+wait\s+● normal\s+\S+\s+~\S+`, `⇧↑↓  reorder   p  priority`)
+	a.waitFor(10*time.Second, `◉ all occupied\s+\S 2 waiting`, `▌ ◉ home/box\s+Occupied`, `WAITING LINE`)
+	a.in("\t")
+	a.waitFor(10*time.Second, `▌ 1  ana  "wait"\s+\S room in ~\S+`, `normal priority · waiting \S+`, `⇧↑↓  reorder   p  priority`)
 
 	a.in("\x1b[1;2B")
 	a.waitFor(10*time.Second, `Move ana \("wait"\) down, after ana\? \[y/N\]`)
 	a.in("y")
 	f.e.waitFor("the move", 30*time.Second, func() bool { return f.lease(q1).Position == 2 && f.lease(q2).Position == 1 })
-	a.waitFor(30*time.Second, `│   1\s+ana`, `│ ❯ 2\s+ana`)
+	a.waitFor(30*time.Second, `(?m)^     1  ana  "wait"`, `▌ 2  ana  "wait"`)
 
 	a.in("p")
 	a.waitFor(10*time.Second, `Priority of ana \("wait"\), now normal: h high · n normal · l low`)
@@ -285,7 +289,7 @@ func TestAppLobby(t *testing.T) {
 	a.waitFor(10*time.Second, `End the lease of ana \("wait"\)\? \[y/N\]`)
 	a.in("y")
 	f.e.waitFor("the end of the lease", 30*time.Second, func() bool { return f.lease(q1).State != "queued" })
-	a.waitFor(30*time.Second, `Waiting line 1 `)
+	a.waitFor(30*time.Second, `◉ all occupied\s+\S 1 waiting`)
 	a.quit()
 }
 
@@ -302,14 +306,14 @@ func TestAppRooms(t *testing.T) {
 	f.e.mustHostel("run", "--detach", "--", "sleep 300")
 
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
-	a.waitFor(30*time.Second, `  2  ▦  Rooms\s+0 vacant · 1 occupied`)
+	a.waitFor(30*time.Second, `▦  Rooms\s+● 0 vacant\s+◉ 1 occupied`)
 	a.in("\x1b[B\r")
-	a.waitFor(10*time.Second, `ROOM\s+STATUS\s+RUNS\s+GUEST`, `❯ ● home/box\s+Occupied\s+\[linux\] \[fakedevice\]\s+guest · "e2e test"`)
+	a.waitFor(10*time.Second, `HOME`, `▌ box\s+◉ Occupied`, `linux · fakedevice\s+guest · "e2e test"`)
 	a.in("\r")
-	a.waitFor(30*time.Second, `home/box\s+Occupied\s+fixed machine`, `│ Runs\s+\[linux\] \[fakedevice\]`,
-		`│ Hardware\s+.*\d+ cores? · \d+\.\d GB · Debian`, `│ CPU\s+[█░]+\s+\d+%`, `│ Memory\s+[█░]+\s+\d+\.\d GB of \d+\.\d GB`, `│ Disk\s+\d+\.\d GB free`,
-		`│ ❯ guest · "e2e test"\s+checked in \S+ ago · out by \d\d:\d\d`, `│\s+\S+ · repository repo · ⎇ fix-login`,
-		`│\s+▶ sleep 300\s+running`, `e  end lease   d  no new leases   esc  back`)
+	a.waitFor(30*time.Second, `home/box`, `A fixed machine`, `◉ Occupied\s+guest · "e2e test"`, `Runs\s+linux\s+fakedevice`,
+		`Hardware\s+.*\d+ cores? · \d+\.\d GB · Debian`, `CPU\s+━+\s+\d+%`, `Memory\s+━+\s+\d+\.\d GB of \d+\.\d GB`, `Disk\s+\d+\.\d GB free`,
+		`▌ guest  "e2e test"\s+checked in \S+ ago`, `\S+ · repo · ⎇ fix-login\s+out by \d\d:\d\d`,
+		`▶ sleep 300\s+running`, `e  end lease   d  no new leases   esc  back`)
 
 	if strings.Contains(a.screen(), "repair") {
 		t.Fatalf("repair is offered for a running room:\n%s", a.screen())
@@ -345,30 +349,30 @@ func TestAppFrontDesk(t *testing.T) {
 	admin := append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)
 	openGuests := func(a *ptyApp) {
 		t.Helper()
-		a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`)
+		a.waitFor(30*time.Second, `▌ ⌂  Lobby`)
 		a.in("\x1b[B\x1b[B\r")
-		a.waitFor(10*time.Second, `❯ ✉  Invite a guest`, `  ☰  Guest list`, `  ＋  Add a room`, `  ⏻  Check out`)
+		a.waitFor(10*time.Second, `▌ ✉  Invite a guest`, `☰  Guest list`, `\+  Add a room`, `⏻  Check out`)
 		a.in("\x1b[B\r")
-		a.waitFor(10*time.Second, `GUEST\s+ROLE\s+COMPUTERS`, `i  invite a guest   r  change the role   x  remove   c  add your other computer`)
+		a.waitFor(10*time.Second, `\d computers? · since`, `i  invite   r  role   x  remove   c  your other computer`)
 	}
 	selectUser := func(a *ptyApp, name string) {
 		t.Helper()
-		for i := 0; i < 10 && !regexp.MustCompile(`(?m)^❯ `+name+`\s`).MatchString(a.screen()); i++ {
+		for i := 0; i < 10 && !regexp.MustCompile(`▌ `+name+`\s`).MatchString(a.screen()); i++ {
 			a.in("\x1b[B")
 			time.Sleep(100 * time.Millisecond)
 		}
-		a.waitFor(5*time.Second, `(?m)^❯ `+name+`\s`)
+		a.waitFor(5*time.Second, `▌ `+name+`\s`)
 	}
 
 	// Front desk › Invite a guest asks for the role at once.
 	a := f.e.startApp(f.e.home, admin...)
-	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`)
+	a.waitFor(30*time.Second, `▌ ⌂  Lobby`)
 	a.in("3")
-	a.waitFor(10*time.Second, `❯ ✉  Invite a guest`)
+	a.waitFor(10*time.Second, `▌ ✉  Invite a guest`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `Invite a guest as: m member · a admin`)
 	a.in("m")
-	a.waitFor(10*time.Second, `Send this to the new member\. They run it on their computer:`, `│ hostel connect hostel1-`)
+	a.waitFor(10*time.Second, `Send this to the new member\. They run it on their computer:`, `INVITE CODE`, `hostel connect hostel1-`)
 	a.quit()
 	code := a.printed("    hostel connect ")
 	if !strings.HasPrefix(code, "hostel1-") {
@@ -379,20 +383,20 @@ func TestAppFrontDesk(t *testing.T) {
 	a = f.e.startApp(f.e.home, admin...)
 	openGuests(a)
 	selectUser(a, "bob")
-	a.waitFor(10*time.Second, `❯ bob\s+member\s+1 computer`)
+	a.waitFor(10*time.Second, `▌ bob\s+member\s+▌ 1 computer`)
 	a.in("r")
 	a.waitFor(10*time.Second, `Make bob an admin\? \[y/N\]`)
 	a.in("y")
-	a.waitFor(30*time.Second, `bob is now admin\.`, `(?m)^❯ bob\s+admin\s`)
+	a.waitFor(30*time.Second, `bob is now admin\.`, `▌ bob\s+admin\s`)
 	a.in("x")
 	a.waitFor(10*time.Second, `Remove bob\? Their computers are disconnected and their leases end\. \[y/N\]`)
 	a.in("y")
 	a.waitFor(30*time.Second, `Removed bob\.`)
 	// The message comes first; the guest list reloads after it.
-	a.waitGone(30*time.Second, `(?m)^. bob\s`)
+	a.waitGone(30*time.Second, `(?m)^ +(▌ +)?bob\s`)
 
 	a.in("\x1b")
-	a.waitFor(10*time.Second, `❯ ☰  Guest list`)
+	a.waitFor(10*time.Second, `▌ ☰  Guest list`)
 	a.in("\x1b[B\r")
 	a.waitFor(10*time.Second, `HOSTEL\s+\S+ › Front desk › Add a room`, `The name of the new machine`)
 	a.in("box2\r")
@@ -400,7 +404,7 @@ func TestAppFrontDesk(t *testing.T) {
 	a.in("fakedevice\r")
 	a.waitFor(10*time.Second, `Its labels`)
 	a.in("desktop\r")
-	a.waitFor(30*time.Second, `Run one of these on the machine home/box2 \(as an administrator\):`, `macOS or Linux`, `Windows \(PowerShell\)`)
+	a.waitFor(30*time.Second, `Run one of these on the machine home/box2, as an administrator\.`, `macOS or Linux`, `Windows \(PowerShell\)`)
 	a.quit()
 	if !regexp.MustCompile(`(?s)machine home/box2.*macOS or Linux:\n  curl .*hostel1-`).MatchString(a.screen()) {
 		t.Fatalf("the app printed no join command after quit:\n%s", a.screen())
@@ -426,20 +430,20 @@ func TestRoomOffline(t *testing.T) {
 	}
 
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
-	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`, `  2  ▦  Rooms\s+0 vacant · 0 occupied`)
+	a.waitFor(30*time.Second, `▌ ⌂  Lobby`, `▦  Rooms\s+● 0 vacant\s+◉ 0 occupied`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `❯ fakedevice\s+no machine online`)
+	a.waitFor(10*time.Second, `▌ fakedevice\s+○ no machine online`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `No machine for fakedevice is online\.`)
 	a.in("2")
-	a.waitFor(10*time.Second, `❯ ○ home/box\s+Offline`, `home/box: Offline · last seen \S+ ago`)
+	a.waitFor(10*time.Second, `▌ box\s+○ Offline`, `home/box: Offline · last seen \S+ ago`)
 
 	// A lease waits instead of failing.
 	if r := f.e.hostel("acquire", "fakedevice", "--task", "offline", "--wait", "2s"); r.code != 75 {
 		t.Fatalf("acquire while the only machine is offline: %s, want exit code 75", r)
 	}
 	f.c.start()
-	a.waitFor(2*time.Minute, `❯ ● home/box\s+(Vacant|Occupied)`)
+	a.waitFor(2*time.Minute, `▌ box\s+[●◉] (Vacant|Occupied)`)
 	f.e.mustHostel("acquire", "fakedevice", "--task", "offline")
 	f.e.mustHostel("release")
 	f.waitSlotFree()
@@ -455,7 +459,7 @@ func TestRoomOffline(t *testing.T) {
 		r := f.s.room("home/box")
 		return r.State == protocol.RoomBroken && r.Reason == "host key changed"
 	})
-	a.waitFor(30*time.Second, `❯ ✕ home/box\s+Broken`)
+	a.waitFor(30*time.Second, `▌ box\s+✕ Broken`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `r  repair`)
 	a.in("r")

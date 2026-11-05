@@ -467,15 +467,15 @@ func TestMachineUpdate(t *testing.T) {
 
 	// The app shows the machine as out of date, with the command.
 	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
-	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`)
+	a.waitFor(30*time.Second, `▌ ⌂  Lobby`)
 	a.in("2")
-	a.waitFor(10*time.Second, `home/box3\s+\S.*\s+Out of date`)
-	for i := 0; i < 10 && !regexp.MustCompile(`❯ \S+ home/box3`).MatchString(a.screen()); i++ {
+	a.waitFor(10*time.Second, `box3\s[^\n]*\n[^\n]*out of date`)
+	for i := 0; i < 10 && !regexp.MustCompile(`▌ box3\s`).MatchString(a.screen()); i++ {
 		a.in("\x1b[B")
 		time.Sleep(100 * time.Millisecond)
 	}
 	a.in("\r")
-	a.waitFor(10*time.Second, `Connect\s+v1\.0\.0\s+Out of date\s+on the machine, as an administrator: sudo /etc/hostel/hostel machine update`)
+	a.waitFor(10*time.Second, `Connect\s+v1\.0\.0\s+◆ out of date`, `On the machine, as an administrator: sudo /etc/hostel/hostel machine update`)
 	a.quit()
 
 	if out, err := docker("exec", "-u", "hostel", name, "/etc/hostel/hostel", "machine", "update"); err == nil || !strings.Contains(err.Error()+out, "as an administrator") {
@@ -518,9 +518,9 @@ func TestAppUpdate(t *testing.T) {
 	e.bin = copyBin(t, hostBin(t, "v1.0.0"), filepath.Join(e.home, "bin"))
 
 	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
-	a.waitFor(30*time.Second, `❯ 1  ⌂  Lobby`, `4  ⇪  Update\s+v1\.1\.0 available`)
+	a.waitFor(30*time.Second, `▌ ⌂  Lobby`, `⇪  Update\s+v1\.1\.0 available`)
 	a.in("\x1b[B\x1b[B\x1b[B")
-	a.waitFor(10*time.Second, `❯ 4  ⇪  Update`, `Update: install Hostel v1\.1\.0 on this computer \(it has v1\.0\.0\)`)
+	a.waitFor(10*time.Second, `▌ ⇪  Update`, `Update: install Hostel v1\.1\.0 on this computer \(it has v1\.0\.0\)`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `Install Hostel v1\.1\.0 on this computer\? \[y/N\]`)
 	a.in("y")
@@ -531,8 +531,8 @@ func TestAppUpdate(t *testing.T) {
 	}
 
 	a.in("3")
-	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `  ⇪  Update the server`)
-	for i := 0; i < 10 && !strings.Contains(a.screen(), "❯ ⇪  Update the server"); i++ {
+	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `⇪  Update the server`)
+	for i := 0; i < 10 && !strings.Contains(a.screen(), "▌ ⇪  Update the server"); i++ {
 		a.in("\x1b[B")
 		time.Sleep(100 * time.Millisecond)
 	}

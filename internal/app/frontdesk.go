@@ -53,31 +53,31 @@ func (p *frontDesk) load(m *model) tea.Cmd {
 // deskEntry is an entry of the Front desk: a page, or an action that asks
 // first (run).
 type deskEntry struct {
-	icon, label, hint string
-	open              func() page
-	run               func(m *model) tea.Cmd
+	icon, label, sub, hint string
+	open                   func() page
+	run                    func(m *model) tea.Cmd
 }
 
 func (p *frontDesk) entries(m *model) []deskEntry {
 	var out []deskEntry
 	if m.admin() {
-		out = append(out, deskEntry{"✉", "Invite a guest", "Invite a guest: make an invite code for a new member or admin.", func() page { return &guestList{start: "invite"} }, nil})
+		out = append(out, deskEntry{"✉", "Invite a guest", "A code for a new member or admin", "Invite a guest: make an invite code for a new member or admin.", func() page { return &guestList{start: "invite"} }, nil})
 	} else {
-		out = append(out, deskEntry{"✉", "Add your other computer", "Add your other computer: make a code that connects it as you.", func() page { return &guestList{start: "self"} }, nil})
+		out = append(out, deskEntry{"✉", "Add your other computer", "A code that connects it as you", "Add your other computer: make a code that connects it as you.", func() page { return &guestList{start: "self"} }, nil})
 	}
-	out = append(out, deskEntry{"☰", "Guest list", "Guest list: the people on this server; change a role, or remove someone.", func() page { return &guestList{} }, nil})
+	out = append(out, deskEntry{"☰", "Guest list", "The people on this server", "Guest list: the people on this server; change a role, or remove someone.", func() page { return &guestList{} }, nil})
 	if m.admin() {
-		out = append(out, deskEntry{"＋", "Add a room", "Add a room: connect a new machine to this server; it shows in Rooms.", func() page { return newAddMachine() }, nil})
+		out = append(out, deskEntry{"+", "Add a room", "Connect a new machine to this server", "Add a room: connect a new machine to this server; it shows in Rooms.", func() page { return newAddMachine() }, nil})
 	}
 	if tag := m.serverUpdateAvailable(); tag != "" {
-		out = append(out, deskEntry{"⇪", "Update the server",
+		out = append(out, deskEntry{"⇪", "Update the server", "Install " + tag + " on the server",
 			fmt.Sprintf("Update the server: install Hostel %s on the server (it runs %s); it starts again by itself; leases and jobs continue.", tag, m.info.Version),
 			nil, func(m *model) tea.Cmd {
 				m.ask(fmt.Sprintf("Update the server from %s to %s?", m.info.Version, tag), func() tea.Cmd { return m.startServerUpdate(tag) })
 				return nil
 			}})
 	}
-	return append(out, deskEntry{"⏻", "Check out", "Check out: disconnect this computer from the server (its agents too).", nil, checkOut})
+	return append(out, deskEntry{"⏻", "Check out", "Disconnect this computer", "Check out: disconnect this computer from the server (its agents too).", nil, checkOut})
 }
 
 // checkOut asks, then disconnects this computer.
@@ -97,27 +97,29 @@ func checkOut(m *model) tea.Cmd {
 }
 
 func (p *frontDesk) body(m *model) string {
-	var info strings.Builder
-	info.WriteString(field("Server", boldStyle.Render(clean(m.guest.URL()))) + "\n")
-	if m.st.ServerID != "" {
-		info.WriteString(field("Server ID", clean(m.st.ServerID)) + "\n")
+	w := contentWidth(m)
+	var b strings.Builder
+	b.WriteString("\n")
+	for i, e := range p.entries(m) {
+		b.WriteString(item(w, i == p.sel, e.icon+"  "+e.label, "   "+e.sub, "", "") + "\n\n")
 	}
+	b.WriteString(section("This server", w, true))
+	b.WriteString(line(field("Server", boldStyle.Render(clean(m.guest.URL())))))
 	if m.info.Version != "" {
-		info.WriteString(field("Version", clean(m.info.Version)) + "\n")
+		b.WriteString(line(field("Version", clean(m.info.Version))))
 	}
-	role := pill(m.st.Role, colMuted)
+	if m.st.ServerID != "" {
+		b.WriteString(line(field("Server ID", mutedStyle.Render(clean(m.st.ServerID)))))
+	}
+	role := mutedStyle.Render(clean(m.st.Role))
 	if m.admin() {
-		role = pill(m.st.Role, colBlue)
+		role = fg(colBlue).Render(clean(m.st.Role))
 	}
-	info.WriteString(field("You", clean(m.st.User)+" "+role) + "\n")
+	b.WriteString(line(field("You", clean(m.st.User)+mutedStyle.Render(" · ")+role)))
 	if p.me.Computer != "" {
-		info.WriteString(field("Computer", clean(p.me.Computer)))
+		b.WriteString(line(field("Computer", clean(p.me.Computer))))
 	}
-	var rows [][]string
-	for _, e := range p.entries(m) {
-		rows = append(rows, []string{accentStyle.Render(e.icon) + "  " + e.label})
-	}
-	return "\n" + card("Reception", info.String(), min(m.screenWidth(), 90), false) + "\n\n" + table(rows, p.sel, nil)
+	return b.String()
 }
 
 func (p *frontDesk) hint(m *model) string {

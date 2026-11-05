@@ -621,19 +621,20 @@ func keyLine(ks []binding) string {
 
 // keyList is the "?" page: all keys of the current page and of the app.
 func (m *model) keyList() string {
-	var rows [][]string
 	help := m.help
 	m.help = false
 	keys := m.footerKeys()
 	m.help = help
-	for _, k := range keys {
-		rows = append(rows, []string{keyStyle.Render(k.key), k.label})
-	}
 	if _, ok := m.pages[0].(*mainMenu); ok {
-		rows = append(rows, []string{keyStyle.Render("1 2 3"), "go to Lobby, Rooms, Front desk"})
+		keys = append(keys, binding{"1 2 3", "go to Lobby, Rooms, Front desk"})
 	}
-	rows = append(rows, []string{keyStyle.Render("ctrl+c"), "quit at once"})
-	return card("Keys", table(rows, -1, nil)+"\n"+mutedStyle.Render("Press ? or esc to close."), min(m.screenWidth(), 60), true)
+	keys = append(keys, binding{"ctrl+c", "quit at once"})
+	var b strings.Builder
+	b.WriteString("\n" + section("Keys", contentWidth(m), false))
+	for _, k := range keys {
+		b.WriteString(line(cell(accentStyle.Render(k.key), 10) + k.label))
+	}
+	return b.String() + "\n" + note("Press ? or esc to close.")
 }
 
 // plural is "1 room" or "2 rooms".

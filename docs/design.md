@@ -1348,16 +1348,30 @@ commands; `hostel status` prints plain text with the next commands at the end.
   room. The reconcile loop no longer provisions unreachable rooms blindly.
   The app shows "Offline · last seen …" in Rooms, and the Lobby leaves offline
   machines out; `hostel status` prints "offline (last seen …)".
-- The look (owner decision, 2026-11-03): each page has the header bar (the
-  Hostel sign, the place, the user and role) and the footer (the description of
-  the selected item, or a question or message; then the keys as chips; `?`
-  lists all keys). Sections are cards with rounded borders; the card with the
-  keyboard has an amber border, and `tab` moves between cards. Two cards stand
-  side by side from 100 columns. Colors (ANSI 256; `NO_COLOR` turns them off):
-  amber for Hostel and the selection, green vacant, blue occupied, yellow
-  waiting, red broken, gray for secondary text. Machine states are themed
-  words (Vacant, Occupied, Getting ready, Broken, Not connected); the live use
-  shows as gauges. `1` `2` `3` jump to Lobby, Rooms, Front desk.
+- The look (owner decisions, 2026-11-03 and 2026-11-05): each page has the
+  header bar (the Hostel sign, the place, the user and role) and the footer
+  (the description of the selected item, or a question or message; then the
+  keys as chips; `?` lists all keys). The levels stay: the main menu, lists
+  (Lobby, Rooms, Front desk, Guest list), and detail pages (a platform, a
+  machine). A list item has a bold title line and a dim second line, each
+  with a part on the right; the selected item has an amber bar on the left. A
+  detail page starts with the name, a description, and a summary line, then
+  sections with a small heading and a thin line, separated by empty space (no
+  boxes). On a platform page one cursor goes from the machines down to the
+  waiting line (`tab` jumps between them). A state shows as glyph, color, and
+  word (● Vacant, ◉ Occupied, ◐ Getting ready, ✕ Broken, ○ Offline). Colors
+  (ANSI 256; `NO_COLOR` turns them off): amber for Hostel and the selection,
+  green vacant, blue occupied, yellow waiting, red broken, gray for secondary
+  text. Motion stays inside a page: waiting glyphs turn and a changed state
+  glows for a moment; pages do not slide; `HOSTEL_NO_ANIMATION=1` turns the
+  motion off. Only the main menu has a drawing, a small street as an easter
+  egg (`street.go`): the hostel has 10 windows with a yellow light, and the
+  share of lit windows follows the share of occupied machines (a fixed order
+  for each server); the other buildings, a lamp, and a tree are decoration;
+  rarely a car passes (a random time of up to 6 minutes before each car). The
+  live use shows as gauges. `1` `2` `3` jump to Lobby, Rooms, Front desk.
+  `hostel --demo` runs the app with made-up data and no server (`demo.go`);
+  it does not read or change the guest configuration.
 
 All guest commands except `platforms`, `status`, and `agent-guide` call
 `POST /v1/leases/{id}/touch`. When a lease command fails (for example because

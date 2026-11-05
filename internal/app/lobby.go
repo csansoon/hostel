@@ -192,14 +192,11 @@ func (p *platformPage) body(m *model) string {
 		b.WriteString(margin + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n")
 	}
 
-	// The header: the name, what it is, and the state in one line.
-	b.WriteString("\n" + margin + "   " + accentStyle.Bold(true).Render(clean(pl.Name)) + "\n")
-	b.WriteString(margin + "   " + mutedStyle.Render(clean(pl.Description)) + "\n\n")
 	typical := "typical stay not known yet"
 	if pl.TypicalLeaseSeconds > 0 {
 		typical = "typical stay " + ago(time.Duration(pl.TypicalLeaseSeconds)*time.Second)
 	}
-	b.WriteString(margin + "   " + m.vacancy(pl) + "     " + waitLine(pl, len(machines)) + "     " + mutedStyle.Render(typical) + "\n\n\n")
+	b.WriteString(head(clean(pl.Name), clean(pl.Description), m.vacancy(pl)+"     "+waitLine(pl, len(machines))+"     "+mutedStyle.Render(typical)))
 
 	// The machines: one line each.
 	b.WriteString(heading("Machines", w) + "\n\n")

@@ -86,30 +86,41 @@ func (p *guestList) other(m *model, msg tea.Msg) tea.Cmd {
 }
 
 func (p *guestList) body(m *model) string {
-	stale := ""
+	var b strings.Builder
 	if p.err != "" {
-		stale = "\n  " + errStyle.Render(clean("! Cannot read the guest list: "+p.err+" (trying again)")) + "\n"
+		b.WriteString("\n" + line(errStyle.Render(clean("! Cannot read the guest list: "+p.err+" (trying again)"))))
 	}
 	if p.users == nil {
-		if stale != "" {
-			return stale
+		if p.err != "" {
+			return b.String()
 		}
-		return "\n  Reading the guest list …\n"
+		return "\n" + note("Reading the guest list …")
 	}
-	var rows [][]string
-	for _, u := range p.users {
-		role := pill(u.Role, colMuted)
-		if u.Role == protocol.RoleAdmin {
-			role = pill(u.Role, colBlue)
-		}
-		rows = append(rows, []string{clean(u.Name), role, mutedStyle.Render(plural(len(u.Computers), "computer"))})
-	}
-	var b strings.Builder
-	b.WriteString(stale + "\n" + table(rows, p.sel, []string{"GUEST", "ROLE", "COMPUTERS"}))
+	w := contentWidth(m)
+	// The new code first: it is what the user waits for.
 	if p.code != "" {
-		body := p.codeFor + "\n\n" + accentStyle.Render(wrap("hostel connect "+p.code, m.screenWidth()-4)) + "\n\n" +
-			mutedStyle.Render("Or paste the code in Hostel › Check in. It works once and ends in 24 hours.\nHostel prints it again when you quit, to copy it.")
-		b.WriteString("\n" + card(boldStyle.Render("Invite code"), body, m.screenWidth(), false) + "\n")
+		b.WriteString("\n" + section("Invite code", w, false))
+		b.WriteString(line(clean(p.codeFor)) + "\n")
+		for _, l := range strings.Split(wrap("hostel connect "+p.code, w-3), "\n") {
+			b.WriteString(line(accentStyle.Render(l)))
+		}
+		b.WriteString("\n" + note("Or paste the code in Hostel › Check in. It works once and ends in 24 hours."))
+		b.WriteString(note("Hostel prints it again when you quit, to copy it."))
+		b.WriteString(section("Guests", w, true))
+	} else {
+		b.WriteString("\n")
+	}
+	for i, u := range p.users {
+		role := mutedStyle.Render(u.Role)
+		if u.Role == protocol.RoleAdmin {
+			role = fg(colBlue).Render(u.Role)
+		}
+		name := clean(u.Name)
+		if u.Name == m.st.User {
+			name += mutedStyle.Render("  (you)")
+		}
+		sub := plural(len(u.Computers), "computer") + " · since " + u.CreatedAt.Local().Format("2 Jan 2006")
+		b.WriteString(item(w, i == p.sel, name, sub, role, "") + "\n\n")
 	}
 	return b.String()
 }
@@ -129,9 +140,9 @@ func (p *guestList) hint(m *model) string {
 func (p *guestList) keys(m *model) []binding {
 	ks := []binding{{"↑↓", "move"}}
 	if m.admin() {
-		ks = append(ks, binding{"i", "invite a guest"}, binding{"r", "change the role"}, binding{"x", "remove"})
+		ks = append(ks, binding{"i", "invite"}, binding{"r", "role"}, binding{"x", "remove"})
 	}
-	return append(ks, binding{"c", "add your other computer"})
+	return append(ks, binding{"c", "your other computer"})
 }
 
 func (p *guestList) askSelf(m *model) {
@@ -226,28 +237,43 @@ func (p *addMachine) title() string { return "Add a room" }
 func (p *addMachine) typing() bool { return p.step <= 2 }
 
 func (p *addMachine) body(m *model) string {
+	w := contentWidth(m)
 	var b strings.Builder
-	w := min(m.screenWidth(), 90)
-	b.WriteString("\n")
+	b.WriteString(head("Add a room", "Connect a new machine to this server", ""))
+	if p.step <= 2 {
+		b.WriteString(section(fmt.Sprintf("Step %d of 3", p.step+1), w, false))
+		if p.step > 0 {
+			b.WriteString(line(field("Name", clean(p.req.Name))))
+		}
+		if p.step > 1 {
+			b.WriteString(line(field("Platforms", clean(strings.Join(p.req.Platforms, ", ")))))
+		}
+		if p.step > 0 {
+			b.WriteString("\n")
+		}
+		q := []string{"The name of the new machine (for example macbook or win-pc):", "Its platforms besides its OS, separated by commas:", "Its labels, separated by commas:"}[p.step]
+		b.WriteString(line(q) + "\n" + line(p.field.View()))
+	}
 	switch p.step {
-	case 0:
-		b.WriteString(card("Add a room", "The name of the new machine (for example macbook or win-pc):\n\n"+p.field.View(), w, true) + "\n")
-	case 1:
-		b.WriteString(card("Add a room", field("Name", clean(p.req.Name))+"\n\nIts platforms besides its OS, separated by commas:\n\n"+p.field.View(), w, true) + "\n")
-	case 2:
-		b.WriteString(card("Add a room", field("Name", clean(p.req.Name))+"\n"+field("Platforms", chips(p.req.Platforms, colBlue))+"\n\nIts labels, separated by commas:\n\n"+p.field.View(), w, true) + "\n")
 	case 3:
-		b.WriteString("  Making the machine code …\n")
+		b.WriteString(note("Making the machine code …"))
 	case 4:
-		w := m.screenWidth()
-		body := fmt.Sprintf("Run one of these on the machine %s (as an administrator):\n\n%s\n%s\n\n%s\n%s\n\n%s",
-			boldStyle.Render(clean(p.resp.Machine)), mutedStyle.Render("macOS or Linux"), accentStyle.Render(wrap(p.resp.Unix, w-4)),
-			mutedStyle.Render("Windows (PowerShell)"), accentStyle.Render(wrap(p.resp.Windows, w-4)),
-			mutedStyle.Render("The code works once and ends at "+p.resp.ExpiresAt.Local().Format("2006-01-02 15:04")+". The machine shows in Rooms when it connects.\nHostel prints these commands again when you quit, to copy them."))
-		b.WriteString(card(boldStyle.Render("Machine code"), body, w, false) + "\n")
+		b.WriteString(section("Machine code", w, false))
+		b.WriteString(line("Run one of these on the machine "+boldStyle.Render(clean(p.resp.Machine))+", as an administrator.") + "\n")
+		b.WriteString(note("macOS or Linux"))
+		for _, l := range strings.Split(wrap(p.resp.Unix, w-3), "\n") {
+			b.WriteString(line(accentStyle.Render(l)))
+		}
+		b.WriteString("\n" + note("Windows (PowerShell)"))
+		for _, l := range strings.Split(wrap(p.resp.Windows, w-3), "\n") {
+			b.WriteString(line(accentStyle.Render(l)))
+		}
+		b.WriteString("\n" + note("The code works once and ends at "+p.resp.ExpiresAt.Local().Format("2006-01-02 15:04")+"."))
+		b.WriteString(note("The machine shows in Rooms when it connects."))
+		b.WriteString(note("Hostel prints these commands again when you quit, to copy them."))
 	}
 	if p.errMsg != "" {
-		b.WriteString("\n" + errStyle.Render(clean(p.errMsg)) + "\n")
+		b.WriteString("\n" + line(errStyle.Render(clean(p.errMsg))))
 	}
 	return b.String()
 }
