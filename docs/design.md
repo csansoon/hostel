@@ -1315,14 +1315,18 @@ a connection, commands that need the server exit with 78 and print how to connec
 
 ### Local state
 
-- Directory: `$(git rev-parse --git-dir)/hostel/` (the per-worktree git directory),
-  one subdirectory for each lease name (`--name`, default `main`). It holds the
-  lease ID, the request, the private key, the pinned gateway host key, the port
-  process PID and control socket, and the step that `acquire` finished last.
-- A worktree can have several active leases with different names, for example a
-  build lease and a QA lease (`--name qa`).
-- Commands select the lease with `--name`. If the worktree has only one active
-  lease, they use it.
+- Directory: `$(git rev-parse --git-dir)/hostel/lease/` (the per-worktree git
+  directory). It holds the lease ID, the request, the private key, the pinned
+  gateway host key, the port process PID and control socket, and the step that
+  `acquire` finished last.
+- **One lease per worktree** (owner decision, 2026-11-05). Lease commands
+  (`run`, `sync`, `screenshot`, `release`, …) always use the lease of the
+  worktree; no command has a lease selector. `acquire` in a worktree with an
+  active lease and other tools fails at once: "this worktree has the lease
+  <id>; release it first, or use another worktree". One lease can have several
+  tools (build tools and an emulator together); work on two machines at the same
+  time uses a second worktree (`git worktree add`). The server knows each lease
+  by its ID; this rule is only local.
 
 ### `hostel acquire [<tool[:option]>...] --task "..."`
 
@@ -1392,8 +1396,7 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | Command | Effect |
 |---|---|
 | `hostel tools [<tool>] [--json]` | Each tool: its options (from the inventories), whether it is a screen tool, the machines that have it, free slots, waiting leases, and the estimated wait (R1); a last line names the repository's mise tools, which work on every machine. With a name: the description, the needs, the environment names, the machines with their options and OS, and the tool's `GUIDE.md`. |
-| `--name <name>` | On all lease commands below: selects the lease when the worktree has more than one (default `main`). |
-| `hostel acquire [<tool[:option]>...] --task ... [--name n] [--priority low\|normal\|high] [--fresh] [--wait 100s] [--background]` | Creates or continues a lease. The lease ID is in the worktree (`$(git rev-parse --git-dir)/hostel/<name>/lease.json`), so the same command continues the same lease and its place. When it returns with code 75 for a waiting lease, it says how long the server keeps the place without it (`poll_timeout`). With `--background`, a lease that is not ready makes it return at once and start a detached `hostel keep-place --dir <state dir>` that polls the lease until it is ready or ends (one keeper for each lease: `keeper.json` holds its ID, the lease ID, its process ID, and its heartbeat; it also stops when the worktree has another lease, after 1 h without an answer, and after 24 h; it removes its heartbeat when it stops; server errors and network errors do not stop it). |
+| `hostel acquire [<tool[:option]>...] --task ... [--priority low\|normal\|high] [--fresh] [--wait 100s] [--background]` | Creates or continues a lease. The lease ID is in the worktree (`$(git rev-parse --git-dir)/hostel/lease/lease.json`), so the same command continues the same lease and its place. When it returns with code 75 for a waiting lease, it says how long the server keeps the place without it (`poll_timeout`). With `--background`, a lease that is not ready makes it return at once and start a detached `hostel keep-place --dir <state dir>` that polls the lease until it is ready or ends (one keeper for each lease: `keeper.json` holds its ID, the lease ID, its process ID, and its heartbeat; it also stops when the worktree has another lease, after 1 h without an answer, and after 24 h; it removes its heartbeat when it stops; server errors and network errors do not stop it). |
 | `hostel sync [--setup]` | Sends the changed files again. `--setup` runs the setup job again. |
 | `hostel run [--detach] [--wait 100s] [--json] -- <command>` | Starts a job in the work directory and streams its output. One argument runs with `sh -c` (`hostel run -- "make && make test"`); several arguments run without a shell. The command is found in the job's PATH (with the mise tools). |
 | `hostel attach <job> [--wait 100s]` / `hostel jobs` / `hostel stop <job>` | Job control. |
