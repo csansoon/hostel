@@ -406,6 +406,23 @@ v0.1.99 updates itself to v0.2.0 from GitHub (`hostel update`, and the app's
 Update); an admin updates the server of a test deployment from the app; a joined
 Linux machine shows "Out of date" and `hostel machine update` fixes it.
 
+## M10e. Tools
+
+Design: `m10e-implementation.md` (owner decision of 2026-11-05).
+
+- Tools replace platforms, devices, and labels: machines list tools, the server
+  installs and checks them (the inventory), guests acquire tools with optional
+  options, and a lease starts only what it asked for.
+- Screen tools (emulators, simulators, desktops) with screenshots, drivers, and
+  cleanup; a guide for each tool in `hostel tools` and `hostel agent-guide`.
+- One waiting line with estimates by request; `hostel.toml` with `tools` and
+  `[with.<tool>]`; the app's Lobby by tools; an automatic migration.
+
+Done when: a new agent repeats the Android task of the 2026-11-05 report (Gradle
+builds without an emulator, emulator QA with screenshots) with only the README,
+the skills, and the agent guide, without the problems 1, 2, and 7 of that
+report; the iOS and Windows desktop smoke tests pass with tools.
+
 ## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
