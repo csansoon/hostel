@@ -845,8 +845,8 @@ no scripts at all (a tool that only sets `env` and `path`). Steps:
 
 | Step | When | Example for `ios-simulator` |
 |---|---|---|
-| `install` | once for each room, and again when the tool's files change; before it, the `install` of each tool in `needs` | create one golden simulator for each option |
-| `check` | after `install`, after each cleanup, at repair, and before a warm room takes a lease; the last line of the output is the tool's version (a software tool) or its options, comma-separated (a screen tool); a non-zero exit code means that the tool does not work | Xcode works; the golden simulators exist; enough free disk |
+| `install` | once for each room, and again when the tool's files or the machine's options of a screen tool change; before it, the `install` of each tool in `needs` | create one golden simulator for each option |
+| `check` | after `install`, after each cleanup, at repair, and before a warm room takes a lease; the last line of the output is the tool's version (a software tool) or its options, comma-separated (a screen tool); a non-zero exit code means that the tool does not work. A screen tool whose check reports none of the options that the machine lists fails too (no lease could start it) | Xcode works; the golden simulators exist; enough free disk |
 | `start` | screen tools only: for each lease that asked for the tool, before `ready`, after the `start` of the tools in `needs`; writes facts to `tool.env` | clone the golden simulator of each requested option; boot it |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output path, `$2` the option (default: the first of the lease) | `xcrun simctl io "$udid" screenshot "$1"` |
 | `stop` | screen tools only: cleanup of a lease that started the tool, in reverse order of `start` | stop the processes that use the slot's clones (by UDID), then shut down and delete the clones |
@@ -860,7 +860,8 @@ Contract:
   `slots/<slot>/`. The server creates `slots/<slot>/` before `start`.
 - Environment: `HOSTEL_TOOL` (this tool), `HOSTEL_TOOL_OPTIONS` (the lease's
   options of this tool, comma-separated; `start`, `screenshot`, `stop`),
-  `HOSTEL_TOOL_ALL_OPTIONS` (all options in `tool.toml`), `HOSTEL_TOOLS` (all
+  `HOSTEL_TOOL_ALL_OPTIONS` (the options that the machine lists for this tool;
+  all options in `tool.toml` when the machine lists it without one), `HOSTEL_TOOLS` (all
   tools of the lease, with their options), `HOSTEL_SLOT`, `HOSTEL_SLOT_DIR`,
   `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_LEASE_ID`, `HOSTEL_EXCLUSIVE`
   (`1` when the lease holds the whole room, for example a desktop lease, else

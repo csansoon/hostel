@@ -29,6 +29,9 @@ type RoomEnv struct {
 	// OS is the machine's configured OS. It selects the tool scripts; it
 	// can differ from the probed OS (external machines).
 	OS string `json:"os"`
+	// ToolOptions are the options that the machine lists for each screen
+	// tool (HOSTEL_TOOL_ALL_OPTIONS).
+	ToolOptions map[string][]string `json:"tool_options,omitempty"`
 }
 
 // RunScriptRequest is the input of "hostel room run-script".

@@ -169,7 +169,11 @@ func (h *helper) scriptEnv(tool, slot, step string, reqEnv map[string]string) ([
 	if tool != "" {
 		env["HOSTEL_TOOL"] = tool
 		if t, err := h.toolInfo(tool); err == nil {
-			env["HOSTEL_TOOL_ALL_OPTIONS"] = strings.Join(t.Options, ",")
+			options := t.Options
+			if o, ok := roomEnv.ToolOptions[tool]; ok {
+				options = o
+			}
+			env["HOSTEL_TOOL_ALL_OPTIONS"] = strings.Join(options, ",")
 		}
 	}
 	if slot != "" {

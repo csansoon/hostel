@@ -138,7 +138,7 @@ it has no scripts at all (a tool that only sets `env` and `path`).
 
 | Step | When | Runs in |
 |---|---|---|
-| `install` | once for each room, and again when the tool's files change (after the `install` of its needs) | `hostel/` |
+| `install` | once for each room, and again when the tool's files or the machine's options of a screen tool change (after the `install` of its needs) | `hostel/` |
 | `check` | after install, after each cleanup, at repair, before a warm room takes a lease: exit non-zero if the tool does not work; print the version (or the options of a screen tool, comma-separated) on the last line | `hostel/` |
 | `start` | screen tools only: each lease that asks for the tool, before it is ready, after the `start` of its needs; write the facts to `tool.env` | `slots/<slot>/` |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output PNG path, `$2` the option | `slots/<slot>/` |
@@ -158,8 +158,9 @@ Rules:
 - The machine's mise tools are installed before `install`, so scripts can use
   them. Keep downloads in `$HOSTEL_CACHE_DIR/<tool>`: it stays between leases.
 
-Environment of the scripts: `HOSTEL_TOOL`, `HOSTEL_TOOL_ALL_OPTIONS` (all
-options in `tool.toml`), `HOSTEL_TOOLS` (all tools of the lease), `HOSTEL_SLOT`,
+Environment of the scripts: `HOSTEL_TOOL`, `HOSTEL_TOOL_ALL_OPTIONS` (the
+options that the machine lists for the tool; all options in `tool.toml` when
+the machine lists it without one), `HOSTEL_TOOLS` (all tools of the lease), `HOSTEL_SLOT`,
 `HOSTEL_SLOT_DIR`, `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_LEASE_ID`, and
 for `start`, `screenshot`, and `stop`: `HOSTEL_TOOL_OPTIONS` (the lease's
 options of this tool, comma-separated) and `HOSTEL_EXCLUSIVE` (`1` for a

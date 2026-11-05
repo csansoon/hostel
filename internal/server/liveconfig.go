@@ -279,7 +279,7 @@ func (s *Server) applyTool(ctx context.Context, name, state string, files map[st
 		return 0, err
 	}
 	for _, l := range leases {
-		if !leaseUses(l, name) {
+		if !leaseUses(old.cfg, l, name) {
 			continue
 		}
 		if l.State != protocol.LeaseQueued {

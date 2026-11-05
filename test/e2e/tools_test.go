@@ -509,3 +509,82 @@ func TestLeaseFacts(t *testing.T) {
 		t.Fatalf("lease facts: tools %v, hardware %+v", names, l.Access.Hardware)
 	}
 }
+
+// TestToolMachineOptions (M10e review): install and check get the options
+// that the machine lists for a screen tool (HOSTEL_TOOL_ALL_OPTIONS), not all
+// options of the tool. A check that reports none of the machine's options
+// fails: the room is broken, and it does not serve the tool.
+func TestToolMachineOptions(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.init()
+	a := e.startStaticRoom("a")
+	b := e.startStaticRoom("b")
+	e.useTools("fake-sdk", "fake-screen")
+	e.writeTool("fake-screen", map[string]string{"check.linux.sh": "#!/bin/sh\necho \"${FAKE_CHECK_OPTIONS:-$HOSTEL_TOOL_ALL_OPTIONS}\"\n"})
+	e.writeConfig(serverHeader() + `
+[providers.home]
+kind = "static"
+
+[providers.home.machines.a]
+address = "` + a.address() + `"
+os = "linux"
+tools = ["fake-screen:option-b"]
+
+[providers.home.machines.b]
+address = "` + b.address() + `"
+os = "linux"
+tools = ["fake-screen:option-b"]
+env = { FAKE_CHECK_OPTIONS = "option-c" }
+`)
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	room := s.waitRoom("home/a", protocol.RoomRunning, roomReady)
+	if inv := inventoryOf(room, "fake-screen"); inv == nil || !slices.Equal(inv.Options, []string{"option-b"}) {
+		t.Fatalf("fake-screen in the inventory of home/a: %+v", inv)
+	}
+	if got := a.sh("grep '^install' " + cacheDir + "/fake-screen.log"); got != "install linux option-b" {
+		t.Fatalf("the install of fake-screen on home/a: %q, want only option-b", got)
+	}
+	room = s.waitRoom("home/b", protocol.RoomBroken, roomReady)
+	if !strings.Contains(room.Reason, "fake-screen check reported option-c, none of the options of the machine (option-b)") {
+		t.Fatalf("home/b: %s", room.Reason)
+	}
+	e.useGuestToken()
+	e.newRepo(defaultRepoFiles())
+	if r := e.mustHostel("acquire", "fake-screen:option-b", "--task", "b"); !strings.Contains(r.stderr, "on home/a") {
+		t.Fatalf("acquire: %s", r)
+	}
+}
+
+// TestToolChangeDuringCleanup (M10e review): an admin cannot change a tool
+// that a lease in cleanup needs; a tool that it does not use can change, and
+// the room installs the new version after the cleanup (the check of the
+// cleanup records the version that the room has, not the new one).
+func TestToolChangeDuringCleanup(t *testing.T) {
+	t.Parallel()
+	extra := func(v string) map[string]string {
+		return map[string]string{
+			"tool.toml":        "description = \"Extra software\"\n",
+			"install.linux.sh": "#!/bin/sh\necho \"install extra " + v + "\" >> \"$HOSTEL_CACHE_DIR/fake-extra.log\"\n",
+			"check.linux.sh":   "#!/bin/sh\necho 1.0\n",
+		}
+	}
+	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-extra"}, tools: map[string]map[string]string{"fake-extra": extra("v1")}})
+	f.acquire()
+	f.marker("slow-stop", true)
+	f.e.mustHostel("release")
+	// The cleanup has begun: its check list is fixed.
+	f.e.waitFor("the slow stop", time.Minute, func() bool {
+		return strings.Contains(f.c.sh("cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' || true"), "sleep 20 ")
+	})
+	f.e.writeTool("fake-sdk", map[string]string{"install.linux.sh": "#!/bin/sh\nset -e\nmkdir -p \"$HOSTEL_CACHE_DIR/fake-sdk/bin\"\necho 2.0.0 > \"$HOSTEL_CACHE_DIR/fake-sdk/version\"\n"})
+	if r := f.e.adminHostel("config", "tools", "push", f.e.toolDir("fake-sdk")); r.code != 1 || !strings.Contains(r.stderr, "uses the tool fake-sdk") {
+		t.Fatalf("push of a tool that a lease in cleanup needs: %s", r)
+	}
+	f.e.writeTool("fake-extra", extra("v2"))
+	f.e.pushTool("fake-extra")
+	f.marker("slow-stop", false)
+	f.e.waitFor("the install of the new fake-extra", 2*time.Minute, func() bool {
+		return strings.Contains(f.c.sh("cat "+cacheDir+"/fake-extra.log"), "install extra v2")
+	})
+}

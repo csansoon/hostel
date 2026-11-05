@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -214,8 +217,8 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		return err
 	}
 	for _, t := range lc.cfg.DefinedTools(m) {
-		up := upload.Tools[t.Name]
-		if ready[t.Name] == up.Hash {
+		sum := installHash(lc, m, t.Name)
+		if ready[t.Name] == sum {
 			continue
 		}
 		// On-demand rooms install a screen tool when a lease for it first
@@ -223,7 +226,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		if m.OnDemand() && t.Screen {
 			continue
 		}
-		if err := s.installTool(ctx, room, r.ID, m.OS, t, up); err != nil {
+		if err := s.installTool(ctx, room, r.ID, m, t, sum); err != nil {
 			return err
 		}
 	}
@@ -320,12 +323,26 @@ func (s *Server) slotHome(ctx context.Context, r store.Room, slot string) (strin
 	return home, err
 }
 
+// installHash identifies the install of a tool on a machine: the hash of the
+// tool's files for the machine's OS and, for a screen tool, the options that
+// the machine lists (HOSTEL_TOOL_ALL_OPTIONS). A change of either makes the
+// room install the tool again.
+func installHash(lc *liveConfig, m *config.Machine, name string) string {
+	sum := lc.uploads[name][m.OS].Hash
+	if t := lc.cfg.Tools[name]; sum == "" || t == nil || !t.Screen {
+		return sum
+	}
+	h := sha256.Sum256([]byte(sum + "\n" + strings.Join(configuredHaves(lc.cfg, m)[name].Options, ",")))
+	return hex.EncodeToString(h[:])
+}
+
 // checkTools returns the defined tools of a room that have a check script and
-// that the room has installed with the current files. An on-demand room
-// installs a screen tool only when the first lease for it uses the room
-// (design, section 7), and a check script can need the result of install (for
-// example the ios-simulator golden simulators).
-func (s *Server) checkTools(ctx context.Context, roomID int64) ([]string, *config.Machine, error) {
+// that the room has installed with the current files, each with the install
+// hash that its inventory row keeps. An on-demand room installs a screen tool
+// only when the first lease for it uses the room (design, section 7), and a
+// check script can need the result of install (for example the ios-simulator
+// golden simulators).
+func (s *Server) checkTools(ctx context.Context, roomID int64) (map[string]string, *config.Machine, error) {
 	r, err := s.store.Room(ctx, roomID)
 	if err != nil {
 		return nil, nil, err
@@ -338,11 +355,12 @@ func (s *Server) checkTools(ctx context.Context, roomID int64) ([]string, *confi
 	if err != nil {
 		return nil, nil, err
 	}
-	var out []string
-	for _, t := range s.config().DefinedTools(m) {
-		up := s.toolUploads()[t.Name][m.OS]
-		if up.Hash != "" && t.Script(m.OS, config.StepCheck) != "" && installed[t.Name] == up.Hash {
-			out = append(out, t.Name)
+	lc := s.live.Load()
+	out := map[string]string{}
+	for _, t := range lc.cfg.DefinedTools(m) {
+		sum := installHash(lc, m, t.Name)
+		if sum != "" && t.Script(m.OS, config.StepCheck) != "" && installed[t.Name] == sum {
+			out[t.Name] = sum
 		}
 	}
 	return out, m, nil
@@ -351,16 +369,16 @@ func (s *Server) checkTools(ctx context.Context, roomID int64) ([]string, *confi
 // runChecks runs the check scripts of checkTools and records the option that
 // each one reports.
 func (s *Server) runChecks(ctx context.Context, room *roomops.Room, roomID int64) error {
-	names, m, err := s.checkTools(ctx, roomID)
+	sums, m, err := s.checkTools(ctx, roomID)
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
+	for _, name := range sortedKeys(sums) {
 		t := s.config().Tools[name]
 		if t == nil {
 			continue
 		}
-		if err := s.runCheck(ctx, room, roomID, m.OS, t); err != nil {
+		if err := s.runCheck(ctx, room, roomID, m, t, sums[name]); err != nil {
 			return err
 		}
 	}
@@ -368,10 +386,10 @@ func (s *Server) runChecks(ctx context.Context, room *roomops.Room, roomID int64
 }
 
 // runCheck runs the check script of a tool and writes its inventory row with
-// the option that the last line of the output reports. A tool without a check
-// script has no option. osName is the machine's OS, which selects the scripts.
-func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64, osName string, t *config.Tool) error {
-	sum := s.toolUploads()[t.Name][osName].Hash
+// the option that the last line of the output reports, and sum, the install
+// hash of what the room has. A tool without a check script has no option.
+func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64, m *config.Machine, t *config.Tool, sum string) error {
+	osName := m.OS
 	row := store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: sum, State: store.ToolReady,
 		Env: envNames(t), CheckedAt: time.Now()}
 	if t.Script(osName, config.StepCheck) != "" {
@@ -390,15 +408,37 @@ func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64,
 			return fmt.Errorf("tool %s: check script failed (exit code %d)", t.Name, resp.ExitCode)
 		}
 		row.Option = resp.LastLine
+		if msg := noMachineOption(s.config(), m, t, row.Option); msg != "" {
+			s.store.AddEvent(ctx, time.Now(), "", roomID, "script", msg)
+			row.State, row.Option = store.ToolFailed, ""
+			if err := s.store.SetRoomTool(ctx, row); err != nil {
+				return err
+			}
+			return fmt.Errorf("tool %s: check: %s", t.Name, msg)
+		}
 	}
 	return s.store.SetRoomTool(ctx, row)
 }
 
+// noMachineOption explains a check of a screen tool that reports options,
+// but none of the options that the machine lists: no lease can start the
+// tool on the room. It returns "" for any other check.
+func noMachineOption(cfg *config.Server, m *config.Machine, t *config.Tool, reported string) string {
+	listed := configuredHaves(cfg, m)[t.Name].Options
+	got := splitOptions(reported)
+	if !t.Screen || len(listed) == 0 || len(got) == 0 || slices.ContainsFunc(got, func(o string) bool { return slices.Contains(listed, o) }) {
+		return ""
+	}
+	return fmt.Sprintf("%s check reported %s, none of the options of the machine (%s); repair the room to run install again",
+		t.Name, strings.Join(got, ", "), strings.Join(listed, ", "))
+}
+
 // installTool runs the install script of a tool and then its check script,
-// which records the tool in the room's inventory.
-func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int64, osName string, t *config.Tool, up roomops.Tool) error {
+// which records the tool in the room's inventory with sum, the install hash.
+func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int64, m *config.Machine, t *config.Tool, sum string) error {
+	osName := m.OS
 	if t.Script(osName, config.StepInstall) != "" {
-		if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: up.Hash,
+		if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: sum,
 			State: store.ToolInstalling, Env: envNames(t), CheckedAt: time.Now()}); err != nil {
 			return err
 		}
@@ -412,7 +452,7 @@ func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int
 		s.store.AddEvent(ctx, time.Now(), "", roomID, "script",
 			fmt.Sprintf("%s install exited with code %d\n%s", t.Name, resp.ExitCode, resp.OutputTail))
 		if resp.TimedOut || resp.ExitCode != 0 {
-			if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: up.Hash,
+			if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: sum,
 				State: store.ToolFailed, Env: envNames(t), CheckedAt: time.Now()}); err != nil {
 				return err
 			}
@@ -422,7 +462,7 @@ func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int
 			return fmt.Errorf("tool %s: install script exited with code %d", t.Name, resp.ExitCode)
 		}
 	}
-	return s.runCheck(ctx, room, roomID, osName, t)
+	return s.runCheck(ctx, room, roomID, m, t, sum)
 }
 
 // installedTools returns the scripts hash of each tool that the room has
@@ -477,9 +517,14 @@ func (s *Server) roomUpload(lc *liveConfig, room *roomops.Room, m *config.Machin
 	for k, v := range s.miseEnv(room.OS, room.Home) {
 		env[k] = v
 	}
-	re := protocol.RoomEnv{Env: env, Slots: map[string]map[string]string{}, OS: m.OS}
+	re := protocol.RoomEnv{Env: env, Slots: map[string]map[string]string{}, OS: m.OS, ToolOptions: map[string][]string{}}
 	for _, sl := range m.Slots {
 		re.Slots[sl.Name] = sl.Env
+	}
+	for name, h := range configuredHaves(lc.cfg, m) {
+		if h.Screen {
+			re.ToolOptions[name] = h.Options
+		}
 	}
 	if u.RoomEnv, err = json.Marshal(re); err != nil {
 		return u, err

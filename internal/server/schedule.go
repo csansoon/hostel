@@ -51,7 +51,7 @@ func toolUploads(cfg *config.Server) (map[string]map[string]roomops.Tool, error)
 func roomReady(lc *liveConfig, rts []store.RoomTool, r store.Room, m *config.Machine) map[string]bool {
 	have := map[string]bool{}
 	for _, rt := range rts {
-		if rt.RoomID == r.ID && rt.State == store.ToolReady && rt.ScriptsSHA256 == lc.uploads[rt.Tool][m.OS].Hash {
+		if rt.RoomID == r.ID && rt.State == store.ToolReady && rt.ScriptsSHA256 == installHash(lc, m, rt.Tool) {
 			have[rt.Tool] = true
 		}
 	}

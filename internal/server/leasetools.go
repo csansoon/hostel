@@ -67,12 +67,16 @@ func splitOptions(s string) []string {
 
 // withInventory applies the options that check scripts reported: the versions
 // of a software tool replace the configured ones; a screen tool keeps the
-// configured options that the room has.
-func withInventory(h scheduler.Have, reported []string) scheduler.Have {
+// configured options that the room has. ok is false for a screen tool that
+// has none of them: it gives nothing (empty options would match any).
+func withInventory(h scheduler.Have, reported []string) (scheduler.Have, bool) {
 	if len(reported) == 0 {
-		return h
+		return h, true
 	}
 	if h.Screen {
+		if len(h.Options) == 0 {
+			return h, true
+		}
 		var keep []string
 		for _, o := range h.Options {
 			if slices.Contains(reported, o) {
@@ -80,10 +84,10 @@ func withInventory(h scheduler.Have, reported []string) scheduler.Have {
 			}
 		}
 		h.Options = keep
-		return h
+		return h, len(keep) > 0
 	}
 	h.Options, h.Checked = reported, true
-	return h
+	return h, true
 }
 
 func (v *toolView) inventory(roomID int64, tool string) []string {
@@ -100,7 +104,11 @@ func (v *toolView) inventory(roomID int64, tool string) []string {
 func (v *toolView) roomHaves(m *config.Machine, roomID int64) map[string]scheduler.Have {
 	out := configuredHaves(v.lc.cfg, m)
 	for name, h := range out {
-		out[name] = withInventory(h, v.inventory(roomID, name))
+		if h, ok := withInventory(h, v.inventory(roomID, name)); ok {
+			out[name] = h
+		} else {
+			delete(out, name)
+		}
 	}
 	return out
 }
@@ -121,7 +129,11 @@ func (v *toolView) machineHaves(m *config.Machine) map[string]scheduler.Have {
 				}
 			}
 		}
-		out[name] = withInventory(h, reported)
+		if h, ok := withInventory(h, reported); ok {
+			out[name] = h
+		} else {
+			delete(out, name)
+		}
 	}
 	return out
 }
@@ -311,9 +323,9 @@ func noMachineMessage(machines []scheduler.Machine, r scheduler.Request) string 
 	return msg + "; run \"hostel tools\""
 }
 
-// leaseUses reports whether a lease asked for a tool or started it.
-func leaseUses(l store.Lease, name string) bool {
-	return slices.Contains(toolNamesOf(l.Tools), name) ||
+// leaseUses reports whether a lease asked for a tool, needs it, or started it.
+func leaseUses(cfg *config.Server, l store.Lease, name string) bool {
+	return slices.Contains(leaseToolNames(cfg, l.Tools), name) ||
 		slices.ContainsFunc(l.Started, func(st protocol.StartedTool) bool { return st.Name == name })
 }
 

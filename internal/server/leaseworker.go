@@ -262,8 +262,8 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 	}
 	synced := false
 	for _, t := range lc.cfg.DefinedTools(m) {
-		up := lc.uploads[t.Name][m.OS]
-		if !slices.Contains(closure, t.Name) || installed[t.Name] == up.Hash {
+		sum := installHash(lc, m, t.Name)
+		if !slices.Contains(closure, t.Name) || installed[t.Name] == sum {
 			continue
 		}
 		if !synced {
@@ -276,7 +276,7 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 			}
 			synced = true
 		}
-		if err := s.installTool(ctx, room, r.ID, m.OS, t, up); err != nil {
+		if err := s.installTool(ctx, room, r.ID, m, t, sum); err != nil {
 			return err
 		}
 	}
@@ -479,8 +479,10 @@ func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
 }
 
 // recordChecks writes the results of the check scripts of a cleanup to the
-// room's inventory.
-func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protocol.ToolCheck) error {
+// room's inventory, with the install hashes of the tools that the room had
+// when the cleanup began (sums, from checkTools): a tool version that an admin
+// pushed during the cleanup is not installed yet.
+func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protocol.ToolCheck, sums map[string]string) error {
 	r, err := s.store.Room(ctx, roomID)
 	if err != nil {
 		return err
@@ -491,11 +493,16 @@ func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protoc
 	}
 	for _, c := range checks {
 		t := s.config().Tools[c.Tool]
-		if t == nil {
+		sum, ok := sums[c.Tool]
+		if t == nil || !ok {
 			continue
 		}
-		row := store.RoomTool{RoomID: roomID, Tool: c.Tool, ScriptsSHA256: s.toolUploads()[c.Tool][m.OS].Hash, State: store.ToolReady,
+		row := store.RoomTool{RoomID: roomID, Tool: c.Tool, ScriptsSHA256: sum, State: store.ToolReady,
 			Option: c.Option, Env: envNames(t), CheckedAt: time.Now()}
+		if msg := noMachineOption(s.config(), m, t, c.Option); msg != "" && c.Error == "" {
+			s.store.AddEvent(ctx, time.Now(), "", roomID, "script", msg)
+			c.Error = msg
+		}
 		if c.Error != "" {
 			row.State, row.Option = store.ToolFailed, ""
 		}
@@ -521,13 +528,13 @@ func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int6
 	// slot with its own user runs it as the machine user after the cleanup.
 	ownUser := slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot) != ""
 	if !ownUser {
-		req.Check = check
+		req.Check = sortedKeys(check)
 	}
 	var resp protocol.CleanupResponse
 	if err := room.Helper(ctx, []string{"cleanup", "--slot", slot}, req, &resp); err != nil {
 		return err
 	}
-	if err := s.recordChecks(ctx, roomID, resp.Checks); err != nil {
+	if err := s.recordChecks(ctx, roomID, resp.Checks, check); err != nil {
 		return err
 	}
 	var failed []string
