@@ -28,7 +28,7 @@ func menuEntries(m *model) []menuEntry {
 	entries := []menuEntry{
 		{"🛎️", "Front desk", "People, rooms, this server, check out", "Front desk: the people on this server, its rooms, the server itself, and check out.",
 			func(m *model) string { return "" }, func() page { return newFrontDesk() }},
-		{"🛋️", "Lobby", "Platforms, and who waits for each one", "Lobby: the platforms, what each can run, which machines are free, and who waits.",
+		{"🛋️", "Lobby", "Tools, and who waits for each one", "Lobby: the tools of the machines, which machines are free, and who waits.",
 			func(m *model) string {
 				if n := waiting(m.st); n > 0 {
 					return fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + fmt.Sprintf(" %d waiting", n))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/csansoon/hostel/internal/protocol"
@@ -80,7 +81,7 @@ func machineList(m *model, w int, sel string) string {
 		for _, ms := range groups[n] {
 			s := machineState(m.st, ms, now)
 			_, name, _ := strings.Cut(ms.Key, "/")
-			sub := clean(strings.Join(machinePlatforms(ms), " · "))
+			sub := clean(strings.Join(machineTools(ms), " · "))
 			if m.outOfDate(ms) {
 				sub += " · " + fg(colYellow).Render("out of date")
 			}
@@ -91,8 +92,8 @@ func machineList(m *model, w int, sel string) string {
 	return b.String()
 }
 
-// machinePlatforms are the OS and the tools of a machine.
-func machinePlatforms(ms protocol.MachineStatus) []string {
+// machineTools are the OS and the tools of a machine.
+func machineTools(ms protocol.MachineStatus) []string {
 	out := []string{ms.OS}
 	for _, p := range ms.Tools {
 		if !slices.Contains(out, p) {
@@ -244,11 +245,15 @@ func (p *machinePage) body(m *model) string {
 	b.WriteString(head(clean(p.machineKey), kind, summary))
 
 	// What the machine is: one section, or one for each on-demand room.
-	var platforms []string
-	for _, n := range machinePlatforms(ms) {
-		platforms = append(platforms, fg(colBlue).Render(clean(n)))
+	about := line(field("OS", clean(ms.OS)))
+	if rms := machineRooms(m.st, p.machineKey); len(rms) == 0 || ms.Kind != "static" {
+		// The configured tools; the inventory is in each room's section.
+		var ts []string
+		for _, t := range ms.Tools {
+			ts = append(ts, fg(colBlue).Render(clean(t)))
+		}
+		about += line(field("Tools", strings.Join(ts, "   ")))
 	}
-	about := line(field("Runs", strings.Join(platforms, "   ")))
 	if ms.ConnectVersion != "" {
 		v := clean(ms.ConnectVersion)
 		if m.outOfDate(ms) {
@@ -308,7 +313,42 @@ func (p *machinePage) body(m *model) string {
 	return b.String()
 }
 
-// roomInfo is the hardware and the live use of one room.
+// inventoryLines are the tools of a room with their options and check state, one
+// line each.
+func inventoryLines(r protocol.RoomStatus) string {
+	if len(r.Tools) == 0 {
+		return line(field("Tools", mutedStyle.Render("not installed yet")))
+	}
+	nameW, optW := 0, 0
+	for _, t := range r.Tools {
+		nameW = max(nameW, lipgloss.Width(clean(t.Name)))
+		optW = max(optW, lipgloss.Width(clean(strings.Join(t.Options, ", "))))
+	}
+	var b strings.Builder
+	for i, t := range r.Tools {
+		label := ""
+		if i == 0 {
+			label = "Tools"
+		}
+		s := state{"ready", colGreen, ""}
+		glyph := "●"
+		switch t.State {
+		case "installing":
+			s, glyph = state{"installing", colYellow, ""}, "◐"
+		case "failed":
+			s, glyph = state{"failed", colRed, ""}, "✕"
+		}
+		kind := ""
+		if t.Screen {
+			kind = "   " + mutedStyle.Render("screen")
+		}
+		b.WriteString(line(field(label, cell(fg(colBlue).Render(clean(t.Name)), nameW)+"   "+cell(clean(strings.Join(t.Options, ", ")), optW)+
+			"   "+fg(s.color).Render(glyph+" "+s.word)+kind)))
+	}
+	return b.String()
+}
+
+// roomInfo is the hardware, the inventory, and the live use of one room.
 func (p *machinePage) roomInfo(r protocol.RoomStatus) string {
 	var b strings.Builder
 	if hw := r.Hardware; hw != nil {
@@ -325,6 +365,7 @@ func (p *machinePage) roomInfo(r protocol.RoomStatus) string {
 		add(r.Arch != "", clean(r.Arch))
 		b.WriteString(line(field("Hardware", strings.Join(parts, mutedStyle.Render(" · ")))))
 	}
+	b.WriteString(inventoryLines(r))
 	d, ok := p.details[r.Name]
 	switch {
 	case ok && d.Usage != nil:

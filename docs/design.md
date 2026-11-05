@@ -966,9 +966,12 @@ the wrong part is an error with its key path. Errors in the document name its
 revision ("configuration revision 4: providers.home.machines.box.os: ...").
 
 - **No old keys.** The keys of the configuration before M10e (`platforms`,
-  `labels`, `requires`, a `tools` map, `platforms_dir`) fail the check with the
-  new form in the message. There is no import or migration (owner decision,
-  2026-11-05).
+  `labels`, `requires`, a `tools` map) fail the check with the new form in the
+  message. There is no import or migration (owner decision, 2026-11-05).
+  Exception: `platforms_dir` in `server.toml` (`install.sh --server` wrote it
+  before M10e). The server ignores it and logs a warning, and `hostel admin
+  config check` prints the warning, so the update does not stop the server
+  (owner decision, 2026-11-05).
 - **Changes.** An admin changes the document from a client: `hostel config
   edit` (in `$EDITOR`), `hostel config apply <file>`, or the targeted commands:
   `hostel config settings set <key>=<value>`; `hostel config rooms` (the
@@ -1452,12 +1455,15 @@ commands; `hostel status` prints plain text with the next commands at the end.
 
 - Not connected: *Check in* (an invite code, then the name; the same code as
   `hostel connect`, package `internal/connect`) or *Leave*.
-- Main menu: *Lobby* (the tools, screen tools first: free machines of all that
-  have it, the waiting leases that asked for it, the wait; a tool page with its
-  options, its machines, the typical lease, and its waiting leases), *Rooms*
+- Main menu: *Lobby* (the tools in two sections, Screens first, then
+  Software: free machines of all that have it, the waiting leases that asked
+  for it, the wait; a tool page with its options, its machines with the
+  tool's options on each, the typical lease, its waiting leases with the tools
+  that each asked for, and the first paragraph of its guide), *Rooms*
   (the machines with their tools and state in plain words; a machine page with
-  the hardware, the inventory, the live use, and each lease with its user, task,
-  tools, computer, repository, branch, and running jobs), *Front
+  the OS, the hardware, the inventory of each room (each tool with its options
+  and check state: ready, installing, failed), the live use, and each lease
+  with its user, task, tools, computer, repository, branch, and running jobs), *Front
   desk* (the server and you; *Invite a guest* for admins, *Add your other
   computer* for members, *Guest list*, *Add a room* for admins, *Check out*). Themed labels have a muted plain description (owner decision,
   2026-11-03).

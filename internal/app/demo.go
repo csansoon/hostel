@@ -52,18 +52,44 @@ type demoServer struct {
 	nextArr time.Time
 }
 
-type demoPlatform struct {
-	name, desc string
-	devices    []string
-	typical    time.Duration
+// demoTool is a tool of the demo world; options are those of a screen tool
+// (the versions of a software tool are in the inventories).
+type demoTool struct {
+	name, desc, guide string
+	screen, whole     bool
+	options           []string
+	mise              bool
+	typical           time.Duration
 }
 
-var demoPlatforms = []demoPlatform{
-	{"ios", "iPhone and iPad simulators", []string{"iphone-17-pro", "ipad-pro-13"}, 24 * time.Minute},
-	{"android", "Android emulators", []string{"pixel-9", "pixel-tablet"}, 18 * time.Minute},
-	{"macos", "macOS desktop apps", nil, 12 * time.Minute},
-	{"windows", "Windows desktop apps", nil, 15 * time.Minute},
-	{"linux", "Linux builds and tests", nil, 8 * time.Minute},
+var demoTools = []demoTool{
+	{name: "android-emulator", desc: "Android emulator: one clean emulator for each lease", screen: true, options: []string{"pixel-9", "pixel-tablet"}, typical: 18 * time.Minute,
+		guide: "Android emulators: each lease gets new, clean emulators (one for each option, for example pixel-9 or pixel-tablet). The SDK comes with it."},
+	{name: "ios-simulator", desc: "iOS simulators: new, clean simulators for each lease", screen: true, options: []string{"iphone-17-pro", "ipad-pro-13"}, typical: 24 * time.Minute,
+		guide: "iOS simulators: each lease gets new, clean simulators (one for each option, for example iphone-17-pro or ipad-pro-13). Xcode comes with it."},
+	{name: "macos-desktop", desc: "The macOS desktop, for Mac apps", screen: true, whole: true, typical: 12 * time.Minute,
+		guide: "The macOS desktop, for Mac apps (also Mac Catalyst apps). The lease takes the whole machine."},
+	{name: "windows-desktop", desc: "The Windows desktop, for Windows apps", screen: true, whole: true, typical: 15 * time.Minute,
+		guide: "The Windows desktop, for Windows apps. The lease takes the whole machine."},
+	{name: "android-sdk", desc: "Android SDK: build tools, platform tools, and the emulator binaries", typical: 9 * time.Minute,
+		guide: "The Android SDK, for builds. Java comes from the jdk tool."},
+	{name: "docker", desc: "Docker Engine, for containers", typical: 7 * time.Minute},
+	{name: "dotnet", mise: true, typical: 10 * time.Minute},
+	{name: "jdk", mise: true, typical: 9 * time.Minute},
+	{name: "xcode", desc: "Xcode, for builds of Apple apps", typical: 14 * time.Minute,
+		guide: "Xcode, for builds of Apple apps. Ask for ios-simulator or macos-desktop only when you must see the app."},
+}
+
+// demoVersions are the options that the inventories report.
+var demoVersions = map[string][]string{
+	"android-sdk": {"36"}, "jdk": {"21.0.5"}, "xcode": {"26.1"}, "dotnet": {"9.0.100"}, "docker": {"27.3.1"},
+	"android-emulator": {"pixel-9", "pixel-tablet"}, "ios-simulator": {"iphone-17-pro", "ipad-pro-13"},
+}
+
+// demoRequests are the tools that the demo leases ask for.
+var demoRequests = [][]string{
+	{"ios-simulator:iphone-17-pro"}, {"ios-simulator:ipad-pro-13"}, {"android-emulator:pixel-9"}, {"android-sdk", "jdk"},
+	{"xcode"}, {"xcode", "macos-desktop"}, {"dotnet", "windows-desktop"}, {"docker"},
 }
 
 var (
@@ -76,38 +102,40 @@ func newDemoServer() *demoServer {
 	now := time.Now()
 	d := &demoServer{changed: make(chan struct{}), rnd: rand.New(rand.NewPCG(7, 11)),
 		readyAt: map[string]time.Time{}, endAt: map[string]time.Time{}, nextArr: now.Add(6 * time.Second)}
+	android := []string{"android-sdk", "android-emulator", "jdk:21", "docker"}
 	d.machines = []protocol.MachineStatus{
-		{Key: "home/macbook", Kind: "static", OS: "macos", Tools: []string{"ios", "android", "macos"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
-		{Key: "home/win", Kind: "static", OS: "windows", Tools: []string{"windows"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
-		{Key: "office/mini", Kind: "static", OS: "macos", Tools: []string{"ios", "macos"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.1.0"},
-		{Key: "lab/linux", Kind: "static", OS: "linux", Tools: []string{"linux", "android"}, MaxRooms: 1},
-		{Key: "ns/linux", Kind: "namespace", OS: "linux", Tools: []string{"linux", "android"}, MaxRooms: 2},
+		{Key: "home/macbook", Kind: "static", OS: "macos", Tools: []string{"xcode", "ios-simulator", "android-sdk", "android-emulator", "jdk:21", "macos-desktop"},
+			MaxRooms: 1, Connect: true, ConnectVersion: "v0.3.0"},
+		{Key: "home/win", Kind: "static", OS: "windows", Tools: []string{"windows-desktop", "dotnet:9"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.3.0"},
+		{Key: "office/mini", Kind: "static", OS: "macos", Tools: []string{"xcode", "ios-simulator", "macos-desktop"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
+		{Key: "lab/linux", Kind: "static", OS: "linux", Tools: android, MaxRooms: 1},
+		{Key: "ns/linux", Kind: "namespace", OS: "linux", Tools: android, MaxRooms: 2},
 	}
 	hw := func(cpu string, cores int, mem int64, osv string) *protocol.Hardware {
 		return &protocol.Hardware{CPU: cpu, Cores: cores, MemoryBytes: mem << 30, OSVersion: osv}
 	}
 	d.rooms = []protocol.RoomStatus{
 		{ID: 1, Name: "home-macbook", Provider: "home", Machine: "macbook", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Tools: inventory("ios", "android", "macos"), Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
+			Tools: inventory(d.machines[0].Tools...), Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}, {Name: "slot-2", State: protocol.SlotFree}}},
 		{ID: 2, Name: "home-win", Provider: "home", Machine: "win", OS: "windows", Arch: "amd64", State: protocol.RoomRunning,
-			Tools: inventory("windows"), Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
+			Tools: inventory(d.machines[1].Tools...), Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
 		{ID: 3, Name: "office-mini", Provider: "office", Machine: "mini", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Tools: inventory("ios", "macos"), Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
+			Tools: inventory(d.machines[2].Tools...), Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
 		{ID: 4, Name: "lab-linux", Provider: "lab", Machine: "linux", OS: "linux", Arch: "amd64", State: protocol.RoomBroken,
-			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Tools: inventory("linux", "android"),
+			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Tools: inventory(android...),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotBroken}}},
 	}
 	d.nextID = 10
 	// A busy start: two guests in rooms, one getting ready, two waiting.
-	d.place(d.newLease("ana", "ios", "login flow", "normal", now.Add(-21*time.Minute)), 1, "slot-1", protocol.LeaseReady, now.Add(-18*time.Minute))
-	d.place(d.newLease("dani", "windows", "release build", "normal", now.Add(-9*time.Minute)), 2, "slot-1", protocol.LeaseReady, now.Add(-7*time.Minute))
-	d.place(d.newLease("lee", "ios", "iPad layout", "high", now.Add(-40*time.Second)), 3, "slot-1", protocol.LeasePreparing, time.Time{})
+	d.place(d.newLease("ana", []string{"ios-simulator:iphone-17-pro"}, "login flow", "normal", now.Add(-21*time.Minute)), 1, "slot-1", protocol.LeaseReady, now.Add(-18*time.Minute))
+	d.place(d.newLease("dani", []string{"dotnet", "windows-desktop"}, "release build", "normal", now.Add(-9*time.Minute)), 2, "slot-1", protocol.LeaseReady, now.Add(-7*time.Minute))
+	d.place(d.newLease("lee", []string{"ios-simulator:ipad-pro-13"}, "iPad layout", "high", now.Add(-40*time.Second)), 3, "slot-1", protocol.LeasePreparing, time.Time{})
 	d.readyAt[d.leases[2].ID] = now.Add(3 * time.Second)
-	d.queue(d.newLease("mo", "windows", "settings sync", "normal", now.Add(-4*time.Minute)))
-	d.queue(d.newLease("sam", "windows", "crash on resume", "low", now.Add(-1*time.Minute)))
+	d.queue(d.newLease("mo", []string{"dotnet", "windows-desktop"}, "settings sync", "normal", now.Add(-4*time.Minute)))
+	d.queue(d.newLease("sam", []string{"windows-desktop"}, "crash on resume", "low", now.Add(-1*time.Minute)))
 	d.endAt[d.leases[0].ID] = now.Add(40 * time.Second)
 	d.endAt[d.leases[1].ID] = now.Add(9 * time.Second)
 	d.positions(now)
@@ -115,19 +143,22 @@ func newDemoServer() *demoServer {
 	return d
 }
 
-// inventory is a room inventory with these tools.
-func inventory(tools ...string) []protocol.InventoryTool {
+// inventory is a room inventory of these tool entries, in name order.
+func inventory(entries ...string) []protocol.InventoryTool {
 	var out []protocol.InventoryTool
-	for _, t := range tools {
-		out = append(out, protocol.InventoryTool{Name: t, State: "ready"})
+	for _, e := range entries {
+		name, _, _ := strings.Cut(e, ":")
+		i := slices.IndexFunc(demoTools, func(t demoTool) bool { return t.name == name })
+		out = append(out, protocol.InventoryTool{Name: name, Options: demoVersions[name], State: "ready", Screen: i >= 0 && demoTools[i].screen})
 	}
+	slices.SortFunc(out, func(a, b protocol.InventoryTool) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 
-func (d *demoServer) newLease(user, platform, task, prio string, created time.Time) *protocol.LeaseStatus {
+func (d *demoServer) newLease(user string, tools []string, task, prio string, created time.Time) *protocol.LeaseStatus {
 	d.nextID++
 	repo := "github.com/example/app"
-	return &protocol.LeaseStatus{ID: "lease-" + strconv.Itoa(d.nextID), Tools: []string{platform}, Task: task, Priority: prio,
+	return &protocol.LeaseStatus{ID: "lease-" + strconv.Itoa(d.nextID), Tools: tools, Task: task, Priority: prio,
 		User: user, Guest: user + "-laptop", Repo: repo, Branch: strings.ReplaceAll(task, " ", "-"), CreatedAt: created}
 }
 
@@ -214,9 +245,9 @@ func (d *demoServer) step(now time.Time) bool {
 	}
 	d.leases = keep
 	if now.After(d.nextArr) && waiting(protocol.Status{Leases: d.leases}) < 4 {
-		p := demoPlatforms[d.rnd.IntN(len(demoPlatforms))]
+		tools := demoRequests[d.rnd.IntN(len(demoRequests))]
 		prio := []string{"normal", "normal", "normal", "high", "low"}[d.rnd.IntN(5)]
-		d.queue(d.newLease(demoUsers[d.rnd.IntN(len(demoUsers))], p.name, demoTasks[d.rnd.IntN(len(demoTasks))], prio, now))
+		d.queue(d.newLease(demoUsers[d.rnd.IntN(len(demoUsers))], tools, demoTasks[d.rnd.IntN(len(demoTasks))], prio, now))
 		d.nextArr = now.Add(time.Duration(8+d.rnd.IntN(14)) * time.Second)
 		changed = true
 	}
@@ -243,6 +274,35 @@ func (d *demoServer) free(l protocol.LeaseStatus) {
 	}
 }
 
+// toolNames are the names of tool entries ("jdk:21" is jdk).
+func toolNames(entries []string) []string {
+	var out []string
+	for _, e := range entries {
+		name, _, _ := strings.Cut(e, ":")
+		out = append(out, name)
+	}
+	return out
+}
+
+// wholeMachine reports a lease with a tool that takes the whole machine.
+func wholeMachine(tools []string) bool {
+	return slices.ContainsFunc(demoTools, func(t demoTool) bool { return t.whole && slices.Contains(toolNames(tools), t.name) })
+}
+
+// fits reports whether a running room can take a lease for the tools now:
+// one free slot, or all slots for a lease that takes the whole machine.
+func fits(r protocol.RoomStatus, tools []string) bool {
+	for _, t := range toolNames(tools) {
+		if !freeSlot(r, t) {
+			return false
+		}
+	}
+	if !freeSlot(r, "") {
+		return false
+	}
+	return !wholeMachine(tools) || !slices.ContainsFunc(r.Slots, func(s protocol.SlotStatus) bool { return s.State != protocol.SlotFree })
+}
+
 // schedule puts queued leases on free slots, first by priority, then by age;
 // an on-demand machine makes a new room.
 func (d *demoServer) schedule(now time.Time) bool {
@@ -253,23 +313,28 @@ func (d *demoServer) schedule(now time.Time) bool {
 		placed := false
 		for ri := range d.rooms {
 			r := &d.rooms[ri]
-			if !freeSlot(*r, l.Tools[0]) {
+			if !fits(*r, l.Tools) {
 				continue
 			}
 			for si := range r.Slots {
-				if r.Slots[si].State == protocol.SlotFree {
-					r.Slots[si].State, r.Slots[si].LeaseID = protocol.SlotLeased, l.ID
+				if r.Slots[si].State != protocol.SlotFree {
+					continue
+				}
+				if !placed {
 					lease.State, lease.RoomID, lease.Slot, lease.Provider, lease.Machine = protocol.LeasePreparing, r.ID, r.Slots[si].Name, r.Provider, r.Machine
 					d.readyAt[l.ID] = now.Add(time.Duration(4+d.rnd.IntN(5)) * time.Second)
-					placed = true
+				} else if !wholeMachine(l.Tools) {
 					break
 				}
+				r.Slots[si].State, r.Slots[si].LeaseID = protocol.SlotLeased, l.ID
+				placed = true
 			}
 			break
 		}
 		if !placed {
 			ns := d.machines[4]
-			if slices.Contains(ns.Tools, l.Tools[0]) && len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
+			if !slices.ContainsFunc(toolNames(l.Tools), func(t string) bool { return !slices.Contains(toolNames(ns.Tools), t) }) &&
+				len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
 				d.nextID++
 				name := "ns-linux-" + strconv.Itoa(d.nextID)
 				d.rooms = append(d.rooms, protocol.RoomStatus{ID: int64(d.nextID), Name: name, Provider: "ns", Machine: "linux", OS: "linux", Arch: "amd64",
@@ -305,27 +370,33 @@ func (d *demoServer) ordered() []protocol.LeaseStatus {
 	return q
 }
 
-// positions numbers each platform's queue and estimates the wait.
+// positions numbers the waiting line (one for all leases) and estimates the
+// wait: the first free room with the tools, and 5 minutes for each earlier
+// lease that asks for one of the same tools.
 func (d *demoServer) positions(now time.Time) {
-	n := map[string]int{}
-	for _, q := range d.ordered() {
-		tool := q.Tools[0]
-		n[tool]++
+	q := d.ordered()
+	for pos, ql := range q {
+		behind := 0
+		for _, earlier := range q[:pos] {
+			if slices.ContainsFunc(toolNames(earlier.Tools), func(t string) bool { return slices.Contains(toolNames(ql.Tools), t) }) {
+				behind++
+			}
+		}
 		for i := range d.leases {
-			if d.leases[i].ID == q.ID {
-				d.leases[i].Position = n[tool]
-				d.leases[i].EstimatedWaitSeconds = d.wait(tool, now) + (n[tool]-1)*300
-				d.leases[i].Reason = "every room for " + tool + " is in use"
+			if d.leases[i].ID == ql.ID {
+				d.leases[i].Position = pos + 1
+				d.leases[i].EstimatedWaitSeconds = d.wait(ql.Tools, now) + behind*300
+				d.leases[i].Reason = "every machine with " + strings.Join(toolNames(ql.Tools), " and ") + " is in use"
 			}
 		}
 	}
 }
 
-// wait is the time until the first room for a platform is free.
-func (d *demoServer) wait(platform string, now time.Time) int {
+// wait is the time until the first room with the tools is free.
+func (d *demoServer) wait(tools []string, now time.Time) int {
 	best := -1
 	for _, l := range d.leases {
-		if l.State == protocol.LeaseQueued || !roomHas(*d.room(l.RoomID), platform) {
+		if l.State == protocol.LeaseQueued || slices.ContainsFunc(toolNames(tools), func(t string) bool { return !roomHas(*d.room(l.RoomID), t) }) {
 			continue
 		}
 		s := int(d.endAt[l.ID].Sub(now).Seconds()) + 120
@@ -341,27 +412,34 @@ func (d *demoServer) status() protocol.Status {
 		Machines: slices.Clone(d.machines), Rooms: slices.Clone(d.rooms), Leases: slices.Clone(d.leases)}
 }
 
-func (d *demoServer) platforms() []protocol.Tool {
+// tools is GET /v1/tools of the demo world: screen tools first.
+func (d *demoServer) tools() []protocol.Tool {
 	st := d.status()
 	var out []protocol.Tool
-	for _, p := range demoPlatforms {
-		pl := protocol.Tool{Name: p.name, Screen: len(p.devices) > 0, Description: p.desc, Options: p.devices, MaxOptions: len(p.devices),
-			TypicalLeaseSeconds: int(p.typical.Seconds())}
+	for _, dt := range demoTools {
+		t := protocol.Tool{Name: dt.name, Screen: dt.screen, Mise: dt.mise, Description: dt.desc, Guide: dt.guide, WholeMachine: dt.whole,
+			Options: dt.options, TypicalLeaseSeconds: int(dt.typical.Seconds())}
+		if len(dt.options) > 1 {
+			t.MaxOptions = len(dt.options)
+		}
+		if !dt.screen {
+			t.Options = demoVersions[dt.name]
+		}
 		for _, ms := range d.machines {
-			if slices.Contains(ms.Tools, p.name) {
-				pl.Machines = append(pl.Machines, protocol.ToolMachine{Key: ms.Key, OS: ms.OS, Online: true})
+			if slices.Contains(toolNames(ms.Tools), dt.name) {
+				t.Machines = append(t.Machines, protocol.ToolMachine{Key: ms.Key, OS: ms.OS, Options: demoVersions[dt.name], OnDemand: ms.Kind != "static", Online: true})
 			}
 		}
 		for _, r := range d.rooms {
-			if freeSlot(r, p.name) {
-				pl.FreeSlots++
+			if freeSlot(r, dt.name) {
+				t.FreeSlots++
 			}
 		}
-		pl.Waiting = len(queued(st, p.name))
-		if pl.Waiting > 0 {
-			pl.EstimatedWaitSeconds = d.wait(p.name, time.Now())
+		t.Waiting = len(queued(st, dt.name))
+		if t.Waiting > 0 {
+			t.EstimatedWaitSeconds = d.wait([]string{dt.name}, time.Now())
 		}
-		out = append(out, pl)
+		out = append(out, t)
 	}
 	return out
 }
@@ -403,9 +481,9 @@ func (d *demoServer) Do(ctx context.Context, method, path string, in, out any) e
 	case method == "GET" && route == "/v1/status":
 		v = d.status()
 	case method == "GET" && route == "/v1/tools":
-		v = protocol.Tools{Tools: d.platforms()}
+		v = protocol.Tools{Tools: d.tools()}
 	case method == "GET" && route == "/v1/info":
-		v = protocol.Info{Version: "v0.2.0"}
+		v = protocol.Info{Version: "v0.3.0"}
 	case method == "GET" && route == "/v1/me":
 		v = protocol.Me{ServerID: "demo-7f3a", User: "sam", Role: protocol.RoleAdmin, Computer: "sam-laptop"}
 	case method == "GET" && route == "/v1/users":
