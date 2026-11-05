@@ -73,23 +73,23 @@ var demoTools = []demoTool{
 		guide: "The Windows desktop, for Windows apps. The lease takes the whole machine."},
 	{name: "android-sdk", desc: "Android SDK: build tools, platform tools, and the emulator binaries", typical: 9 * time.Minute,
 		guide: "The Android SDK, for builds. Java comes from the jdk tool."},
-	{name: "docker", desc: "Docker Engine, for containers", typical: 7 * time.Minute},
 	{name: "dotnet", mise: true, typical: 10 * time.Minute},
 	{name: "jdk", mise: true, typical: 9 * time.Minute},
+	{name: "node", mise: true, typical: 7 * time.Minute},
 	{name: "xcode", desc: "Xcode, for builds of Apple apps", typical: 14 * time.Minute,
 		guide: "Xcode, for builds of Apple apps. Ask for ios-simulator or macos-desktop only when you must see the app."},
 }
 
 // demoVersions are the options that the inventories report.
 var demoVersions = map[string][]string{
-	"android-sdk": {"36"}, "jdk": {"21.0.5"}, "xcode": {"26.1"}, "dotnet": {"9.0.100"}, "docker": {"27.3.1"},
+	"android-sdk": {"36"}, "jdk": {"21.0.5"}, "xcode": {"26.1"}, "dotnet": {"9.0.100"}, "node": {"22.11.0"},
 	"android-emulator": {"pixel-9", "pixel-tablet"}, "ios-simulator": {"iphone-17-pro", "ipad-pro-13"},
 }
 
 // demoRequests are the tools that the demo leases ask for.
 var demoRequests = [][]string{
 	{"ios-simulator:iphone-17-pro"}, {"ios-simulator:ipad-pro-13"}, {"android-emulator:pixel-9"}, {"android-sdk", "jdk"},
-	{"xcode"}, {"xcode", "macos-desktop"}, {"dotnet", "windows-desktop"}, {"docker"},
+	{"xcode"}, {"xcode", "macos-desktop"}, {"dotnet", "windows-desktop"}, {"node:22"},
 }
 
 var (
@@ -102,7 +102,7 @@ func newDemoServer() *demoServer {
 	now := time.Now()
 	d := &demoServer{changed: make(chan struct{}), rnd: rand.New(rand.NewPCG(7, 11)),
 		readyAt: map[string]time.Time{}, endAt: map[string]time.Time{}, nextArr: now.Add(6 * time.Second)}
-	android := []string{"android-sdk", "android-emulator", "jdk:21", "docker"}
+	android := []string{"android-sdk", "android-emulator", "jdk:21", "node:22"}
 	d.machines = []protocol.MachineStatus{
 		{Key: "home/macbook", Kind: "static", OS: "macos", Tools: []string{"xcode", "ios-simulator", "android-sdk", "android-emulator", "jdk:21", "macos-desktop"},
 			MaxRooms: 1, Connect: true, ConnectVersion: "v0.3.0"},
