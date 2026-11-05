@@ -27,7 +27,6 @@ dist:
 release: dist
 	rm -rf dist/release && mkdir dist/release
 	cp dist/hostel-* dist/mise-* dist/release/
-	COPYFILE_DISABLE=1 tar -czf dist/release/hostel-tools.tar.gz --exclude '*.go' tools
 	cd dist/release && for f in *; do printf '%s  %s\n' "$$(shasum -a 256 $$f | cut -d' ' -f1)" "$$f"; done > ../SHA256SUMS && mv ../SHA256SUMS .
 	@# The release workflow signs SHA256SUMS (m10d-implementation.md); a local
 	@# release without the key has no signature.

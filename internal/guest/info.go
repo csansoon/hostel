@@ -84,7 +84,7 @@ func Tools(args []string, stdout, stderr io.Writer) int {
 		free := fmt.Sprint(t.FreeSlots)
 		wait := FormatWait(t.EstimatedWaitSeconds)
 		if t.FreeSlots == 0 && t.NewRoom {
-			free, wait = "-", "new room"
+			free, wait = "-", wait+" (new room)"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", t.Name, dash(strings.Join(t.Options, ", ")), screen,
 			strings.Join(machines, ", "), free, t.Waiting, wait)
@@ -180,42 +180,97 @@ func Info(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// AgentGuide is "hostel agent-guide".
+// AgentGuide is "hostel agent-guide": the general rules, then the guide of
+// each tool that the machines of this server have.
 func AgentGuide(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprint(stdout, agentGuide)
+	api, err := apiClient()
+	if err != nil {
+		fmt.Fprint(stdout, "\nTools of this server\n  This computer is not connected to a Hostel server, so this guide has no\n  tool guides. Ask the user to run \"hostel connect <invite code>\".\n")
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var list protocol.Tools
+	if err := api.Do(ctx, "GET", "/v1/tools", nil, &list); err != nil {
+		fmt.Fprint(stdout, "\nTools of this server\n  Not available now; run \"hostel tools\" later.\n")
+		return fail(stderr, fmt.Errorf("read the tools of the server: %w", err))
+	}
+	fmt.Fprintln(stdout, "\nTools of this server (\"hostel tools <tool>\" shows one with its machines)")
+	if len(list.Tools) == 0 {
+		fmt.Fprintln(stdout, "  The machines of this server list no tools: acquire without tools.")
+	}
+	for _, t := range list.Tools {
+		head := t.Name
+		switch {
+		case t.Mise:
+			head += " (installed with mise)"
+		case t.Screen:
+			head += " (screen)"
+		}
+		if len(t.Options) > 0 {
+			head += ": " + strings.Join(t.Options, ", ")
+		}
+		fmt.Fprintf(stdout, "\n%s\n", head)
+		if g := strings.TrimSpace(t.Guide); g != "" {
+			for _, line := range strings.Split(g, "\n") {
+				fmt.Fprintln(stdout, strings.TrimRight("  "+line, " "))
+			}
+		} else if t.Description != "" {
+			fmt.Fprintf(stdout, "  %s\n", t.Description)
+		}
+	}
 	return 0
 }
 
 const agentGuide = `Hostel: short, exclusive use of a remote machine for builds, UI QA, and
 device tests. Your code stays local; Hostel sends it to the room.
 
+The rule
+  Ask for the tools that you need. Ask for a screen tool (an emulator, a
+  simulator, a desktop) only when you must see or drive the app: it takes
+  time and memory. All software of the machine is usable in each lease, also
+  the tools that you did not ask for; asking for a tool only selects a
+  machine that has it. The tools of the repository's mise files (node, pnpm,
+  python, ...) are set up on every machine: do not ask for them. One lease for
+  each worktree: for work on two machines at the same time, use a second
+  worktree (git worktree add). When the lease is ready, read the machine
+  facts that acquire prints (OS, hardware, tools, started screens).
+
 Start
-  hostel platforms                         what you can request now
-  hostel status --plain                    rooms, leases, and queues (who uses
-                                           what); "hostel status <room>" details
-  hostel acquire <platform> --task "..."   one lease for this worktree
-    --device <d>    a device of the platform (repeat for several)
-    --require <l>   a machine label, for example desktop
+  hostel tools [<tool>]                    the tools, their options, machines,
+                                           and wait; one tool with its guide
+  hostel status                            rooms, leases, and the waiting line
+  hostel acquire <tool[:option]>... --task "..."
+                                           one lease for this worktree; without
+                                           tools: the tools of hostel.toml, or
+                                           any machine
+    An option is a version of a tool (node:22 matches 22.11.0) or a phone or
+    tablet of a screen tool ("hostel tools" lists them). Without an option,
+    any version matches, and a screen tool starts its first option.
     --priority      high or low, only when the user asks for it
-    --background    return at once; Hostel keeps the place in the queue
+    --background    return at once; Hostel keeps the place in the waiting line
   When acquire exits with code 75, run the SAME command again. It continues
-  the same lease. Code 69: no machine can serve the request; do not retry.
-  A waiting lease keeps its place only while you run that command: after a
-  few minutes without it (5 by default; acquire prints the time), the lease
-  ends. To do other work while you wait, add --background: Hostel keeps the
-  place for you; run the same command again at least every 10 minutes (by
-  default; acquire prints the time): a ready lease waits only that long. One worktree for each agent: agents in the same worktree share
-  one lease.
+  the same lease. Code 69: no machine can serve the request (the message says
+  why); do not retry, change the tools. A waiting lease keeps its place only
+  while you run that command: after a few minutes without it (5 by default;
+  acquire prints the time), the lease ends. To do other work while you wait,
+  add --background: Hostel keeps the place for you; run the same command again
+  at least every 10 minutes (by default; acquire prints the time): a ready
+  lease waits only that long.
   Code 78: this computer is not connected to a Hostel server. Do not try to
   connect; ask the user to run "hostel connect <invite code>" with a code from
   an admin of their server.
 
 Work
+  hostel info                   the machine facts of the lease again
   hostel run -- "<command>"     runs in the work directory; one argument runs
                                 with sh -c; output streams back
   hostel sync                   send local changes again (do this after edits)
   hostel sync --setup           run the repository setup again
-  hostel screenshot [--device d] [-o file.png]
+  hostel screenshot [--tool <tool[:option]>] [-o file.png]
+                                a screen of the lease; --tool only when the
+                                lease has more than one screen
   hostel cp <local> :<path> | hostel cp :<path> <local>
   hostel diff                   changes on the room since the last sync
   hostel jobs | hostel attach <job> | hostel stop <job>
@@ -227,44 +282,11 @@ Exit codes of run and attach
                                     Do NOT run "hostel run" again: that starts
                                     a second job.
 
-Devices and the local API
-  Commands get the device facts in their environment. iOS: SIMULATOR_UDID (the
-  first device) and SIMULATOR_UDIDS. Each lease gets new, clean simulators:
-    xcodebuild ... -destination "id=$SIMULATOR_UDID" build
-    xcrun simctl install "$SIMULATOR_UDID" <path to the .app>
-    xcrun simctl launch "$SIMULATOR_UDID" <bundle id>
-  To tap, type, and read the screen, use agent-device on the room. Open the
-  app on the lease device once; later commands use that session:
-    hostel run -- 'agent-device open <bundle id> --platform ios --udid "$SIMULATOR_UDID" --foreground'
-    hostel run -- 'agent-device click "label=\"Sign in\"" --settle'
-    hostel run -- 'agent-device fill "role=text-field" "me@example.com" --settle'
-  "hostel run -- agent-device help" lists all commands.
-  macOS desktop apps: hostel acquire macos --require desktop (the lease takes
-  the whole machine). Build the app, start it with "open", then control it:
-    hostel run -- 'xcodebuild -scheme MyApp -derivedDataPath build build'
-    hostel run -- 'open build/Build/Products/Debug/MyApp.app'
-    hostel run -- 'agent-device open <bundle id> --platform macos'
-    hostel run -- 'agent-device snapshot -i --platform macos'
-    hostel run -- 'agent-device click "id=save" --platform macos'
-  The first agent-device command of a lease takes about 30 s. If a command
-  says the runner is still finishing an earlier command, wait a few seconds and
-  run it again. "hostel screenshot" shows the whole desktop. At the release,
-  Hostel ends the apps that the lease started.
-  Windows desktop apps: hostel acquire windows --require desktop. Commands
-  run over SSH and cannot show windows; "desktop" runs a command on the
-  desktop, and winapp (Microsoft's winapp CLI) always runs there:
-    hostel run -- 'dotnet build -c Release -o out'
-    hostel run -- 'desktop --detach out\MyApp.exe'
-    hostel run -- 'winapp ui inspect -a MyApp --interactive'
-    hostel run -- 'winapp ui invoke save -a MyApp'
-    hostel run -- 'winapp ui set-value email "me@example.com" -a MyApp'
-    hostel run -- 'winapp ui click save -a MyApp'
-    hostel run -- 'winapp ui send-keys "text" -a MyApp --via send-input'
-  Prefer invoke and set-value (UI Automation). click and send-keys are real
-  input: they need the app in the foreground and fail if it is not. Start an
-  app in a normal window (not hidden or minimized). "hostel run -- winapp ui
-  --help" lists all commands. At the release, Hostel ends the apps that
-  "desktop" started.
+Facts and the local API
+  Commands get the environment of the machine's tools and the facts of the
+  screens that started (the guides below name them; acquire and "hostel
+  info" list them). To tap, type, and read a screen, use the driver that its
+  guide names (agent-device; winapp on Windows).
   Tunnels in hostel.toml make your local servers reachable on the room at
   localhost:$HOSTEL_TUNNEL_<NAME>_PORT.
 

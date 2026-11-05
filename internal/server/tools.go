@@ -137,7 +137,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 		}
 		wait := time.Duration(0)
 		if free == 0 || entry.Waiting > 0 {
-			wait = s.estimatedWait(ctx, cands, entry.Waiting+1, total)
+			wait = s.estimatedWait(ctx, cands, entry.Waiting, total, newRoom && free == 0)
 		}
 		entry.FreeSlots, entry.NewRoom, entry.EstimatedWaitSeconds = free, newRoom, int(wait.Seconds())
 		entry.TypicalLeaseSeconds = int(s.medianDuration(ctx, nil, name, 0).Seconds())
@@ -160,9 +160,9 @@ func nonNil(v []string) []string {
 	return v
 }
 
-// leaseWait estimates the wait of a queued lease: the leases before it that
-// share one of its candidate machines (from the last scheduler pass), and
-// the lease itself.
+// leaseWait estimates the wait of a queued lease from the leases before it
+// that share one of its candidate machines (from the last scheduler pass),
+// and returns their number.
 func (s *Server) leaseWait(ctx context.Context, l store.Lease) (int, int) {
 	view, err := s.loadToolView(ctx)
 	if err != nil {
@@ -173,7 +173,7 @@ func (s *Server) leaseWait(ctx context.Context, l store.Lease) (int, int) {
 		return 0, 0
 	}
 	cands := scheduler.Candidates(view.schedMachines(), leaseRequest(view.lc.cfg, l))
-	_, total, _ := s.capacity(cands, view.rooms, slots)
+	free, total, newRoom := s.capacity(cands, view.rooms, slots)
 	behind := s.waitingOf(l.ID).Behind
-	return int(s.estimatedWait(ctx, cands, behind+1, total).Seconds()), behind
+	return int(s.estimatedWait(ctx, cands, behind, total, newRoom && free == 0).Seconds()), behind
 }

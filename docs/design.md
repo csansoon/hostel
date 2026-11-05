@@ -60,10 +60,11 @@ Rooms need no permanent daemon. Exception: a static room behind NAT runs
 `hostel machine connect` (before M9: `hostel room connect`) as a service (launchd, systemd, or a Windows service).
 
 Distribution. A tag `v*` makes a GitHub release (`make release`): the binary for
-each OS and architecture, the pinned `mise` binaries, `hostel-tools.tar.gz`,
-`SHA256SUMS`, and (from v0.2.0) `SHA256SUMS.sig`. `install.sh` installs the
-binary for the machine, or with `--server DIR` also the helper binaries and the
-default tool definitions; it checks each file against `SHA256SUMS`.
+each OS and architecture, the pinned `mise` binaries, `SHA256SUMS`, and (from
+v0.2.0) `SHA256SUMS.sig`. `install.sh` installs the binary for the machine, or
+with `--server DIR` also the helper binaries; it checks each file against
+`SHA256SUMS`. The default tools are in the binary (M10e): there is no copy of
+them on the server machine.
 `docs/deploy-vps.md` shows a server on a VPS.
 
 ### Releases and updates (M10d)
@@ -434,10 +435,15 @@ for android-sdk on a Linux machine.
   its provider name are never used twice.
 
 **Estimated wait.** For each waiting lease: the number of leases before it in the
-order that share one of its candidate machines × the median lease duration on its
-candidate machines (from the last 50 leases) ÷ the number of slots on its
-candidate machines, plus the median creation time when a new room is necessary.
-Show it as an estimate, with "waiting behind N leases".
+order that share one of its candidate machines, plus one for the lease itself, ×
+the median lease duration on its candidate machines (from the last 50 leases) ÷
+the number of slots on its candidate machines. When the candidates have no free
+slot and an on-demand candidate can create a room, the lease waits for a new
+room: the estimate is the leases before it (without the lease itself) × the
+median ÷ the slots, plus the median creation time of the last 20 rooms of its
+candidate machines (from the room row to its first `running` state,
+`rooms.ready_at`, migration 012; 5 minutes before the first room). Show it as an
+estimate, with "waiting behind N leases"; `hostel tools` adds "(new room)".
 
 ## 6. Failures
 
@@ -1425,7 +1431,7 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel forward <room-port> [--local-port N]` / `forward list` / `forward stop <room-port>` | Guest → room forwards (section 14). |
 | `hostel status [room \| tool]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, tools, time, lease ID) and their inventory, the machines without rooms, and the waiting line. `hostel status <room>` prints the details of a room (hardware, inventory, leases with jobs, the waiting leases that it can serve, events, room ID); `hostel status <tool>` prints the waiting leases that asked for that tool (position, user, task, tools, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
-| `hostel agent-guide` | Prints short usage instructions for coding agents: the general rule ("ask for the tools you need; ask for a screen tool only when you need to see the app"), then the `GUIDE.md` of each tool that the server has. |
+| `hostel agent-guide` | Prints short usage instructions for coding agents: the general rule ("ask for the tools you need; ask for a screen tool only when you need to see the app"; the software of the machine is always usable; one lease per worktree; read the machine facts at ready), the commands, then the `GUIDE.md` of each tool that a machine of the server lists (from `GET /v1/tools`). Without a connection, it prints the general part and says that the tool guides come from the server. |
 | `hostel update [--check] [--version v]` | Replaces this binary with a newer release (section 2, "Releases and updates"). |
 | `hostel screenshot [--tool t] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
 

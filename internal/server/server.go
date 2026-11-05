@@ -158,6 +158,9 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	if lc.warning != "" {
 		log.Warn(lc.warning)
 	}
+	if cfg.PlatformsDir != "" {
+		log.Warn(config.PlatformsDirWarning, "platforms_dir", cfg.PlatformsDir)
+	}
 	s.live.Store(lc)
 	s.runCtx = ctx
 	// A stop (a signal) that came first wins: the server then stops, and does

@@ -48,15 +48,14 @@ sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 ```
 
 `/opt/hostel/bin/hostel` is the server binary, `/opt/hostel/helpers` gets the
-binaries for all rooms, and `/opt/hostel/tools` the tool scripts. The
+binaries for all rooms (the default tools are in the binary). The
 service's user (`exedev`) owns `/opt/hostel`, so that an admin can update the
 server from the app (Front desk › Update the server) or with `hostel server
 update --remote`; the server then starts again by itself. On the VM,
 `hostel server update` and a restart of the service (section 4) do the same.
 
-If you copy files from a Mac instead, make the archive with `COPYFILE_DISABLE=1`.
-Without it, macOS adds `._*` files, and the server refuses the platform
-directories.
+A `server.toml` from before M10e can have `platforms_dir`: the server ignores
+it, logs a warning, and starts. Delete the key.
 
 ## 4. Configure and start the server
 
@@ -98,8 +97,7 @@ database: an admin changes them from their own computer (section 4.1) with
 `hostel config settings`, and `hostel config tools` (since M10e; the default
 tools come with the binary). A server from before
 M9 imports them from `server.toml` at its first start (a copy stays in
-`server.toml.pre-m9`). After that import, each room provisions once more (the
-platform scripts get the same file modes on all servers).
+`server.toml.pre-m9`). After that import, each room provisions once more.
 
 Check the file with `hostel admin config check` (it prints each problem).
 
@@ -200,7 +198,7 @@ gateway. It needs no inbound SSH from the internet.
 **With a code (M9).** On your own computer:
 
 ```sh
-hostel config rooms add studio-mac --platform ios --label xcode-26.5 --label desktop
+hostel config rooms add studio-mac --tool xcode --tool ios-simulator --tool macos-desktop
 ```
 
 It prints one command for macOS and Linux and one for Windows. Run it on the

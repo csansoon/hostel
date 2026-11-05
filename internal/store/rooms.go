@@ -382,6 +382,32 @@ func (s *Store) SetProviderDeadline(ctx context.Context, id int64, deadline time
 }
 
 // SetWarmUntil records when an idle room stops or is destroyed (zero: not idle).
+// SetRoomReady records the first time that a room is running.
+func (s *Store) SetRoomReady(ctx context.Context, id int64, t time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET ready_at = ? WHERE id = ? AND ready_at IS NULL`, ms(t), id)
+	return err
+}
+
+// RecentCreationTimes returns the creation times (from the row to the first
+// running state) of the last n rooms of the machines.
+func (s *Store) RecentCreationTimes(ctx context.Context, machines []string, n int) ([]time.Duration, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT ready_at - created_at FROM rooms WHERE ready_at IS NOT NULL
+		AND provider || '/' || machine IN (SELECT value FROM json_each(?)) ORDER BY ready_at DESC LIMIT ?`, jsonText(nonNil(machines)), n)
+	if err != nil {
+		return nil, fmt.Errorf("read room creation times: %w", err)
+	}
+	defer rows.Close()
+	var out []time.Duration
+	for rows.Next() {
+		var d int64
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, time.Duration(d)*time.Millisecond)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetWarmUntil(ctx context.Context, id int64, t time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET warm_until = ? WHERE id = ?`, ms(t), id)
 	return err

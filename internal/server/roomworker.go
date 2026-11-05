@@ -264,6 +264,7 @@ func (s *Server) stepRoomProvisioning(ctx context.Context, r store.Room, m *conf
 	if ok, _ := s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomProvisioning}, protocol.RoomRunning, "", time.Now()); ok {
 		s.store.SetWarmUntil(ctx, r.ID, time.Time{})
 		s.store.SetConfigSHA256(ctx, r.ID, hash)
+		s.store.SetRoomReady(ctx, r.ID, time.Now())
 	}
 }
 

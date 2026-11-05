@@ -72,15 +72,19 @@ func ValidServerID(s string) bool { return serverIDRE.MatchString(s) }
 // Server is server.toml. After LoadServer, all defaults are set and each machine
 // has the values that it inherits from its provider.
 type Server struct {
-	ServerID      string    `toml:"server_id"`
-	Listen        string    `toml:"listen"`
-	GatewayListen string    `toml:"gateway_listen"`
-	GatewayPublic string    `toml:"gateway_public"`
-	TLS           string    `toml:"tls"`
-	PublicURLs    []string  `toml:"public_urls"`
-	DataDir       string    `toml:"data_dir"`
-	HelperDir     string    `toml:"helper_dir"`
-	IdleTimeout   *Duration `toml:"idle_timeout"`
+	ServerID      string   `toml:"server_id"`
+	Listen        string   `toml:"listen"`
+	GatewayListen string   `toml:"gateway_listen"`
+	GatewayPublic string   `toml:"gateway_public"`
+	TLS           string   `toml:"tls"`
+	PublicURLs    []string `toml:"public_urls"`
+	DataDir       string   `toml:"data_dir"`
+	HelperDir     string   `toml:"helper_dir"`
+	// PlatformsDir is read only to ignore it: install.sh wrote it before
+	// M10e, and the update must not stop the server (PlatformsDirWarning).
+	// The schema omits it.
+	PlatformsDir string    `toml:"platforms_dir,omitempty" schema:"-"`
+	IdleTimeout  *Duration `toml:"idle_timeout"`
 	// Aging is read only to reject it (removed in M8); the schema omits it.
 	Aging              *Duration            `toml:"aging" schema:"-"`
 	PollTimeout        *Duration            `toml:"poll_timeout"`
@@ -97,6 +101,9 @@ type Server struct {
 	// Tools are the defined tools.
 	Tools map[string]*Tool `toml:"-"`
 }
+
+// PlatformsDirWarning is the warning for platforms_dir in server.toml.
+const PlatformsDirWarning = "server.toml has platforms_dir, which M10e removed: the server ignores it and uses the tools in its binary and its database (hostel config tools); delete the key"
 
 // GatewayPath is the gateway (SSH in a WebSocket) on the API listener.
 const GatewayPath = "/v1/gateway"
@@ -772,7 +779,7 @@ func checkOldKeys(file string, data []byte, doc string) error {
 	reported := map[string]bool{}
 	for _, path := range order {
 		switch {
-		case len(path) == 1 && path[0] == "platforms_dir":
+		case len(path) == 1 && path[0] == "platforms_dir" && doc != "":
 			add(path, "removed in M10e: the default tools are in the binary, and own tools are in the database (hostel config tools); delete the key")
 		case len(path) == 1 && path[0] == "platforms":
 			add(path, "removed in M10e: tools replace platforms; a tool is a directory with tool.toml (hostel config tools); delete the table")

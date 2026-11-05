@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -141,13 +142,29 @@ func TestExternalMacOS(t *testing.T) {
 }
 
 // TestWarmDestroy is scenario 18: a room of a provider that cannot stop is
-// destroyed after warm_running.
+// destroyed after warm_running. The estimated wait for a new room is the
+// median creation time of the machine's rooms (M10e; 5 minutes before the
+// first room).
 func TestWarmDestroy(t *testing.T) {
 	t.Parallel()
 	f := newExternalFixture(t, "", `warm_running = "2s"`, nil, smallMachine)
+	row := regexp.MustCompile(`(?m)^fake-screen\s.*\s-\s+0\s+(.+)$`)
+	wait := func() string {
+		m := row.FindStringSubmatch(f.e.mustHostel("tools").stdout)
+		if m == nil {
+			t.Fatalf("hostel tools has no fake-screen row without free slots")
+		}
+		return m[1]
+	}
+	if w := wait(); w != "~5 min (new room)" {
+		t.Fatalf("estimated wait before the first room: %q", w)
+	}
 	f.acquire()
 	f.e.mustHostel("release")
 	f.waitNoCloudRooms()
+	if w := wait(); !regexp.MustCompile(`^(<1 min|~[1-3] min) \(new room\)$`).MatchString(w) {
+		t.Fatalf("estimated wait after a room: %q, want the creation time of that room", w)
+	}
 }
 
 // TestRemoveOnDemandMachine (M9): an on-demand machine with a room cannot be

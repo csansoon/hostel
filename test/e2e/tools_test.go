@@ -93,6 +93,19 @@ func TestTools(t *testing.T) {
 	if r := f.e.hostel("tools", "nothing"); r.code != 69 {
 		t.Fatalf("tools of an unknown tool: %s, want exit code 69", r)
 	}
+	// The agent guide has the guides of the server's tools only.
+	r = f.e.mustHostel("agent-guide")
+	for _, want := range []string{"Ask for the tools that you need.", "hostel acquire <tool[:option]>...",
+		"\nfake-sdk: 1.4.2\n  A simulated SDK for the E2E tests.", "\nfake-desktop (screen)\n  A simulated desktop", "\nfake-screen (screen): option-a, option-b, option-c\n"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("agent-guide has no %q:\n%s", want, r.stdout)
+		}
+	}
+	for _, not := range []string{"android", "xcode", "--device", "--require", "platform"} {
+		if strings.Contains(r.stdout, not) {
+			t.Fatalf("agent-guide has %q, which this server does not have:\n%s", not, r.stdout)
+		}
+	}
 	r = f.e.hostel("acquire", "fake-screen", "fake-desktop", "--task", "both")
 	if r.code != 69 || !strings.Contains(r.stderr, "no machine has fake-screen and fake-desktop together; machines with fake-screen: home/a (option-a, option-b, option-c); machines with fake-desktop: home/b") {
 		t.Fatalf("acquire of tools that no machine has together: %s", r)
@@ -392,6 +405,23 @@ tools = ["fake-sdk"]
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
 	if r := e.mustHostel("status"); strings.Contains(r.stdout, "Warning") {
 		t.Fatalf("status after the new configuration:\n%s", r.stdout)
+	}
+
+	// platforms_dir in server.toml (install.sh wrote it before M10e): the
+	// server ignores it, logs a warning, and starts.
+	file := filepath.Join(e.configDir(), "server.toml")
+	local, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.writeConfig("platforms_dir = \"/opt/hostel/platforms\"\n" + string(local))
+	if r := e.hostel("admin", "config", "check"); r.code != 0 || !strings.Contains(r.stderr, "warning: server.toml has platforms_dir, which M10e removed") {
+		t.Fatalf("config check with platforms_dir: %s", r)
+	}
+	s = s.restart()
+	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	if !strings.Contains(s.log.String(), "server.toml has platforms_dir, which M10e removed") {
+		t.Fatalf("no warning for platforms_dir in the server log:\n%s", s.log.String())
 	}
 }
 
