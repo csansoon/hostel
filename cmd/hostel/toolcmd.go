@@ -156,9 +156,14 @@ options = ["%s-1"]               # the options that a lease can ask for; the fir
 		}
 		switch t.step {
 		case "check":
-			if ext == ".ps1" {
+			switch {
+			case screen && ext == ".ps1":
+				body += "Write-Output $env:HOSTEL_TOOL_ALL_OPTIONS\n"
+			case screen:
+				body += "echo \"$HOSTEL_TOOL_ALL_OPTIONS\"\n"
+			case ext == ".ps1":
 				body += "Write-Output '1.0'\n"
-			} else {
+			default:
 				body += "echo 1.0\n"
 			}
 		case "start":

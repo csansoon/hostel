@@ -40,7 +40,7 @@ func (f *fixture) roomGet(port, path string) result {
 
 func (f *fixture) leaseKey() ssh.Signer {
 	f.e.t.Helper()
-	data, err := os.ReadFile(filepath.Join(f.e.cwd, ".git", "hostel", "fakedevice", "id_ed25519"))
+	data, err := os.ReadFile(filepath.Join(f.e.cwd, ".git", "hostel", "lease", "id_ed25519"))
 	if err != nil {
 		f.e.t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ const tunnelRepoConfig = `include = [".env"]
 [tunnels.api]
 local_port_env = "PORT"
 
-[platforms.fakedevice]
+[tool.fake-screen]
 env = { API_URL = "http://localhost:{tunnels.api.port}" }
 `
 
@@ -151,7 +151,7 @@ func TestTunnelInSetup(t *testing.T) {
 		"hostel.toml": `[tunnels.api]
 local_port = ` + fmt.Sprint(port) + `
 
-[platforms.fakedevice]
+[tool.fake-screen]
 setup = ["printf 'GET /setup HTTP/1.0\\r\\n\\r\\n' | nc -N -w 5 127.0.0.1 $HOSTEL_TUNNEL_API_PORT > setup-http.txt"]
 `,
 	}})
@@ -227,7 +227,7 @@ func TestForwards(t *testing.T) {
 // lease1 returns the lease ID of the fixture's repository.
 func (f *fixture) lease1(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(f.e.cwd, ".git", "hostel", "fakedevice", "lease.json"))
+	data, err := os.ReadFile(filepath.Join(f.e.cwd, ".git", "hostel", "lease", "lease.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

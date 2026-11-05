@@ -19,14 +19,13 @@ import (
 
 const roomReady = 3 * time.Minute
 
-// provisionScript records each call, with values from its environment, in the
+// installScript records each call, with values from its environment, in the
 // room cache.
-const provisionScript = `#!/bin/sh
-echo "provision $HOSTEL_PLATFORM devices=$HOSTEL_PLATFORM_DEVICES var=$MACHINE_VAR mise=$MISE_DATA_DIR pwd=$(pwd)" >> "$HOSTEL_CACHE_DIR/provision.log"
-echo "provisioned $HOSTEL_PLATFORM"
+const installScript = `#!/bin/sh
+echo "install $HOSTEL_TOOL var=$MACHINE_VAR mise=$MISE_DATA_DIR home=$PROBE_HOME pwd=$(pwd)" >> "$HOSTEL_CACHE_DIR/install.log"
 `
 
-func staticRoomConfig(c *container, platforms string) string {
+func staticRoomConfig(c *container, tools string) string {
 	return serverHeader() + fmt.Sprintf(`
 [providers.home]
 kind = "static"
@@ -34,29 +33,16 @@ kind = "static"
 [providers.home.machines.box]
 address = %q
 os = "linux"
-platforms = [%s]
+tools = [%s]
 env = { MACHINE_VAR = "machine-value" }
-`, c.address(), platforms)
-}
-
-func (e *env) writePlatform(name string, files map[string]string) {
-	for f, body := range files {
-		e.writeFile(filepath.Join(e.configDir(), "platforms", name, f), body)
-	}
-}
-
-// pushPlatform saves the platform directory that writePlatform wrote as the
-// server's platform (M9: the server reads platforms_dir only at the import).
-func (e *env) pushPlatform(name string) {
-	e.t.Helper()
-	if r := e.adminHostel("config", "platforms", "push", filepath.Join(e.configDir(), "platforms", name)); r.code != 0 {
-		e.t.Fatalf("push the platform %s: %s", name, r)
-	}
+`, c.address(), tools)
 }
 
 // TestStaticRoom: a static room is probed, gets the helper, mise, and the
-// platform scripts, and is ready for its platforms at server start (scenario 22,
-// static part). A restart does not provision again; changed scripts do. Init
+// files of its tools, installs and checks them, and has them in its inventory
+// (scenario 22, static part). A restart does not install again; changed
+// scripts do; a tool that the machine no longer lists leaves the room and its
+// inventory. Init
 // rejects a server name, TLS mode, listen address, or public address that the
 // server would reject at start, and init and invite reject an invalid user name.
 // The schema that init writes has no aging. server invite checks the
@@ -118,23 +104,25 @@ func TestStaticRoom(t *testing.T) {
 		t.Fatalf("hostel.schema.json (err %v): want public_urls and no aging", err)
 	}
 	c := e.startStaticRoom("box")
-	e.writePlatform("linux", map[string]string{"health.linux.sh": "#!/bin/sh\n"})
-	e.writePlatform("fakedevice", map[string]string{
-		"platform.toml":      "devices = [\"phone\", \"tablet\"]\n",
-		"prepare.linux.sh":   "#!/bin/sh\n",
-		"provision.linux.sh": provisionScript,
-		"provision.macos.sh": "#!/bin/sh\nexit 1\n",
-		"README.md":          "not uploaded\n",
+	e.writeTool("probe", map[string]string{
+		"tool.toml":        "description = \"Probe\"\nenv = { PROBE_HOME = \"{cache}/probe\" }\n",
+		"install.linux.sh": installScript,
+		"install.macos.sh": "#!/bin/sh\nexit 1\n",
+		"check.linux.sh":   "#!/bin/sh\necho checking\necho 2.0\n",
 	})
-	e.writeConfig(staticRoomConfig(c, `"fakedevice"`))
+	e.writeTool("probe-two", map[string]string{"tool.toml": "description = \"Second probe\"\n", "check.linux.sh": "#!/bin/sh\necho 3.1\n"})
+	e.writeConfig(staticRoomConfig(c, `"probe", "probe-two"`))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 
 	r := s.waitRoom("home/box", protocol.RoomRunning, roomReady)
 	if r.OS != "linux" || r.Arch != dockerArch {
 		t.Fatalf("room = %+v, want linux/%s", r, dockerArch)
 	}
-	if !slices.Contains(r.Tools, "fakedevice") || !slices.Contains(r.Tools, "linux") {
-		t.Fatalf("room platforms = %v, want fakedevice and linux", r.Tools)
+	if p := inventoryOf(r, "probe"); p == nil || p.State != "ready" || !slices.Equal(p.Options, []string{"2.0"}) || !slices.Equal(p.Env, []string{"PROBE_HOME"}) {
+		t.Fatalf("probe in the inventory: %+v (inventory %+v)", p, r.Tools)
+	}
+	if p := inventoryOf(r, "probe-two"); p == nil || !slices.Equal(p.Options, []string{"3.1"}) {
+		t.Fatalf("probe-two in the inventory: %+v", r.Tools)
 	}
 	if len(r.Slots) != 1 || r.Slots[0].Name != "a" || r.Slots[0].State != protocol.SlotFree {
 		t.Fatalf("room slots = %+v, want one free slot a", r.Slots)
@@ -150,62 +138,59 @@ func TestStaticRoom(t *testing.T) {
 			t.Fatalf("%s on the room: sha256 %s, want %s", remote, got, want)
 		}
 	}
-	if got := c.sh("ls /home/hostel/hostel/platforms/fakedevice"); got != "platform.toml\nprepare.linux.sh\nprovision.linux.sh" {
-		t.Fatalf("platform files on the room:\n%s\nwant platform.toml and the linux scripts only", got)
+	if got := c.sh("ls /home/hostel/hostel/tools/probe"); got != "check.linux.sh\ninstall.linux.sh\ntool.toml" {
+		t.Fatalf("tool files on the room:\n%s\nwant tool.toml and the linux scripts only", got)
 	}
 	if got := c.sh("stat -c %a /home/hostel/hostel/room-env.json"); got != "600" {
 		t.Fatalf("room-env.json mode %s, want 600", got)
 	}
-	wantLog := "provision fakedevice devices=phone,tablet var=machine-value mise=/home/hostel/hostel/cache/mise pwd=/home/hostel/hostel"
-	if got := c.sh("cat /home/hostel/hostel/cache/provision.log"); got != wantLog {
-		t.Fatalf("provision log:\n%s\nwant:\n%s", got, wantLog)
+	wantLog := "install probe var=machine-value mise=/home/hostel/hostel/cache/mise home=/home/hostel/hostel/cache/probe pwd=/home/hostel/hostel"
+	if got := c.sh("cat /home/hostel/hostel/cache/install.log"); got != wantLog {
+		t.Fatalf("install log:\n%s\nwant:\n%s", got, wantLog)
 	}
-	if r := e.hostel("status"); r.code != 0 || !regexp.MustCompile(`home/box\s+\S.*\s+free`).MatchString(r.stdout) {
+	if r := e.hostel("status"); r.code != 0 || !regexp.MustCompile(`home/box\s+probe 2\.0, probe-two 3\.1\s+free`).MatchString(r.stdout) {
 		t.Fatalf("hostel status: %s", r)
 	}
 
-	// A restart probes again but does not run provision again.
+	// A restart probes again but does not run install again.
 	s.stop()
 	s = e.startServer(s.token)
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if got := c.sh("wc -l < /home/hostel/hostel/cache/provision.log"); got != "1" {
-		t.Fatalf("provision ran %s times after a restart, want 1", got)
+	if got := c.sh("wc -l < /home/hostel/hostel/cache/install.log"); got != "1" {
+		t.Fatalf("install ran %s times after a restart, want 1", got)
 	}
 
-	if got := c.sh("ls /home/hostel/hostel/platforms/linux"); got != "health.linux.sh" {
-		t.Fatalf("linux platform files on the room: %q", got)
-	}
-
-	// Changed platform scripts (M9: pushed, without a restart): the free room
-	// provisions again. Removed OS platform scripts are removed on the room.
-	e.writePlatform("fakedevice", map[string]string{"provision.linux.sh": provisionScript + "# changed\n"})
-	if err := os.Remove(filepath.Join(e.configDir(), "platforms", "linux", "health.linux.sh")); err != nil {
-		t.Fatal(err)
-	}
-	e.pushPlatform("fakedevice")
-	e.pushPlatform("linux")
-	e.waitFor("provision runs again", roomReady, func() bool {
-		return c.sh("wc -l < /home/hostel/hostel/cache/provision.log") == "2"
+	// Changed tool scripts (pushed, without a restart): the free room
+	// installs again.
+	e.writeTool("probe", map[string]string{"install.linux.sh": installScript + "# changed\n"})
+	e.pushTool("probe")
+	e.waitFor("install runs again", roomReady, func() bool {
+		return c.sh("wc -l < /home/hostel/hostel/cache/install.log") == "2"
 	})
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if got := c.sh("test -e /home/hostel/hostel/platforms/linux && echo exists || echo removed"); got != "removed" {
-		t.Fatalf("old linux platform scripts on the room: %s", got)
+	// A tool that the machine no longer lists leaves the room and the
+	// inventory.
+	if r := e.applyDoc(strings.Replace(s.configDoc().Document, `"probe", "probe-two"`, `"probe"`, 1)); r.code != 0 {
+		t.Fatalf("apply: %s", r)
+	}
+	e.waitFor("probe-two leaves the room", roomReady, func() bool {
+		return c.sh("test -e /home/hostel/hostel/tools/probe-two && echo exists || echo removed") == "removed"
+	})
+	r = s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	if inventoryOf(r, "probe-two") != nil || inventoryOf(r, "probe") == nil {
+		t.Fatalf("inventory after the removal of probe-two: %+v", r.Tools)
 	}
 }
 
-// TestProvisionBackgroundProcess: a provision script that leaves a background
+// TestProvisionBackgroundProcess: an install script that leaves a background
 // process with its output open (for example a simulator) still succeeds.
 func TestProvisionBackgroundProcess(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
 	c := e.startStaticRoom("box")
-	e.writePlatform("fakedevice", map[string]string{
-		"platform.toml":      "devices = [\"phone\"]\n",
-		"prepare.linux.sh":   "#!/bin/sh\n",
-		"provision.linux.sh": "#!/bin/sh\nsleep 600 &\necho started\n",
-	})
-	e.writeConfig(staticRoomConfig(c, `"fakedevice"`))
+	e.writeTool("probe", map[string]string{"tool.toml": "description = \"Probe\"\n", "install.linux.sh": "#!/bin/sh\nsleep 600 &\necho started\n"})
+	e.writeConfig(staticRoomConfig(c, `"probe"`))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
 }
@@ -228,22 +213,21 @@ func TestStaticRoomOffline(t *testing.T) {
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
 }
 
-// TestProvisionFailure: a failed provision script makes the room broken.
+// TestProvisionFailure: a failed install script makes the room broken.
 func TestProvisionFailure(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
 	c := e.startStaticRoom("box")
-	e.writePlatform("fakedevice", map[string]string{
-		"platform.toml":      "devices = [\"phone\"]\n",
-		"prepare.linux.sh":   "#!/bin/sh\n",
-		"provision.linux.sh": "#!/bin/sh\necho no simulator runtime >&2\nexit 3\n",
-	})
-	e.writeConfig(staticRoomConfig(c, `"fakedevice"`))
+	e.writeTool("probe", map[string]string{"tool.toml": "description = \"Probe\"\n", "install.linux.sh": "#!/bin/sh\necho no simulator runtime >&2\nexit 3\n"})
+	e.writeConfig(staticRoomConfig(c, `"probe"`))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	r := s.waitRoom("home/box", protocol.RoomBroken, roomReady)
-	if r.Reason != "platform fakedevice: provision script exited with code 3" {
-		t.Fatalf("room = %+v, want the provision failure as the reason", r)
+	if r.Reason != "tool probe: install script exited with code 3" {
+		t.Fatalf("room = %+v, want the install failure as the reason", r)
+	}
+	if p := inventoryOf(r, "probe"); p == nil || p.State != "failed" {
+		t.Fatalf("probe in the inventory: %+v", r.Tools)
 	}
 }
 

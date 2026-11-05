@@ -17,8 +17,8 @@ import (
 // HOSTEL_LEASE, and the desktop program serves the next lease.
 func TestDesktop(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineKeys: "labels = [\"desktop\"]\n"})
-	lease := f.acquire("--require", "desktop")
+	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-desktop"}})
+	lease := f.acquire("fake-desktop")
 	if r := f.e.hostel("run", "--", "desktop true"); r.code != 69 || !strings.Contains(r.stdout, "no desktop session") {
 		t.Fatalf("desktop without the desktop program: %s, want exit code 69", r)
 	}
@@ -61,7 +61,7 @@ func TestDesktop(t *testing.T) {
 	f.waitSlotFree()
 	f.e.waitFor("the detached desktop commands end with the lease", 30*time.Second, func() bool { return running() == "0" })
 
-	f.acquire("--require", "desktop")
+	f.acquire("fake-desktop")
 	if r := f.e.mustHostel("run", "--", "desktop echo next"); r.stdout != "next\n" {
 		t.Fatalf("desktop in the next lease: %s", r)
 	}

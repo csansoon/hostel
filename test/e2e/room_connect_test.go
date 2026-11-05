@@ -68,7 +68,7 @@ func TestRoomConnect(t *testing.T) {
 	e := newEnv(t)
 	e.init()
 	c := e.startStaticRoom("box")
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	header := strings.Replace(serverHeader(), `reconcile = "2s"`, `reconcile = "1h"`, 1)
 	e.writeConfig(header + `
 
@@ -78,13 +78,13 @@ kind = "static"
 [providers.home.machines.box]
 address = "hostel@localhost"
 os = "linux"
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 connect = true
 
 [providers.home.machines.other]
 address = "hostel@localhost"
 os = "linux"
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 connect = true
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])

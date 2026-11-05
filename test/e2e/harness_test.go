@@ -16,12 +16,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
@@ -106,6 +108,9 @@ type env struct {
 	// bin and serverBin replace hostelBin for guest commands and for the
 	// server (the update tests run other versions).
 	bin, serverBin string
+	// tools are the test tools that the first start of the server pushes
+	// (useTools, writeTool).
+	tools []string
 }
 
 // guestBin is the binary of guest commands.
@@ -128,7 +133,7 @@ func newEnv(t *testing.T) *env {
 		if !t.Failed() {
 			return
 		}
-		logs, _ := filepath.Glob(filepath.Join(e.home, "*", ".git", "hostel", "*", "ports.log"))
+		logs, _ := filepath.Glob(filepath.Join(e.home, "*", ".git", "hostel", "lease", "ports.log"))
 		for _, l := range logs {
 			data, _ := os.ReadFile(l)
 			t.Logf("%s:\n%s", l, data)
@@ -310,6 +315,22 @@ func (e *env) startServer(token string) *serverProc {
 	e.t.Helper()
 	addrFile := filepath.Join(e.dataDir(), "server.json")
 	os.Remove(addrFile)
+	// The first start with test tools: the server starts with the local keys
+	// of server.toml, gets the tools, and then the configuration document.
+	var doc []byte
+	push := e.admin == "" && len(e.tools) > 0
+	if push {
+		file := filepath.Join(e.configDir(), "server.toml")
+		data, err := os.ReadFile(file)
+		if err != nil {
+			e.t.Fatal(err)
+		}
+		var local []byte
+		if local, doc, err = config.SplitServerFile(data); err != nil {
+			e.t.Fatal(err)
+		}
+		e.writeConfig(string(local))
+	}
 	s := &serverProc{e: e, token: token, done: make(chan struct{}), log: &syncBuffer{}}
 	bin := hostelBin
 	if e.serverBin != "" {
@@ -360,6 +381,16 @@ func (e *env) startServer(token string) *serverProc {
 	}
 	if e.vars["HOSTEL_TOKEN"] == "" {
 		e.vars["HOSTEL_TOKEN"] = e.admin
+	}
+	if push {
+		for _, name := range e.tools {
+			e.pushTool(name)
+		}
+		if len(bytes.TrimSpace(doc)) > 0 {
+			if r := e.applyDoc(string(doc)); r.code != 0 {
+				e.t.Fatalf("apply the configuration of server.toml: %s", r)
+			}
+		}
 	}
 	return s
 }
@@ -469,21 +500,55 @@ func (e *env) git(dir string, args ...string) {
 	}
 }
 
-// usePlatform copies a platform directory from test/platforms to the server
-// configuration.
-func (e *env) usePlatform(name string) {
+// toolDir is the test's copy of a tool directory.
+func (e *env) toolDir(name string) string { return filepath.Join(e.home, "tools", name) }
+
+// useTools copies tool directories from test/tools. The first start of the
+// server pushes them ("hostel config tools push") before it applies the
+// providers and machines of server.toml: a machine can list a tool only when
+// the server has it.
+func (e *env) useTools(names ...string) {
 	e.t.Helper()
-	src := filepath.Join("..", "platforms", name)
-	des, err := os.ReadDir(src)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	for _, de := range des {
-		data, err := os.ReadFile(filepath.Join(src, de.Name()))
+	for _, name := range names {
+		src := filepath.Join("..", "tools", name)
+		des, err := os.ReadDir(src)
 		if err != nil {
 			e.t.Fatal(err)
 		}
-		e.writeFile(filepath.Join(e.configDir(), "platforms", name, de.Name()), string(data))
+		for _, de := range des {
+			data, err := os.ReadFile(filepath.Join(src, de.Name()))
+			if err != nil {
+				e.t.Fatal(err)
+			}
+			e.writeFile(filepath.Join(e.toolDir(name), de.Name()), string(data))
+		}
+		if !slices.Contains(e.tools, name) {
+			e.tools = append(e.tools, name)
+		}
+	}
+}
+
+// writeTool writes files into the test's copy of a tool (a new tool, or a
+// change of a test tool); "" as content removes a file.
+func (e *env) writeTool(name string, files map[string]string) {
+	e.t.Helper()
+	for f, body := range files {
+		if body == "" {
+			os.Remove(filepath.Join(e.toolDir(name), f))
+			continue
+		}
+		e.writeFile(filepath.Join(e.toolDir(name), f), body)
+	}
+	if !slices.Contains(e.tools, name) {
+		e.tools = append(e.tools, name)
+	}
+}
+
+// pushTool saves the test's copy of a tool on the running server.
+func (e *env) pushTool(name string) {
+	e.t.Helper()
+	if r := e.adminHostel("config", "tools", "push", e.toolDir(name)); r.code != 0 {
+		e.t.Fatalf("push the tool %s: %s", name, r)
 	}
 }
 
@@ -555,4 +620,14 @@ func (s *serverProc) restartAfterKill() *serverProc {
 	s.e.t.Helper()
 	s.kill()
 	return s.restart()
+}
+
+// inventoryOf returns a tool of a room's inventory, or nil.
+func inventoryOf(r protocol.RoomStatus, tool string) *protocol.InventoryTool {
+	for i := range r.Tools {
+		if r.Tools[i].Name == tool {
+			return &r.Tools[i]
+		}
+	}
+	return nil
 }

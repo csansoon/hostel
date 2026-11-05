@@ -238,7 +238,7 @@ spec = { product = "instance", machine_type = "linux/amd64:2x4" }
 
 	start := time.Now()
 	for {
-		r := e.hostel("acquire", "linux", "--task", "smoke test", "--wait", "1m")
+		r := e.hostel("acquire", "--task", "smoke test", "--wait", "1m")
 		if r.code == 0 {
 			break
 		}

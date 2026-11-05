@@ -130,7 +130,7 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 		if m.Kind != "static" {
 			note = fmt.Sprintf("(on demand, up to %d)", m.MaxRooms)
 		}
-		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(m.Tools, ", "), note)
+		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(append([]string{m.OS}, m.Tools...), ", "), note)
 	}
 	tw.flush()
 
@@ -205,7 +205,7 @@ func printQueue(w io.Writer, st protocol.Status, tool string, now time.Time) err
 	if !known && len(q) == 0 {
 		return fmt.Errorf("no room or tool %q; \"hostel status\" lists the rooms and the waiting line", tool)
 	}
-	fmt.Fprintf(w, "%s · %d rooms in use, %d free · %d waiting\n", tool, used, free, len(q))
+	fmt.Fprintf(w, "%s · %d in use, %d free · %d waiting\n", tool, used, free, len(q))
 	if len(q) == 0 {
 		return nil
 	}

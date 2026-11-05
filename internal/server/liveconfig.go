@@ -109,9 +109,7 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 			if err := writeOnce(file+".pre-m9", data); err != nil {
 				return nil, err
 			}
-			// A file of the form before M10e is imported too: the server
-			// then starts without providers and machines (below).
-			if _, err := config.LoadServer(file); err != nil && config.OldForm(doc) == nil {
+			if _, err := config.LoadServer(file); err != nil {
 				return nil, err
 			}
 			if _, err := st.AddConfig(ctx, 0, string(doc), 0, now); err != nil {

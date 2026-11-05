@@ -4,24 +4,25 @@ package e2e
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
 // TestMise is scenario 28: a room without mise gets the Hostel mise binary;
-// machine-level tools are installed at room provisioning and platform scripts
-// can use them; a repository mise.toml with an [env] value and a tool makes
+// machine-level mise tools are installed at room provisioning, tool scripts
+// can use them, and the inventory has their versions; a repository mise.toml with an [env] value and a tool makes
 // both available in "hostel run"; a second lease does not download the tool
 // again. HOSTEL_E2E_OFFLINE=1 skips the downloads.
 func TestMise(t *testing.T) {
 	t.Parallel()
 	offline := os.Getenv("HOSTEL_E2E_OFFLINE") == "1"
-	machineKeys, repoTools := "tools = { jq = \"1.7.1\" }\n", "[tools]\nripgrep = \"14.1.1\"\n"
+	machineTools, repoTools := []string{"fake-screen", "jq:1.7.1"}, "[tools]\nripgrep = \"14.1.1\"\n"
 	// The setup uses a tool that the same setup job installs.
-	repoConfig := "[platforms.fakedevice]\nsetup = [\"rg --version | head -1 > setup-rg.txt\"]\n"
+	repoConfig := "[tool.fake-screen]\nsetup = [\"rg --version | head -1 > setup-rg.txt\"]\n"
 	if offline {
-		machineKeys, repoTools, repoConfig = "", "", ""
+		machineTools, repoTools, repoConfig = nil, "", ""
 	}
 	files := map[string]string{
 		"mise.toml":   repoTools + "[env]\nREPO_MISE_VAR = \"from-mise\"\n",
@@ -33,15 +34,18 @@ func TestMise(t *testing.T) {
 	if got, _ := docker("run", "--rm", "--label", dockerLabel+"="+e.runID, "--entrypoint", "sh", roomImage, "-c", "command -v mise || echo none"); got != "none" {
 		t.Fatalf("the room image has mise: %q", got)
 	}
-	f := newFixtureWithEnv(t, e, &fixtureOpts{machineKeys: machineKeys, files: files, agentDevice: !offline,
-		platforms: map[string]map[string]string{"linux": {"health.linux.sh": "#!/bin/sh\njq --version > \"$HOSTEL_CACHE_DIR/jq-from-health\" 2>&1 || true\n"}}})
+	f := newFixtureWithEnv(t, e, &fixtureOpts{machineTools: machineTools, files: files, agentDevice: !offline,
+		tools: map[string]map[string]string{"fake-sdk": {"check.linux.sh": "#!/bin/sh\njq --version > \"$HOSTEL_CACHE_DIR/jq-from-check\" 2>&1 || true\ncat \"$HOSTEL_CACHE_DIR/fake-sdk/version\"\n"}}})
 	if got := f.c.sh("/home/hostel/hostel/bin/mise --version | cut -d' ' -f1"); got != "2026.10.17" {
 		t.Fatalf("mise on the room: %q", got)
 	}
 	if !offline {
-		// Installed at provisioning, before a lease; a platform script used it.
-		if got := f.c.sh("cat /home/hostel/hostel/cache/jq-from-health"); got != "jq-1.7.1" {
-			t.Fatalf("machine-level tool in a platform script: %q", got)
+		// Installed at provisioning, before a lease; a tool script used it.
+		if got := f.c.sh("cat /home/hostel/hostel/cache/jq-from-check"); got != "jq-1.7.1" {
+			t.Fatalf("machine-level tool in a tool script: %q", got)
+		}
+		if inv := inventoryOf(f.s.room("home/box"), "jq"); inv == nil || !slices.Equal(inv.Options, []string{"1.7.1"}) || inv.State != "ready" {
+			t.Fatalf("jq in the inventory: %+v", inv)
 		}
 	}
 	f.acquire()
@@ -70,7 +74,7 @@ func TestMise(t *testing.T) {
 	before := f.c.sh(installed)
 	f.e.mustHostel("release")
 	f.waitSlotFree()
-	r = f.e.mustHostel("acquire", "fakedevice", "--task", "second")
+	r = f.e.mustHostel("acquire", "fake-screen", "--task", "second")
 	if strings.Contains(r.stderr, "ripgrep-14.1.1") {
 		t.Fatalf("the second lease downloaded the tool again: %s", r)
 	}
@@ -87,7 +91,7 @@ func TestMise(t *testing.T) {
 	// The change applies without a restart: the free room provisions again.
 	doc := f.s.configDoc().Document
 	off := strings.Replace(doc, "agent_device = true", "agent_device = false", 1)
-	if r := f.e.applyDoc(strings.Replace(off, machineKeys, "", 1)); r.code != 0 {
+	if r := f.e.applyDoc(strings.Replace(off, `tools = ["fake-screen", "jq:1.7.1"]`, `tools = ["fake-screen"]`, 1)); r.code != 0 {
 		t.Fatalf("apply: %s", r)
 	}
 	f.e.waitFor("agent-device removed", time.Minute, func() bool {

@@ -18,7 +18,7 @@ import (
 const devboxMachine = `
 [providers.ns.machines.box]
 spec = { product = "devbox", platform = "linux", size = "s", image = "builtin:default" }
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 max_lifetime = "3h"
 `
 
@@ -51,7 +51,7 @@ func newDevboxFixture(t *testing.T, providerKeys string, vars map[string]string)
 	t.Helper()
 	e := newEnv(t)
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	state := e.useFakeDevbox(vars)
 	e.writeConfig(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + providerKeys + devboxMachine)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
@@ -71,19 +71,19 @@ func (f *fixture) nsRooms() []protocol.RoomStatus {
 }
 
 // TestNamespaceDevbox: leases on an ephemeral devbox through the devbox SSH
-// proxy and the devbox key; health only for platforms that the room is ready
-// for; a task marker only while a job runs, and cleanup
+// proxy and the devbox key; check only for the tools that the room has
+// installed; a task marker only while a job runs, and cleanup
 // removes the marker of a killed job supervisor; access after the key file is
 // lost; a destroyed room takes its key files with it.
 func TestNamespaceDevbox(t *testing.T) {
 	t.Parallel()
 	f, state := newDevboxFixture(t, "warm_running = \"10m\"\n", nil)
-	// A first lease of the OS platform: the room is not ready for fakedevice yet,
-	// so cleanup does not run the fakedevice health script (it needs the result
-	// of the fakedevice provision script).
-	f.e.mustHostel("acquire", "linux", "--task", "plain linux")
+	// A first lease without tools: the on-demand room has not installed the
+	// screen tool fake-screen yet, so cleanup does not run its check script
+	// (it needs the result of its install script).
+	f.e.mustHostel("acquire", "--task", "no tools")
 	f.e.mustHostel("release")
-	f.e.waitFor("slot free after the linux lease", time.Minute, func() bool {
+	f.e.waitFor("slot free after the lease without tools", time.Minute, func() bool {
 		rs := f.nsRooms()
 		return len(rs) == 1 && rs[0].State == protocol.RoomRunning && rs[0].Slots[0].State == protocol.SlotFree && rs[0].Slots[0].LeaseID == ""
 	})
@@ -151,7 +151,7 @@ func TestNamespaceLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.useFakeDevbox(map[string]string{"FAKE_LIMIT": "1"})
 	e.writeConfig(serverHeader() + "limit_retry = \"3s\"\n[providers.ns]\nkind = \"namespace\"\n" + devboxMachine)
 	e.startServer(e.vars["HOSTEL_TOKEN"])
@@ -160,7 +160,7 @@ func TestNamespaceLimit(t *testing.T) {
 	// The same command continues the same lease until the limit shows.
 	var r result
 	e.waitFor("the provider limit", 2*time.Minute, func() bool {
-		r = e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "5s")
+		r = e.hostel("acquire", "fake-screen", "--task", "limited", "--wait", "5s")
 		if r.code != 75 {
 			t.Fatalf("acquire at the devbox limit: %s", r)
 		}
@@ -175,7 +175,7 @@ func TestNamespaceLimit(t *testing.T) {
 	// After limit_retry the lease gets a new devbox; as a guest does, run the
 	// same command again until it is ready.
 	e.waitFor("the lease ready after the limit", 3*time.Minute, func() bool {
-		r = e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "20s")
+		r = e.hostel("acquire", "fake-screen", "--task", "limited", "--wait", "20s")
 		if r.code != 0 && r.code != 75 {
 			t.Fatalf("acquire after the limit: %s", r)
 		}
@@ -227,7 +227,7 @@ func TestNamespaceCreateError(t *testing.T) {
 	t.Parallel()
 	f, _ := newDevboxFixture(t, "", map[string]string{
 		"FAKE_CREATE_ERROR": "rpc error: code = ResourceExhausted desc = rate limit exceeded (rid=fake)"})
-	r := f.e.hostel("acquire", "fakedevice", "--task", "rate limited", "--wait", "60s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "rate limited", "--wait", "60s")
 	if r.code != 1 || !strings.Contains(r.stderr, "the provider failed to create a room") || !strings.Contains(r.stderr, "rate limit exceeded") {
 		t.Fatalf("acquire with a rate limit on create: %s", r)
 	}
@@ -240,7 +240,7 @@ func TestNamespaceLogin(t *testing.T) {
 	e := newEnv(t)
 	e.useFakeDevbox(map[string]string{"FAKE_LOGGED_OUT": "1"})
 	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + devboxMachine)
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	r := e.hostel("server", "run")
 	if r.code != 1 || !strings.Contains(r.stderr, `providers.ns: the devbox CLI is not ready (install it and run "devbox login" as the server user)`) ||
 		!strings.Contains(r.stderr, "not logged in; run devbox login") {

@@ -3,13 +3,9 @@
 package e2e
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/csansoon/hostel/internal/protocol"
 )
 
 // TestIdleExpiry is scenario 9: idle expiry after idle_timeout; an open cmd
@@ -97,44 +93,3 @@ func TestOwnership(t *testing.T) {
 	f.e.vars["HOSTEL_TOKEN"] = owner
 }
 
-// TestPlatformsAndDevices is scenario 22 (devices): an OS platform without a
-// platform directory, device selection, device facts, and screenshots.
-func TestPlatformsAndDevices(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, nil)
-	r := f.e.mustHostel("platforms")
-	if !strings.Contains(r.stdout, "fakedevice  device  phone, tablet, watch  1") || !strings.Contains(r.stdout, "linux       os") {
-		t.Fatalf("platforms:\n%s", r.stdout)
-	}
-
-	// linux is an OS platform without a directory.
-	f.e.mustHostel("acquire", "linux", "--task", "plain linux")
-	if r := f.e.mustHostel("run", "--", "echo $HOSTEL_PLATFORM $HOSTEL_ROOM_OS"); r.stdout != "linux linux\n" {
-		t.Fatalf("linux lease: %q", r.stdout)
-	}
-	f.e.mustHostel("release")
-	f.waitSlotFree()
-
-	f.acquire("--device", "tablet", "--device", "phone")
-	r = f.e.mustHostel("run", "--", "echo $HOSTEL_DEVICES ${FAKE_DEVICE_ID%%-*} $FAKE_DEVICE_OS")
-	if r.stdout != "tablet,phone tablet linux\n" {
-		t.Fatalf("devices: %q", r.stdout)
-	}
-	shot := filepath.Join(f.e.home, "phone.png")
-	r = f.e.mustHostel("screenshot", "--device", "phone", "-o", shot)
-	if data, err := os.ReadFile(shot); err != nil || !strings.HasSuffix(string(data), "fake screenshot of phone on linux\n") {
-		t.Fatalf("screenshot of phone: %q, %v", data, err)
-	}
-	r = f.e.mustHostel("screenshot")
-	data, err := os.ReadFile(filepath.Join(f.e.cwd, strings.TrimSpace(r.stdout)))
-	if err != nil || !strings.HasSuffix(string(data), "fake screenshot of tablet on linux\n") {
-		t.Fatalf("default screenshot: %q, %v", data, err)
-	}
-	if r := f.e.hostel("screenshot", "--device", "watch"); r.code != 1 || !strings.Contains(r.stderr, "not in this lease") {
-		t.Fatalf("screenshot of a device that is not in the lease: %s", r)
-	}
-	// A queued lease shows in the status with its position.
-	if st := f.s.status(); len(st.Leases) != 1 || st.Leases[0].State != protocol.LeaseReady {
-		t.Fatalf("status leases: %+v", st.Leases)
-	}
-}

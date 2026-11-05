@@ -256,15 +256,15 @@ func TestUpdateNotice(t *testing.T) {
 	s := e.startServer("")
 
 	e.bin = hostBin(t, "v1.0.0")
-	r := e.mustHostel("platforms")
+	r := e.mustHostel("tools")
 	if !strings.Contains(r.stderr, `the server runs Hostel v1.1.0 and this computer has v1.0.0; run "hostel update"`) {
 		t.Fatalf("no notice: %s", r)
 	}
-	if r = e.mustHostel("platforms"); strings.Contains(r.stderr, "hostel update") {
+	if r = e.mustHostel("tools"); strings.Contains(r.stderr, "hostel update") {
 		t.Fatalf("a second notice within 24 hours: %s", r)
 	}
 	e.bin = hostBin(t, "v1.1.0")
-	if r = e.mustHostel("platforms"); strings.Contains(r.stderr, "hostel update") {
+	if r = e.mustHostel("tools"); strings.Contains(r.stderr, "hostel update") {
 		t.Fatalf("a notice for the same version: %s", r)
 	}
 
@@ -412,7 +412,7 @@ func TestMachineUpdate(t *testing.T) {
 	e := newEnv(t)
 	e.serverBin = hostBin(t, "v1.1.0")
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	own := ownHelperDir(t, filepath.Join(e.home, "helpers"))
 	newHelper := versionBin(t, "linux", dockerArch, "v1.1.0")
 	data, err := os.ReadFile(newHelper)
@@ -435,7 +435,7 @@ func TestMachineUpdate(t *testing.T) {
 	if _, err := docker("cp", versionBin(t, "linux", dockerArch, "v1.0.0"), name+":/usr/local/bin/hostel"); err != nil {
 		t.Fatal(err)
 	}
-	r := e.adminHostel("config", "rooms", "add", "box3", "--platform", "fakedevice")
+	r := e.adminHostel("config", "rooms", "add", "box3", "--tool", "fake-screen")
 	m := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(r.stdout)
 	if r.code != 0 || m == nil {
 		t.Fatalf("config rooms add: %s", r)

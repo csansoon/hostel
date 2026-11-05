@@ -15,7 +15,7 @@ import (
 const cacheDir = "/home/hostel/hostel/cache"
 
 // marker creates or removes a test marker in the room cache (see the
-// fakedevice scripts).
+// fake-screen scripts).
 func (f *fixture) marker(name string, on bool) {
 	if on {
 		f.c.sh("touch " + cacheDir + "/" + name)
@@ -37,45 +37,46 @@ func (f *fixture) admin(args ...string) result {
 	return f.e.mustHostel(args...)
 }
 
-// TestFailures is scenario 20: a prepare failure returns the lease to the
-// queue and marks the room broken; a cleanup failure marks the room and the
-// slot broken; admin repair makes a static room usable again.
+// TestFailures is scenario 20: a failed start of a screen tool returns the
+// lease to the waiting line and marks the room broken; a cleanup failure marks
+// the room and the slot broken; admin repair makes a static room usable again.
 func TestFailures(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
-	f.marker("fail-prepare", true)
-	r := f.e.hostel("acquire", "fakedevice", "--task", "prepare fails", "--wait", "8s")
-	if r.code != 75 || !strings.Contains(r.stderr, "queued") || !strings.Contains(r.stderr, "room broken: platform fakedevice: prepare script exited with code 1") {
-		t.Fatalf("acquire with a failing prepare: %s", r)
+	f.marker("fail-start", true)
+	r := f.e.hostel("acquire", "fake-screen", "--task", "start fails", "--wait", "8s")
+	if r.code != 75 || !strings.Contains(r.stderr, "queued") || !strings.Contains(r.stderr, "room broken: tool fake-screen: start script exited with code 1") {
+		t.Fatalf("acquire with a failing start: %s", r)
 	}
-	if room := f.s.room("home/box"); room.State != protocol.RoomBroken || !strings.Contains(room.Reason, "prepare script exited with code 1") {
-		t.Fatalf("room after the prepare failure: %+v", room)
+	if room := f.s.room("home/box"); room.State != protocol.RoomBroken || !strings.Contains(room.Reason, "start script exited with code 1") {
+		t.Fatalf("room after the start failure: %+v", room)
 	}
-	f.marker("fail-prepare", false)
+	f.marker("fail-start", false)
 	f.admin("admin", "room", "repair", f.roomID())
 	f.acquire()
 
 	// A cleanup failure: the room and the slot are broken; a new lease waits.
-	f.marker("fail-reset", true)
+	f.marker("fail-stop", true)
 	f.e.mustHostel("release")
 	f.e.waitFor("room broken by the cleanup", time.Minute, func() bool {
 		room := f.s.room("home/box")
-		return room.State == protocol.RoomBroken && strings.Contains(room.Reason, "reset failed on purpose")
+		return room.State == protocol.RoomBroken && strings.Contains(room.Reason, "stop failed on purpose")
 	})
 	if slot := f.s.room("home/box").Slots[0]; slot.State != protocol.SlotBroken {
 		t.Fatalf("slot after the cleanup failure: %+v", slot)
 	}
 	f.e.newRepoNamed("next", defaultRepoFiles())
-	if r := f.e.hostel("acquire", "fakedevice", "--task", "next", "--wait", "3s"); r.code != 75 {
+	if r := f.e.hostel("acquire", "fake-screen", "--task", "next", "--wait", "3s"); r.code != 75 {
 		t.Fatalf("a new lease on a broken room: %s", r)
 	}
-	f.marker("fail-reset", false)
+	f.marker("fail-stop", false)
 	f.admin("admin", "room", "repair", f.roomID())
-	f.e.mustHostel("acquire", "fakedevice", "--task", "next")
-	// Two successful resets: the cleanup after the failed prepare, and the
-	// repair after the failed reset (a failing reset writes no log line).
-	if got := f.c.sh("grep -c '^reset linux' " + cacheDir + "/fakedevice.log"); got != "2" {
-		t.Fatalf("successful resets: %s, want 2", got)
+	f.e.mustHostel("acquire", "fake-screen", "--task", "next")
+	// One successful stop: the repair after the failed stop (a failing stop
+	// writes no log line). The cleanup after the failed start runs no stop:
+	// fake-screen did not start.
+	if got := f.c.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log"); got != "1" {
+		t.Fatalf("successful stops: %s, want 1", got)
 	}
 }
 
@@ -85,7 +86,7 @@ func TestFailures(t *testing.T) {
 func TestStaticOffline(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
-	f.marker("slow-prepare", true)
+	f.marker("slow-start", true)
 	f.acquireUntil(protocol.LeasePreparing)
 	f.c.stop()
 	f.e.waitFor("room unreachable", time.Minute, func() bool {
@@ -96,8 +97,8 @@ func TestStaticOffline(t *testing.T) {
 		t.Fatalf("lease after the host went offline: %+v", l)
 	}
 	f.c.start()
-	f.marker("slow-prepare", false)
-	f.e.mustHostel("acquire", "fakedevice", "--task", "offline")
+	f.marker("slow-start", false)
+	f.e.mustHostel("acquire", "fake-screen", "--task", "offline")
 }
 
 // TestRestart is scenario 17: after kill -9 in each lease state, the lease
@@ -118,15 +119,15 @@ func TestRestart(t *testing.T) {
 		f.e.mustHostel("run", "--", "true")
 		f.e.mustHostel("release")
 		f.useRepo("waits")
-		f.e.mustHostel("acquire", "fakedevice", "--task", "wait")
+		f.e.mustHostel("acquire", "fake-screen", "--task", "wait")
 	})
 	t.Run("preparing", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, nil)
-		f.marker("slow-prepare", true)
+		f.marker("slow-start", true)
 		f.acquireUntil(protocol.LeasePreparing)
 		f.s.kill()
-		f.marker("slow-prepare", false)
+		f.marker("slow-start", false)
 		f.s = f.s.restart()
 		f.acquire()
 	})
@@ -134,11 +135,11 @@ func TestRestart(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, nil)
 		id := f.acquire()
-		f.marker("slow-reset", true)
+		f.marker("slow-stop", true)
 		f.e.mustHostel("release")
 		f.e.waitFor("lease cleaning", time.Minute, func() bool { return f.lease(id).State == protocol.LeaseCleaning })
 		f.s.kill()
-		f.marker("slow-reset", false)
+		f.marker("slow-stop", false)
 		f.s = f.s.restart()
 		f.waitSlotFree()
 		if l := f.lease(id); l.State != protocol.LeaseReleased {
@@ -172,7 +173,7 @@ func TestRestartQueue(t *testing.T) {
 	down := time.Now()
 	f.e.waitFor("server down longer than poll_timeout", time.Minute, func() bool { return time.Since(down) > 5*time.Second })
 	f.s = f.s.restart()
-	r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "5s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "wait", "--wait", "5s")
 	if r.code != 75 || !strings.Contains(r.stderr, "lease "+id+" queued") {
 		t.Fatalf("the queued lease after the restart: %s", r)
 	}
@@ -188,7 +189,7 @@ func TestPollNetworkError(t *testing.T) {
 	f.e.newRepoNamed("waits", defaultRepoFiles())
 	id := f.queued()
 	var stderr syncBuffer
-	cmd := exec.Command(hostelBin, "acquire", "fakedevice", "--task", "wait", "--wait", "110s")
+	cmd := exec.Command(hostelBin, "acquire", "fake-screen", "--task", "wait", "--wait", "110s")
 	cmd.Env, cmd.Dir, cmd.Stderr = f.e.environ(), f.e.cwd, &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -203,7 +204,7 @@ func TestPollNetworkError(t *testing.T) {
 	// While the server is down, a short acquire still ends at its --wait:
 	// failed polls count too.
 	start := time.Now()
-	if r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "3s"); r.code != 75 || time.Since(start) > 20*time.Second {
+	if r := f.e.hostel("acquire", "fake-screen", "--task", "wait", "--wait", "3s"); r.code != 75 || time.Since(start) > 20*time.Second {
 		t.Fatalf("acquire --wait 3s while the server is down: %s after %s", r, time.Since(start))
 	}
 	f.s = f.s.restart()
