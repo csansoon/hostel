@@ -52,8 +52,8 @@ func (m *model) onFrame() tea.Cmd {
 	return m.frame()
 }
 
-// moving reports a glow, or a state that turns (a lease that gets ready or
-// waits, a room that starts).
+// moving reports a car, a glow, or a state whose glyph turns on the current
+// page (a lease that waits or gets ready, a room that starts).
 func (m *model) moving() bool {
 	if len(m.street.cars) > 0 {
 		return true
@@ -63,20 +63,42 @@ func (m *model) moving() bool {
 			return true
 		}
 	}
-	// Turning glyphs show only on these pages.
-	switch m.top().(type) {
-	case *mainMenu, *lobby, *platformPage, *rooms, *roomAdmin, *machinePage:
-	default:
-		return false
-	}
 	if m.help {
 		return false
 	}
-	if slices.ContainsFunc(m.st.Leases, func(l protocol.LeaseStatus) bool { return l.State != protocol.LeaseReady }) {
-		return true
+	// Each page checks only the states whose glyphs turn on it.
+	switch p := m.top().(type) {
+	case *mainMenu:
+		return m.queued("") || m.starting("")
+	case *lobby:
+		return m.queued("")
+	case *platformPage:
+		pl, _ := p.platform(m)
+		return m.queued(p.name) || slices.ContainsFunc(pl.Machines, m.starting)
+	case *rooms, *roomAdmin:
+		return m.starting("")
+	case *machinePage:
+		var leases []protocol.LeaseStatus
+		for _, r := range machineRooms(m.st, p.machineKey) {
+			leases = append(leases, roomLeases(m.st, r.ID)...)
+		}
+		return m.starting(p.machineKey) || slices.ContainsFunc(leases, func(l protocol.LeaseStatus) bool { return l.State != protocol.LeaseReady })
 	}
+	return false
+}
+
+// queued reports a queued lease for platform ("" for any).
+func (m *model) queued(platform string) bool {
+	return slices.ContainsFunc(m.st.Leases, func(l protocol.LeaseStatus) bool {
+		return l.State == protocol.LeaseQueued && (platform == "" || l.Platform == platform)
+	})
+}
+
+// starting reports a room that starts on the machine key ("" for any): the
+// machine is Getting ready.
+func (m *model) starting(key string) bool {
 	return slices.ContainsFunc(m.st.Rooms, func(r protocol.RoomStatus) bool {
-		return r.State == protocol.RoomProvisioning || r.State == protocol.RoomCreating
+		return (r.State == protocol.RoomProvisioning || r.State == protocol.RoomCreating) && (key == "" || r.Provider+"/"+r.Machine == key)
 	})
 }
 
