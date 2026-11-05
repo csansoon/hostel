@@ -286,6 +286,16 @@ func TestAppLobby(t *testing.T) {
 	// lease.
 	mv := f.e.startAppSized(80, f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+ana)...)
 	mv.waitFor(30*time.Second, `Lobby\s+\S 2 waiting`)
+	// The waiting glyph turns again after a page without motion (Front desk
+	// stops the frames): it changes within a few frames, long before the next
+	// status answer.
+	mv.in("1")
+	mv.waitFor(10*time.Second, `▌ \S+\s+Guests`)
+	time.Sleep(500 * time.Millisecond) // the frames stop on Front desk
+	mv.in("\x1b")
+	mv.waitFor(10*time.Second, `Lobby\s+\S 2 waiting`)
+	glyph := regexp.MustCompile(`Lobby\s+(\S) 2 waiting`).FindStringSubmatch(mv.screen())[1]
+	mv.waitFor(5*time.Second, `Lobby\s+[^`+glyph+`\s] 2 waiting`)
 	mv.in("2")
 	mv.waitFor(10*time.Second, `▌ fakedevice\s+◉ all occupied`, `\S 2 waiting · next room ~`)
 	mv.in("\r")

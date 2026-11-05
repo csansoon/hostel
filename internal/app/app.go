@@ -240,7 +240,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case tea.KeyMsg:
-		return m, m.handleKey(msg)
+		// A key can open a page with turning glyphs, or close the help: the
+		// frames start again (frame does nothing while they run).
+		cmd := m.handleKey(msg)
+		return m, tea.Batch(cmd, m.frame())
 	case frameMsg:
 		return m, m.onFrame()
 	case carMsg:
