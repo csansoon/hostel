@@ -144,6 +144,8 @@ max_rooms = 2
 	f.e.vars["HOSTEL_TOKEN"] = f.e.newUser("ana", "member")
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
 	queued := f.queued()
+	// A new lease shows "-" until the next scheduler pass gives it a place.
+	f.e.waitFor("the place in the queue", 30*time.Second, func() bool { return f.lease(queued).Position > 0 })
 	for _, cmd := range []string{"status", "ls", "rooms"} {
 		match(f.e.mustHostel(cmd, "--plain"),
 			`(?m)^\S+ · 1 room \(1 in use\) · 1 waiting · you: ana \(member\)$`,
