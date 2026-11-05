@@ -29,17 +29,19 @@ const (
 	streetWidth  = 37
 	hostelWins   = 10
 	neighbourWin = 8
-	// carSpeed is in cells per second; carGap is the time between two
-	// cars (from carGap to 2×carGap).
-	carSpeed = 11.0
-	carGap   = 4 * time.Second
+	// carSpeed is in cells per second. The time before each car is random,
+	// up to carMaxGap: a car is a rare, strange thing (owner decision,
+	// 2026-11-05).
+	carSpeed  = 20.0
+	carMaxGap = 6 * time.Minute
 )
 
 var (
 	colLight  = lipgloss.Color("229") // a lit window, the lamp
 	colSoft   = lipgloss.Color("186") // a lit window of a neighbour
 	colWindow = lipgloss.Color("237") // a dark window
-	carShapes = []string{"▗▅▅▖", "▄▆▄"}
+	// carShapes face right; the second shape of each pair faces left.
+	carShapes = [][2]string{{"▗▟██▙▖", "▗▟██▙▖"}, {"▂▄▆▆▄▄▂", "▂▄▄▆▆▄▂"}, {"▗▆▆▖", "▗▆▆▖"}, {"▐███▙▖", "▗▟███▌"}}
 	carColors = []lipgloss.Color{"174", "109", "250", "180"}
 )
 
@@ -71,7 +73,7 @@ type street struct {
 type carMsg struct{}
 
 func nextCar() tea.Cmd {
-	d := carGap + time.Duration(rand.Int64N(int64(carGap)))
+	d := time.Duration(rand.Int64N(int64(carMaxGap)))
 	return tea.Tick(d, func(time.Time) tea.Msg { return carMsg{} })
 }
 
@@ -81,11 +83,12 @@ func (m *model) onCar() tea.Cmd {
 	if animOff() {
 		return nil
 	}
-	if _, ok := m.top().(*mainMenu); ok && len(m.street.cars) < 2 {
-		c := car{shape: carShapes[rand.IntN(len(carShapes))], color: carColors[rand.IntN(len(carColors))], start: time.Now(), dir: 1}
+	if _, ok := m.top().(*mainMenu); ok && len(m.street.cars) == 0 {
+		shape := carShapes[rand.IntN(len(carShapes))]
+		c := car{shape: shape[0] + "∙", color: carColors[rand.IntN(len(carColors))], start: time.Now(), dir: 1}
 		c.from = -float64(len([]rune(c.shape)))
 		if rand.IntN(2) == 0 {
-			c.from, c.dir = streetWidth, -1
+			c.shape, c.from, c.dir = "∙"+shape[1], streetWidth, -1
 		}
 		m.street.cars = append(m.street.cars, c)
 		if len(m.street.lit) > 0 && rand.IntN(3) == 0 {
@@ -249,7 +252,11 @@ func (s *street) road(now time.Time) string {
 		x := c.x(now)
 		for i, r := range []rune(c.shape) {
 			if p := x + i; p >= 0 && p < streetWidth {
-				cells[p] = fg(c.color).Render(string(r))
+				col := c.color
+				if r == '∙' {
+					col = colLight // the headlight
+				}
+				cells[p] = fg(col).Render(string(r))
 			}
 		}
 	}
