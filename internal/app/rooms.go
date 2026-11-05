@@ -60,14 +60,17 @@ func (p *rooms) title() string { return "Rooms" }
 
 func (p *rooms) body(m *model) string {
 	if len(m.st.Machines) == 0 {
-		return "\n" + note("The server has no machines yet. An admin adds one in Front desk.")
+		return "\n" + note("The server has no machines yet. An admin adds one in Front desk › Rooms.")
 	}
-	now := time.Now()
-	w := contentWidth(m)
 	p.selected(m)
+	return "\n" + machineList(m, contentWidth(m), p.sel)
+}
+
+// machineList is the machines, grouped by provider, with sel selected.
+func machineList(m *model, w int, sel string) string {
+	now := time.Now()
 	names, groups := providerGroups(m.st, now)
 	var b strings.Builder
-	b.WriteString("\n")
 	for gi, n := range names {
 		title := clean(n)
 		if groups[n][0].Kind != "static" {
@@ -82,7 +85,7 @@ func (p *rooms) body(m *model) string {
 				sub += " · " + fg(colYellow).Render("out of date")
 			}
 			right := s.dot() + " " + m.word("m:"+ms.Key, s)
-			b.WriteString(item(w, ms.Key == p.sel, clean(name), sub, right, mutedStyle.Render(ansi.Truncate(clean(s.detail), w/2, "…"))) + "\n\n")
+			b.WriteString(item(w, ms.Key == sel, clean(name), sub, right, mutedStyle.Render(ansi.Truncate(clean(s.detail), w/2, "…"))) + "\n\n")
 		}
 	}
 	return b.String()
@@ -364,12 +367,6 @@ func (p *machinePage) hint(m *model) string {
 	return h + "."
 }
 
-// static reports whether the page's machine is a static machine (one room).
-func (p *machinePage) static(m *model) bool {
-	ms, ok := p.machine(m)
-	return ok && ms.Kind == "static"
-}
-
 // repairable: repair is for a broken room of a static machine (a failed
 // health check, a changed host key); the server destroys a broken on-demand
 // room. An offline room comes back by itself; a running room needs no repair.
@@ -381,21 +378,6 @@ func (p *machinePage) canEnd(m *model, l protocol.LeaseStatus) bool {
 	return m.admin() || (m.st.User != "" && l.User == m.st.User)
 }
 
-// actionRoom is the room for drain and repair: the room of the selected lease,
-// else the first room of the machine.
-func (p *machinePage) actionRoom(m *model) (protocol.RoomStatus, bool) {
-	rms := machineRooms(m.st, p.machineKey)
-	if leases, i := p.leases(m); i >= 0 {
-		if j := slices.IndexFunc(rms, func(r protocol.RoomStatus) bool { return r.ID == leases[i].RoomID }); j >= 0 {
-			return rms[j], true
-		}
-	}
-	if len(rms) == 0 {
-		return protocol.RoomStatus{}, false
-	}
-	return rms[0], true
-}
-
 func (p *machinePage) keys(m *model) []binding {
 	leases, sel := p.leases(m)
 	var ks []binding
@@ -403,15 +385,7 @@ func (p *machinePage) keys(m *model) []binding {
 		ks = append(ks, binding{"↑↓", "move"})
 	}
 	if sel >= 0 && p.canEnd(m, leases[sel]) {
-		ks = append(ks, binding{"e", "end lease"})
-	}
-	// Drain and repair are for the room of a static machine: on-demand rooms
-	// come and go (admins limit them with max_rooms).
-	if r, ok := p.actionRoom(m); ok && m.admin() && p.static(m) {
-		ks = append(ks, binding{"d", map[bool]string{false: "no new leases", true: "allow new leases"}[r.Drained]})
-		if ms, _ := p.machine(m); repairable(ms, r) {
-			ks = append(ks, binding{"r", "repair"})
-		}
+		ks = append(ks, binding{"enter", "actions"})
 	}
 	return ks
 }
@@ -427,44 +401,138 @@ func (p *machinePage) key(m *model, k tea.KeyMsg) tea.Cmd {
 		if i >= 0 && i < len(leases)-1 {
 			p.sel = leases[i+1].ID
 		}
+	case "enter":
+		if i >= 0 && p.canEnd(m, leases[i]) {
+			l := leases[i]
+			m.menu(clean(l.User), fmt.Sprintf("%q", clean(l.Task)), []option{
+				{label: "End the lease", key: "e", run: func() tea.Cmd { return p.key(m, runeKey("e")) }},
+			})
+		}
 	case "e":
 		if i >= 0 && p.canEnd(m, leases[i]) {
 			l := leases[i]
-			m.ask(fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+			m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
 				p.loaded = time.Time{}
 				return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
 			})
 		}
-	case "d", "r":
-		r, ok := p.actionRoom(m)
-		if !ok || !m.admin() || !p.static(m) {
-			return nil
+	}
+	return nil
+}
+
+// roomAdmin is Front desk › Rooms (admins): Add a room first, then the
+// machines; Enter on a machine shows what an admin can do with it.
+type roomAdmin struct {
+	// sel is "" for Add a room, else the key of the selected machine.
+	sel string
+}
+
+func (p *roomAdmin) title() string { return "Rooms" }
+
+// order returns the items: "" (Add a room), then the machine keys in the
+// order of the screen, and the index of the selected one.
+func (p *roomAdmin) order(m *model) ([]string, int) {
+	keys := []string{""}
+	names, groups := providerGroups(m.st, time.Now())
+	for _, n := range names {
+		for _, ms := range groups[n] {
+			keys = append(keys, ms.Key)
 		}
-		id := strconv.FormatInt(r.ID, 10)
-		if k.String() == "r" {
-			if ms, _ := p.machine(m); !repairable(ms, r) {
-				return nil
+	}
+	i := slices.Index(keys, p.sel)
+	if i < 0 {
+		i, p.sel = 0, ""
+	}
+	return keys, i
+}
+
+func (p *roomAdmin) body(m *model) string {
+	w := contentWidth(m)
+	p.order(m)
+	var b strings.Builder
+	b.WriteString("\n" + iconItem(w, p.sel == "", "+", "Add a room", "Connect a new machine to this server", "", "") + "\n\n")
+	b.WriteString(machineList(m, w, p.sel))
+	return b.String()
+}
+
+func (p *roomAdmin) hint(m *model) string {
+	if p.sel == "" {
+		return "Add a room: connect a new machine to this server; it shows in Rooms."
+	}
+	i := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == p.sel })
+	if i < 0 {
+		return ""
+	}
+	s := machineState(m.st, m.st.Machines[i], time.Now())
+	return p.sel + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
+}
+
+func (p *roomAdmin) keys(m *model) []binding {
+	return []binding{{"↑↓", "move"}, {"enter", map[bool]string{true: "add", false: "actions"}[p.sel == ""]}}
+}
+
+func (p *roomAdmin) key(m *model, k tea.KeyMsg) tea.Cmd {
+	keys, i := p.order(m)
+	if k.String() != "enter" {
+		p.sel = keys[move(i, len(keys), k.String())]
+		return nil
+	}
+	if p.sel == "" {
+		return m.open(newAddMachine())
+	}
+	j := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == p.sel })
+	if j < 0 {
+		return nil
+	}
+	ms := m.st.Machines[j]
+	opts := []option{{label: "Show the room", sub: "Hardware, use, and guests", key: "o", run: func() tea.Cmd { return m.open(&machinePage{machineKey: ms.Key}) }}}
+	opts = append(opts, roomActions(m, ms)...)
+	m.menu(clean(ms.Key), machineState(m.st, ms, time.Now()).word, opts)
+	return nil
+}
+
+// roomActions are the admin actions on the room of a static machine: stop or
+// allow new leases, and repair. On-demand rooms come and go (admins limit
+// them with max_rooms).
+func roomActions(m *model, ms protocol.MachineStatus) []option {
+	rms := machineRooms(m.st, ms.Key)
+	if ms.Kind != "static" || len(rms) == 0 {
+		return nil
+	}
+	r := rms[0]
+	id := strconv.FormatInt(r.ID, 10)
+	var out []option
+	if r.Drained {
+		out = append(out, option{label: "Allow new leases", sub: "The machine takes new leases again", key: "d", run: func() tea.Cmd {
+			m.ask("Allow new leases", "Allow new leases on "+clean(r.Name)+" again?", func() tea.Cmd {
+				return m.do("POST", "/v1/rooms/"+id+"/undrain", nil, "New leases on "+clean(r.Name)+" are allowed again.")
+			})
+			return nil
+		}})
+	} else {
+		out = append(out, option{label: "Stop new leases", sub: "The current leases continue", key: "d", run: func() tea.Cmd {
+			m.ask("Stop new leases", "Stop new leases on "+clean(r.Name)+"? The current leases continue.", func() tea.Cmd {
+				return m.do("POST", "/v1/rooms/"+id+"/drain", nil, "No new leases on "+clean(r.Name)+".")
+			})
+			return nil
+		}})
+	}
+	if repairable(ms, r) {
+		repair := func(accept bool) func() tea.Cmd {
+			return func() tea.Cmd {
+				return m.do("POST", "/v1/rooms/"+id+"/repair", map[string]bool{"accept_host_key": accept}, "Repair of "+clean(r.Name)+" requested.")
 			}
-			repair := func(accept bool) func() tea.Cmd {
-				return func() tea.Cmd {
-					return m.do("POST", "/v1/rooms/"+id+"/repair", map[string]bool{"accept_host_key": accept}, "Repair of "+r.Name+" requested.")
-				}
-			}
+		}
+		out = append(out, option{label: "Repair", sub: "The server checks the room again", key: "r", run: func() tea.Cmd {
 			if r.Reason == "host key changed" {
 				// The new key must be accepted on purpose: it can also be
 				// another machine at the same address.
-				m.choose("The host key of "+r.Name+" changed. a accept the new key and repair · another key cancels",
-					map[string]func() tea.Cmd{"a": repair(true)})
+				m.warn("Accept the new key", "The host key of "+clean(r.Name)+" changed. It can also be another machine at the same address. Accept the new key and repair?", repair(true))
 				return nil
 			}
-			m.ask("Repair "+r.Name+"? The server checks the room again.", repair(false))
+			m.ask("Repair", "Repair "+clean(r.Name)+"? The server checks the room again.", repair(false))
 			return nil
-		}
-		verb, q, done := "drain", "Stop new leases on "+r.Name+"? The current leases continue.", "No new leases on "+r.Name+"."
-		if r.Drained {
-			verb, q, done = "undrain", "Allow new leases on "+r.Name+" again?", "New leases on "+r.Name+" are allowed again."
-		}
-		m.ask(q, func() tea.Cmd { return m.do("POST", "/v1/rooms/"+id+"/"+verb, nil, done) })
+		}})
 	}
-	return nil
+	return out
 }

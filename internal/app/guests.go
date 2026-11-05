@@ -13,8 +13,9 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// guestList is the people on the server; admins invite, change roles, and
-// remove; everyone can make a code for their other computer.
+// guestList is the people on the server. Its first items make invite codes:
+// Invite a guest (admins) and Add your other computer; then the people.
+// Admins change a role or remove someone (Enter, or the letters).
 type guestList struct {
 	sel   int
 	users []protocol.User
@@ -22,9 +23,6 @@ type guestList struct {
 	code, codeFor string
 	// err is the error of the last read of the users.
 	err string
-	// start is a question to ask when the page opens: "invite" (an admin
-	// invites someone) or "self" (a code for the caller's other computer).
-	start string
 }
 
 // usersRetryMsg reads the users again after an error.
@@ -43,16 +41,9 @@ type inviteMsg struct {
 	err  error
 }
 
-func (p *guestList) title() string { return "Guest list" }
+func (p *guestList) title() string { return "Guests" }
 
 func (p *guestList) load(m *model) tea.Cmd {
-	switch p.start {
-	case "invite":
-		p.askInvite(m)
-	case "self":
-		p.askSelf(m)
-	}
-	p.start = ""
 	c, gen := m.c, m.gen
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
@@ -76,7 +67,7 @@ func (p *guestList) other(m *model, msg tea.Msg) tea.Cmd {
 			return tea.Tick(retryAfter, func(time.Time) tea.Msg { return usersRetryMsg{gen: gen} })
 		}
 		p.users, p.err = msg.users, ""
-		p.sel = min(p.sel, max(len(p.users)-1, 0))
+		p.sel = min(p.sel, len(p.actions(m))+max(len(p.users)-1, 0))
 	case usersRetryMsg:
 		if msg.gen == m.gen {
 			return p.load(m)
@@ -85,31 +76,54 @@ func (p *guestList) other(m *model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// guestAction is an item before the people: it makes an invite code.
+type guestAction struct {
+	label, sub, hint string
+	run              func(m *model) tea.Cmd
+}
+
+func (p *guestList) actions(m *model) []guestAction {
+	var out []guestAction
+	if m.admin() {
+		out = append(out, guestAction{"Invite a guest", "A code for a new member or admin", "Invite a guest: make an invite code for a new member or admin.", p.askInvite})
+	}
+	return append(out, guestAction{"Add your other computer", "A code that connects it as you", "Add your other computer: make a code that connects it as you.", p.makeSelf})
+}
+
+// user returns the selected person, if the selection is on one.
+func (p *guestList) user(m *model) (protocol.User, bool) {
+	i := p.sel - len(p.actions(m))
+	if i < 0 || i >= len(p.users) {
+		return protocol.User{}, false
+	}
+	return p.users[i], true
+}
+
 func (p *guestList) body(m *model) string {
 	var b strings.Builder
-	if p.err != "" {
-		b.WriteString("\n" + line(errStyle.Render(clean("! Cannot read the guest list: "+p.err+" (trying again)"))))
-	}
-	if p.users == nil {
-		if p.err != "" {
-			return b.String()
-		}
-		return "\n" + note("Reading the guest list …")
-	}
 	w := contentWidth(m)
-	// The new code first: it is what the user waits for.
+	b.WriteString("\n")
+	for i, a := range p.actions(m) {
+		b.WriteString(iconItem(w, i == p.sel, "+", a.label, a.sub, "", "") + "\n\n")
+	}
+	// The new code, under the item that made it.
 	if p.code != "" {
-		b.WriteString("\n" + section("Invite code", w, false))
+		b.WriteString(section("Invite code", w, true))
 		b.WriteString(line(clean(p.codeFor)) + "\n")
 		for _, l := range strings.Split(wrap("hostel connect "+p.code, w-3), "\n") {
 			b.WriteString(line(accentStyle.Render(l)))
 		}
 		b.WriteString("\n" + note("Or paste the code in Hostel › Check in. It works once and ends in 24 hours."))
 		b.WriteString(note("Hostel prints it again when you quit, to copy it."))
-		b.WriteString(section("Guests", w, true))
-	} else {
-		b.WriteString("\n")
 	}
+	b.WriteString(section("People", w, true))
+	if p.err != "" {
+		b.WriteString(line(errStyle.Render(clean("! Cannot read the guest list: " + p.err + " (trying again)"))))
+	}
+	if p.users == nil && p.err == "" {
+		b.WriteString(note("Reading the guest list …"))
+	}
+	n := len(p.actions(m))
 	for i, u := range p.users {
 		role := mutedStyle.Render(clean(u.Role))
 		if u.Role == protocol.RoleAdmin {
@@ -120,40 +134,50 @@ func (p *guestList) body(m *model) string {
 			name += mutedStyle.Render("  (you)")
 		}
 		sub := plural(len(u.Computers), "computer") + " · since " + u.CreatedAt.Local().Format("2 Jan 2006")
-		b.WriteString(item(w, i == p.sel, name, sub, role, "") + "\n\n")
+		b.WriteString(item(w, n+i == p.sel, name, sub, role, "") + "\n\n")
 	}
 	return b.String()
 }
 
 func (p *guestList) hint(m *model) string {
-	if p.sel >= len(p.users) {
+	if p.sel < len(p.actions(m)) {
+		return p.actions(m)[p.sel].hint
+	}
+	u, ok := p.user(m)
+	if !ok {
 		return ""
 	}
-	u := p.users[p.sel]
 	computers := clean(strings.Join(u.Computers, ", "))
 	if computers == "" {
 		computers = "no computer"
 	}
-	return clean(u.Name) + " · " + u.Role + " since " + u.CreatedAt.Local().Format("2006-01-02") + " · " + computers
+	return clean(u.Name) + " · " + clean(u.Role) + " since " + u.CreatedAt.Local().Format("2006-01-02") + " · " + computers
 }
 
 func (p *guestList) keys(m *model) []binding {
 	ks := []binding{{"↑↓", "move"}}
-	if m.admin() {
-		ks = append(ks, binding{"i", "invite"}, binding{"r", "role"}, binding{"x", "remove"})
+	if p.sel < len(p.actions(m)) {
+		return append(ks, binding{"enter", "make the code"})
 	}
-	return append(ks, binding{"c", "your other computer"})
+	if m.admin() {
+		ks = append(ks, binding{"enter", "actions"})
+	}
+	return ks
 }
 
-func (p *guestList) askSelf(m *model) {
-	m.ask("Make a code for your other computer?", p.invite(m, protocol.InviteRequest{Self: true}, "Run this on your other computer:"))
+func (p *guestList) makeSelf(m *model) tea.Cmd {
+	m.msg = "Working …"
+	return p.invite(m, protocol.InviteRequest{Self: true}, "Run this on your other computer:")()
 }
 
-func (p *guestList) askInvite(m *model) {
-	m.choose("Invite a guest as: m member · a admin · another key cancels", map[string]func() tea.Cmd{
-		"m": p.invite(m, protocol.InviteRequest{Role: protocol.RoleMember}, "Send this to the new member. They run it on their computer:"),
-		"a": p.invite(m, protocol.InviteRequest{Role: protocol.RoleAdmin}, "Send this to the new admin. They run it on their computer:"),
+func (p *guestList) askInvite(m *model) tea.Cmd {
+	m.menu("Invite a guest", "The new guest is a:", []option{
+		{label: "Member", sub: "Uses rooms; ends own leases", key: "m",
+			run: p.invite(m, protocol.InviteRequest{Role: protocol.RoleMember}, "Send this to the new member. They run it on their computer:")},
+		{label: "Admin", sub: "Also manages people and machines", key: "a",
+			run: p.invite(m, protocol.InviteRequest{Role: protocol.RoleAdmin}, "Send this to the new admin. They run it on their computer:")},
 	})
+	return nil
 }
 
 func (p *guestList) invite(m *model, req protocol.InviteRequest, who string) func() tea.Cmd {
@@ -172,18 +196,29 @@ func (p *guestList) invite(m *model, req protocol.InviteRequest, who string) fun
 func (p *guestList) key(m *model, k tea.KeyMsg) tea.Cmd {
 	switch k.String() {
 	case "c":
-		p.askSelf(m)
-		return nil
+		return p.makeSelf(m)
 	case "i":
 		if m.admin() {
-			p.askInvite(m)
+			return p.askInvite(m)
+		}
+		return nil
+	case "enter":
+		if acts := p.actions(m); p.sel < len(acts) {
+			return acts[p.sel].run(m)
+		}
+		if u, ok := p.user(m); ok && m.admin() {
+			m.menu(clean(u.Name), clean(u.Role), []option{
+				{label: map[bool]string{true: "Make a member", false: "Make an admin"}[u.Role == protocol.RoleAdmin], key: "r", run: func() tea.Cmd { return p.key(m, runeKey("r")) }},
+				{label: "Remove", key: "x", danger: true, run: func() tea.Cmd { return p.key(m, runeKey("x")) }},
+			})
 		}
 		return nil
 	}
-	if p.sel >= len(p.users) {
+	u, ok := p.user(m)
+	if !ok {
+		p.sel = move(p.sel, len(p.actions(m))+len(p.users), k.String())
 		return nil
 	}
-	u := p.users[p.sel]
 	path := "/v1/users/" + url.PathEscape(u.Name)
 	switch k.String() {
 	case "r":
@@ -192,18 +227,19 @@ func (p *guestList) key(m *model, k tea.KeyMsg) tea.Cmd {
 			if u.Role == protocol.RoleAdmin {
 				role = protocol.RoleMember
 			}
-			m.ask(fmt.Sprintf("Make %s %s?", clean(u.Name), map[string]string{protocol.RoleAdmin: "an admin", protocol.RoleMember: "a member"}[role]), func() tea.Cmd {
+			title := map[string]string{protocol.RoleAdmin: "Make an admin", protocol.RoleMember: "Make a member"}[role]
+			m.ask(title, fmt.Sprintf("Make %s %s?", clean(u.Name), map[string]string{protocol.RoleAdmin: "an admin", protocol.RoleMember: "a member"}[role]), func() tea.Cmd {
 				return m.do("PATCH", path, protocol.SetUserRequest{Role: role}, clean(u.Name)+" is now "+role+".")
 			})
 		}
 	case "x":
 		if m.admin() {
-			m.ask(fmt.Sprintf("Remove %s? Their computers are disconnected and their leases end.", clean(u.Name)), func() tea.Cmd {
+			m.warn("Remove", fmt.Sprintf("Remove %s? Their computers are disconnected and their leases end.", clean(u.Name)), func() tea.Cmd {
 				return m.do("DELETE", path, nil, "Removed "+clean(u.Name)+".")
 			})
 		}
 	default:
-		p.sel = move(p.sel, len(p.users), k.String())
+		p.sel = move(p.sel, len(p.actions(m))+len(p.users), k.String())
 	}
 	return nil
 }

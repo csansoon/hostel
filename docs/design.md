@@ -1369,7 +1369,19 @@ commands; `hostel status` prints plain text with the next commands at the end.
   share of lit windows follows the share of occupied machines (a fixed order
   for each server); the other buildings, a lamp, and a tree are decoration;
   rarely a car passes (a random time of up to 6 minutes before each car). The
-  live use shows as gauges. `1` `2` `3` jump to Lobby, Rooms, Front desk.
+  live use shows as gauges. The main menu is Front desk, Lobby, Rooms (and
+  Update when a release is newer); `1` `2` `3` jump to them. Selectable items
+  of the main menu, Front desk, and Check in have an emoji as icon; the title
+  starts at a fixed column after it (the escape code CHA), because terminals
+  do not agree on the width of some emojis. Front desk has Guests (Invite a
+  guest and Add your other computer first, then the people), Rooms for admins
+  (Add a room first, then the machines with their admin actions: stop or
+  allow new leases, repair; the main Rooms list only shows), This server
+  (address, version, Update the server), and Check out. Each choice and each
+  question before a change is a popup over the page, which turns gray: ↑↓ and
+  Enter choose, Esc cancels, and the letter of an option chooses it at once
+  (y and n in a question; Cancel is selected first; a change that cannot be
+  undone is red). Enter on a lease, a person, or a machine opens its actions.
   `hostel --demo` runs the app with made-up data and no server (`demo.go`);
   it does not read or change the guest configuration.
 

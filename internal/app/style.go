@@ -31,7 +31,6 @@ var (
 	dimStyle    = lipgloss.NewStyle().Foreground(colDim)
 	accentStyle = lipgloss.NewStyle().Foreground(colAccent)
 	errStyle    = lipgloss.NewStyle().Foreground(colRed)
-	promptStyle = lipgloss.NewStyle().Foreground(colYellow).Bold(true)
 	signStyle   = lipgloss.NewStyle().Background(colAccent).Foreground(colInk).Bold(true).Padding(0, 1)
 	keyStyle    = lipgloss.NewStyle().Background(colChip).Foreground(lipgloss.Color("252")).Padding(0, 1)
 )
@@ -164,6 +163,24 @@ func item(width int, sel bool, title, sub, right, rightSub string) string {
 	out := margin + bar + spread(ttl, right, width-3)
 	if sub != "" || rightSub != "" {
 		out += "\n" + margin + bar + spread(mutedStyle.Render(sub), rightSub, width-3)
+	}
+	return out
+}
+
+// iconItem is an item with an icon (an emoji) before its title. Terminals
+// do not agree on the width of some emojis, so the title starts at a fixed
+// column (the escape code CHA) after the icon, whatever its width.
+func iconItem(width int, sel bool, icon, title, sub, right, rightSub string) string {
+	bar, ttl := "   ", boldStyle.Render(title)
+	if sel {
+		bar, ttl = accentStyle.Render(" "+barMark+" "), accentStyle.Bold(true).Render(title)
+	}
+	col := len(margin) + 3 + 3 + 1 // the icon has 2 cells and a space
+	// The spaces clear the cells that the jump skips (the screen keeps old
+	// text there).
+	out := margin + bar + icon + "  " + fmt.Sprintf("\x1b[%dG", col) + spread(ttl, right, width-6)
+	if sub != "" || rightSub != "" {
+		out += "\n" + margin + bar + "   " + spread(mutedStyle.Render(sub), rightSub, width-6)
 	}
 	return out
 }

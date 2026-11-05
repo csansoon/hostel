@@ -75,7 +75,7 @@ func (p *lobby) body(m *model) string {
 	case !m.platformsRead:
 		return "\n  Reading the platforms …\n"
 	case len(m.platforms) == 0:
-		return "\n  No platform has a machine yet. An admin adds a machine in Front desk.\n"
+		return "\n  No platform has a machine yet. An admin adds a machine in Front desk › Rooms.\n"
 	}
 	stale := ""
 	if m.platformsErr != "" {
@@ -304,17 +304,37 @@ func (p *platformPage) keys(m *model) []binding {
 		return ks
 	}
 	q, sel := p.selected(m)
-	if sel >= 0 && p.canEnd(m, q[sel]) {
-		ks = append(ks, binding{"e", "end lease"})
-	}
-	if m.admin() && len(q) > 0 {
-		if len(q) > 1 {
-			ks = append(ks, binding{"⇧↑↓", "reorder"})
-		}
-		ks = append(ks, binding{"p", "priority"})
+	if sel >= 0 && len(p.actions(m, q, sel)) > 0 {
+		ks = append(ks, binding{"enter", "actions"})
 	}
 	return ks
 }
+
+// actions are what the user can do with the selected lease of the waiting
+// line; each one runs the key of its letter.
+func (p *platformPage) actions(m *model, q []protocol.LeaseStatus, i int) []option {
+	l := q[i]
+	act := func(label, key string) option {
+		return option{label: label, key: key, run: func() tea.Cmd { return p.key(m, runeKey(key)) }}
+	}
+	var out []option
+	if p.canEnd(m, l) {
+		out = append(out, act("End the lease", "e"))
+	}
+	if m.admin() {
+		if i > 0 {
+			out = append(out, act("Move up", "K"))
+		}
+		if i < len(q)-1 {
+			out = append(out, act("Move down", "J"))
+		}
+		out = append(out, act("Change the priority", "p"))
+	}
+	return out
+}
+
+// runeKey is the key message of a letter.
+func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
 func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if k.String() == "tab" || k.String() == "shift+tab" {
@@ -344,6 +364,10 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	}
 	l := q[i]
 	switch k.String() {
+	case "enter":
+		if acts := p.actions(m, q, i); len(acts) > 0 {
+			m.menu(clean(l.User), fmt.Sprintf("%q · %s priority", clean(l.Task), l.Priority), acts)
+		}
 	case "up", "k":
 		if i > 0 {
 			p.sel = q[i-1].ID
@@ -357,14 +381,14 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 		}
 	case "e":
 		if p.canEnd(m, l) {
-			m.ask(fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+			m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
 				return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
 			})
 		}
 	case "shift+up", "K":
 		if m.admin() && i > 0 {
 			before := q[i-1]
-			m.ask(fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
+			m.ask("Move up", fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
 				return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: before.ID}, "Moved.")
 			})
 			p.cancelOnChange(m, q)
@@ -383,7 +407,7 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 					return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: after.ID}, "Moved.")
 				}
 			}
-			m.ask(fmt.Sprintf("Move %s (%q) down, after %s?", clean(l.User), clean(l.Task), clean(next.User)), move)
+			m.ask("Move down", fmt.Sprintf("Move %s (%q) down, after %s?", clean(l.User), clean(l.Task), clean(next.User)), move)
 			p.cancelOnChange(m, q)
 		}
 	case "p":
@@ -393,8 +417,11 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 					return m.do("POST", "/v1/leases/"+l.ID+"/priority", protocol.PriorityRequest{Priority: prio}, "Priority of "+clean(l.User)+": "+prio+".")
 				}
 			}
-			m.choose(fmt.Sprintf("Priority of %s (%q), now %s: h high · n normal · l low · another key cancels", clean(l.User), clean(l.Task), l.Priority),
-				map[string]func() tea.Cmd{"h": set("high"), "n": set("normal"), "l": set("low")})
+			m.menu("Priority", fmt.Sprintf("Priority of %s (%q), now %s.", clean(l.User), clean(l.Task), l.Priority), []option{
+				{label: "High", sub: "Before the normal and low leases", key: "h", run: set("high")},
+				{label: "Normal", sub: "The default", key: "n", run: set("normal")},
+				{label: "Low", sub: "After the high and normal leases", key: "l", run: set("low")},
+			})
 		}
 	}
 	return nil
@@ -411,5 +438,5 @@ func (p *platformPage) cancelOnChange(m *model, q []protocol.LeaseStatus) {
 		return out
 	}
 	want, name := ids(q), p.name
-	m.confirm.stale = func() bool { return !slices.Equal(want, ids(queued(m.st, name))) }
+	m.pop.stale = func() bool { return !slices.Equal(want, ids(queued(m.st, name))) }
 }

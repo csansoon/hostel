@@ -53,8 +53,8 @@ func (p *checkIn) body(m *model) string {
 	switch p.step {
 	case 0:
 		b.WriteString(head("Welcome", "This computer is not connected to a Hostel server.", ""))
-		b.WriteString(item(w, p.sel == 0, "⚿  Check in", "   Connect with an invite code", "", "") + "\n\n")
-		b.WriteString(item(w, p.sel == 1, "⏻  Leave", "   Quit the app", "", "") + "\n")
+		b.WriteString(iconItem(w, p.sel == 0, "🔑", "Check in", "Connect with an invite code", "", "") + "\n\n")
+		b.WriteString(iconItem(w, p.sel == 1, "👋", "Leave", "Quit the app", "", "") + "\n")
 	case 1:
 		b.WriteString(head("Check in", "Connect this computer to a Hostel server", ""))
 		b.WriteString(section("Step 1 of 2", w, false))
@@ -78,7 +78,7 @@ func (p *checkIn) hint(m *model) string {
 	switch p.step {
 	case 0:
 		if p.sel == 0 {
-			return "Check in: connect this computer with an invite code. An admin makes one in Front desk › Guest list."
+			return "Check in: connect this computer with an invite code. An admin makes one in Front desk › Guests."
 		}
 		return "Leave: quit the app."
 	case 1:

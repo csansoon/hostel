@@ -467,8 +467,8 @@ func TestMachineUpdate(t *testing.T) {
 
 	// The app shows the machine as out of date, with the command.
 	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
-	a.waitFor(30*time.Second, `▌ ⌂  Lobby`)
-	a.in("2")
+	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`)
+	a.in("3")
 	a.waitFor(10*time.Second, `box3\s[^\n]*\n[^\n]*out of date`)
 	for i := 0; i < 10 && !regexp.MustCompile(`▌ box3\s`).MatchString(a.screen()); i++ {
 		a.in("\x1b[B")
@@ -518,27 +518,24 @@ func TestAppUpdate(t *testing.T) {
 	e.bin = copyBin(t, hostBin(t, "v1.0.0"), filepath.Join(e.home, "bin"))
 
 	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
-	a.waitFor(30*time.Second, `▌ ⌂  Lobby`, `⇪  Update\s+v1\.1\.0 available`)
+	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`, `Update\s+v1\.1\.0 available`)
 	a.in("\x1b[B\x1b[B\x1b[B")
-	a.waitFor(10*time.Second, `▌ ⇪  Update`, `Update: install Hostel v1\.1\.0 on this computer \(it has v1\.0\.0\)`)
+	a.waitFor(10*time.Second, `▌ \S+\s+Update`, `Update: install Hostel v1\.1\.0 on this computer \(it has v1\.0\.0\)`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `Install Hostel v1\.1\.0 on this computer\? \[y/N\]`)
+	a.waitFor(10*time.Second, `Install Hostel v1\.1\.0 on this computer\?`)
 	a.in("y")
 	a.waitFor(time.Minute, `Hostel v1\.1\.0 is installed\. Quit \(q\) and run hostel again\.`)
-	a.waitGone(10*time.Second, `⇪  Update`)
+	a.waitGone(10*time.Second, `Install v1\.1\.0 on this computer`)
 	if v := binVersion(t, e.bin); v != "hostel v1.1.0" {
 		t.Fatalf("the app's binary after Update: %q", v)
 	}
 
-	a.in("3")
-	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `⇪  Update the server`)
-	for i := 0; i < 10 && !strings.Contains(a.screen(), "▌ ⇪  Update the server"); i++ {
-		a.in("\x1b[B")
-		time.Sleep(100 * time.Millisecond)
-	}
-	a.waitFor(10*time.Second, `Update the server: install Hostel v1\.1\.0 on the server \(it runs v1\.0\.0\)`)
+	a.in("1")
+	a.waitFor(10*time.Second, `This server\s+v1\.1\.0 available`)
+	a.in("\x1b[B\x1b[B\r")
+	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `▌ \S+\s+Update the server`, `Update the server: install Hostel v1\.1\.0 on the server \(it runs v1\.0\.0\)`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `Update the server from v1\.0\.0 to v1\.1\.0\? \[y/N\]`)
+	a.waitFor(10*time.Second, `Update the server from v1\.0\.0 to v1\.1\.0\?`)
 	a.in("y")
 	a.waitFor(time.Minute, `The server updates from v1\.0\.0 to v1\.1\.0`)
 	a.waitFor(2*time.Minute, `Version\s+v1\.1\.0`)
