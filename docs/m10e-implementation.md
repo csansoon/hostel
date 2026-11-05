@@ -289,9 +289,15 @@ stay. Changes:
 ## 8. No migration
 
 There is no compatibility with the old configuration, the old `hostel.toml`,
-or the platform revisions (owner decision: nobody depends on them). The server
-of the M10e release refuses a stored configuration with the old keys and says
-what to change; the admin writes the new one (`hostel config` from a client).
+or the platform revisions (owner decision: nobody depends on them). A server of
+the M10e release whose stored configuration has the old keys starts with an
+empty configuration (no providers, no machines) and logs a warning;
+`hostel status` and the app show it, and the admin writes the new
+configuration from a client (`hostel config edit`). So the update never makes
+the server unreachable. Machine tools are names without a colon (the colon
+starts an option); mise backend names such as `npm:x` stay in the repository's
+mise files. `install.sh --server` no longer copies the tools (phase 5): the
+server uses the tools in its binary.
 The stored platform revisions are dropped; the default tools come with the
 binary. Leases that are open at the update end with the reason "the server was
 updated to tools; acquire again". The minimum guest version goes up to the M10e
