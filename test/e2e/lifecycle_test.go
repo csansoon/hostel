@@ -92,4 +92,3 @@ func TestOwnership(t *testing.T) {
 	}
 	f.e.vars["HOSTEL_TOKEN"] = owner
 }
-
