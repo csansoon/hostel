@@ -2,12 +2,13 @@ package app
 
 import (
 	"fmt"
+	"hash/fnv"
+	"math/rand/v2"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
@@ -68,71 +69,158 @@ func (p *mainMenu) body(m *model) string {
 	}
 	w := contentWidth(m)
 	var b strings.Builder
-	b.WriteString("\n" + building(m) + "\n\n")
+	// The building needs about 15 lines; a short screen shows the entries
+	// only.
+	if m.height == 0 || m.height >= 34 {
+		b.WriteString("\n" + building(m) + "\n\n")
+	}
 	for i, e := range menuEntries(m) {
 		b.WriteString(item(w, i == p.sel, e.icon+"  "+e.label, "   "+e.sub, e.count(m), "") + "\n\n")
 	}
 	return b.String()
 }
 
-// building draws the hostel: one window for each machine, in the color of
-// its state (▣ occupied, ▢ vacant, ◐ getting ready, ✕ broken, · offline),
-// with the server and the user beside it.
+// The building has a fixed set of windows (owner decision, 2026-11-05): the
+// share of lit windows follows the share of occupied machines, so it works
+// for one machine and for fifty. Which windows light is a fixed order for
+// each server, so that a change lights or darkens one window at a time.
+const (
+	floorWindows = 7
+	upperFloors  = 2
+	// windowCount: the upper floors, and three windows on each side of the
+	// door.
+	windowCount = floorWindows*upperFloors + 6
+)
+
+// windowState is what a window shows.
+type windowState int
+
+const (
+	windowDark   windowState = iota // a vacant machine
+	windowLit                       // an occupied machine
+	windowReady                     // a machine that gets ready (it flickers)
+	windowClosed                    // an offline or broken machine
+)
+
+// windows returns the state of each window for the machines' states.
+func windows(serverID string, words []string) []windowState {
+	out := make([]windowState, windowCount)
+	if len(words) == 0 {
+		return out
+	}
+	n := map[windowState]int{}
+	for _, w := range words {
+		switch w {
+		case "Occupied":
+			n[windowLit]++
+		case "Getting ready":
+			n[windowReady]++
+		case "Vacant":
+		default:
+			n[windowClosed]++
+		}
+	}
+	// share is the number of windows for count machines: at least one when
+	// count > 0, and all of them when every machine has that state.
+	share := func(count int) int {
+		if count == 0 {
+			return 0
+		}
+		return max(1, (count*windowCount+len(words)/2)/len(words))
+	}
+	h := fnv.New64a()
+	h.Write([]byte(serverID))
+	order := rand.New(rand.NewPCG(h.Sum64(), 1)).Perm(windowCount)
+	// Lit and flickering windows from the start of the order, closed ones
+	// from the end: a change of one kind does not move the others.
+	i := 0
+	for _, k := range []windowState{windowLit, windowReady} {
+		for c := share(n[k]); c > 0 && i < windowCount; c-- {
+			out[order[i]] = k
+			i++
+		}
+	}
+	for c, j := share(n[windowClosed]), windowCount-1; c > 0 && j >= i; c, j = c-1, j-1 {
+		out[order[j]] = windowClosed
+	}
+	return out
+}
+
+func (w windowState) draw() string {
+	switch w {
+	case windowLit:
+		return fg(colBlue).Render("██")
+	case windowReady:
+		return fg(colYellow).Render(spin("██", "▓▓", "▒▒", "▓▓"))
+	case windowClosed:
+		return dimStyle.Render("▒▒")
+	}
+	return fg(colChip).Render("██")
+}
+
+// building draws the hostel with its windows, and the server and the user
+// beside it.
 func building(m *model) string {
-	const inner, perFloor = 25, 5
 	now := time.Now()
-	var wins []string
+	var words []string
 	count := map[string]int{}
 	for _, ms := range m.st.Machines {
-		s := machineState(m.st, ms, now)
-		count[s.word]++
-		w := fg(s.color).Render("▢")
-		switch s.word {
-		case "Occupied":
-			w = fg(colBlue).Render("▣")
-		case "Getting ready":
-			w = s.dot()
-		case "Broken":
-			w = fg(colRed).Render("✕")
-		case "Offline", "Not connected", "Not ready":
-			w = dimStyle.Render("·")
+		w := machineState(m.st, ms, now).word
+		words = append(words, w)
+		switch w {
+		case "Occupied", "Vacant", "Getting ready":
+			count[w]++
+		default:
+			count["Offline"]++
 		}
-		if m.glowing("m:" + ms.Key) {
-			w = lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(ansi.Strip(w))
-		}
-		wins = append(wins, w)
 	}
-	wall := dimStyle.Render("│")
+	ws := windows(m.st.ServerID, words)
+	win := func(i int) string { return ws[i].draw() }
+	line := dimStyle.Render
+	wall := line("│")
+	sign := accentStyle.Render
+
+	const inner = floorWindows*4 + 2 // "  ██" for each window, and 2 spaces
 	art := []string{
-		dimStyle.Render("╭" + strings.Repeat("─", inner) + "╮"),
-		wall + signStyle.Width(inner).Align(lipgloss.Center).Render("H O S T E L") + wall,
-		dimStyle.Render("├" + strings.Repeat("─", inner) + "┤"),
+		sign("╭" + strings.Repeat("─", inner+4) + "╮"),
+		sign("│") + signStyle.Width(inner+4).Align(lipgloss.Center).Render("H  O  S  T  E  L") + sign("│"),
+		sign("╰─┬" + strings.Repeat("─", inner) + "┬─╯"),
 	}
-	for i := 0; i < max(len(wins), 1); i += perFloor {
-		floor := ""
-		for j := i; j < i+perFloor; j++ {
-			c := " "
-			if j < len(wins) {
-				c = wins[j]
-			}
-			floor += "  " + c + "  "
+	k := 0
+	for f := 0; f < upperFloors; f++ {
+		fl := ""
+		for j := 0; j < floorWindows; j++ {
+			fl += "  " + win(k)
+			k++
 		}
-		art = append(art, wall+floor+wall)
+		art = append(art, "  "+wall+fl+"  "+wall, "  "+wall+strings.Repeat(" ", inner)+wall)
 	}
-	half := (inner - 5) / 2
+	side := func() string {
+		s := ""
+		for j := 0; j < 3; j++ {
+			s += "  " + win(k)
+			k++
+		}
+		return s
+	}
+	left := side()
+	right := side()
 	art = append(art,
-		wall+strings.Repeat(" ", half)+dimStyle.Render("╭───╮")+strings.Repeat(" ", inner-half-5)+wall,
-		dimStyle.Render("┴"+strings.Repeat("─", half)+"┴───┴"+strings.Repeat("─", inner-half-5)+"┴"))
+		"  "+wall+left+line(" ╭──╮")+right[1:]+"  "+wall,
+		"  "+wall+strings.Repeat(" ", 12)+line(" │  │ ")+strings.Repeat(" ", 12)+wall,
+		line("▁▁┷"+strings.Repeat("━", 13)+"┷━━┷"+strings.Repeat("━", 13)+"┷▁▁"))
 
 	role := clean(m.st.Role)
 	if m.admin() {
 		role = fg(colBlue).Render(role)
 	}
 	var legend []string
-	for _, k := range []struct{ word, glyph string }{{"Occupied", "▣"}, {"Vacant", "▢"}, {"Getting ready", "◐"}, {"Broken", "✕"}, {"Offline", "·"}} {
+	for _, k := range []struct {
+		word string
+		w    windowState
+	}{{"Occupied", windowLit}, {"Vacant", windowDark}, {"Getting ready", windowReady}, {"Offline", windowClosed}} {
 		if n := count[k.word]; n > 0 {
-			c := map[string]lipgloss.Color{"Occupied": colBlue, "Vacant": colGreen, "Getting ready": colYellow, "Broken": colRed, "Offline": colDim}[k.word]
-			legend = append(legend, fg(c).Render(k.glyph)+" "+mutedStyle.Render(fmt.Sprintf("%d %s", n, strings.ToLower(k.word))))
+			legend = append(legend, k.w.draw()+" "+mutedStyle.Render(fmt.Sprintf("%d %s", n, strings.ToLower(k.word))))
 		}
 	}
 	info := []string{
@@ -141,14 +229,14 @@ func building(m *model) string {
 		"",
 		mutedStyle.Render("You are ") + clean(m.st.User) + mutedStyle.Render(" · ") + role,
 		"",
-		strings.Join(legend, "   "),
 	}
-	top := (len(art) - len(info)) / 2
+	info = append(info, legend...)
+	top := max((len(art)-len(info))/2, 0)
 	var b strings.Builder
 	for i, l := range art {
 		b.WriteString(margin + " " + l)
 		if j := i - top; j >= 0 && j < len(info) {
-			b.WriteString("    " + info[j])
+			b.WriteString(strings.Repeat(" ", inner+12-lipgloss.Width(l)) + info[j])
 		}
 		b.WriteString("\n")
 	}

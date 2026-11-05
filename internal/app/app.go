@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -210,20 +209,17 @@ func (m *model) top() page { return m.pages[len(m.pages)-1] }
 func (m *model) open(p page) tea.Cmd {
 	m.pages = append(m.pages, p)
 	m.msg = ""
-	slide := m.startSlide(1)
 	if l, ok := p.(loader); ok {
-		return tea.Batch(l.load(m), slide)
-	}
-	return slide
-}
-
-func (m *model) back() tea.Cmd {
-	m.msg = ""
-	if len(m.pages) > 1 {
-		m.pages = m.pages[:len(m.pages)-1]
-		return m.startSlide(-1)
+		return l.load(m)
 	}
 	return nil
+}
+
+func (m *model) back() {
+	if len(m.pages) > 1 {
+		m.pages = m.pages[:len(m.pages)-1]
+	}
+	m.msg = ""
 }
 
 // Messages from the commands. gen ties an answer to its connection.
@@ -466,7 +462,8 @@ func (m *model) handleKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	case "esc", "backspace", "left":
 		if len(m.pages) > 1 {
-			return m.back()
+			m.back()
+			return nil
 		}
 	case "1", "2", "3":
 		// Jump to a section of the main menu from any page.
@@ -593,15 +590,7 @@ func (m *model) View() string {
 		foot = append(foot, errStyle.Render("! "+clean(m.err)+" (trying again)"))
 	}
 	foot = append(foot, keyLine(m.footerKeys()))
-	footText := strings.Join(foot, "\n")
-	nf := strings.Count(footText, "\n") + 1
-	screen := strings.Split(fitScreen(body, footText, w, m.height-2), "\n")
-	lines, footLines := screen[:len(screen)-nf], screen[len(screen)-nf:]
-	m.anim.last = slices.Clone(lines)
-	if m.anim.slide != nil {
-		lines = m.slid(lines, w)
-	}
-	return head + strings.Join(append(lines, footLines...), "\n")
+	return head + fitScreen(body, strings.Join(foot, "\n"), w, m.height-2)
 }
 
 // footerKeys are the page's keys and the keys of the app.
