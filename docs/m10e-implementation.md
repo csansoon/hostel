@@ -170,7 +170,7 @@ A tool definition is a folder, as a platform folder is today:
 tools/
   android-sdk/      tool.toml  install.linux.sh  install.macos.sh  check.linux.sh  check.macos.sh  GUIDE.md
   android-emulator/ tool.toml  install.*.sh  start.*.sh  stop.*.sh  screenshot.*.sh  GUIDE.md
-  windows-desktop/  tool.toml  start.windows.ps1  stop.windows.ps1  screenshot.windows.ps1  GUIDE.md
+  windows-desktop/  tool.toml  start.windows.ps1  screenshot.windows.ps1  GUIDE.md
 ```
 
 `tool.toml`:
@@ -370,3 +370,31 @@ later milestone:
   of the machine limit it, as today; the admin sets the slots.
 - **The owner's own server** needs a new configuration at the update (section
   8).
+
+## 13. State after phase 2
+
+Phase 2 built the tool definitions, the configuration, the checks, the tool
+revisions, the inventory table (`room_tools`), and `hostel config tools`. Rooms
+install and check the defined tools of their machine and write the inventory.
+Until phases 3 to 6, these parts keep a temporary form:
+
+- **A lease names one tool or an OS.** `leases.platform` and `devices` (and the
+  API fields `platform`, `devices`) hold one defined tool and its options, or an
+  OS for no tool (`server/schedule.go` `leaseRequest`, `server/leaseworker.go`
+  `leaseTool`, `startTool`). `required_labels` gets HTTP 422.
+  `GET /v1/platforms` lists each defined tool and each OS (kinds `tool`,
+  `screen`, `os`). Phase 4: `tools` in the lease, `GET /v1/tools`.
+- **Scheduler.** `Request.Platform` and `PlatformOS`; one queue for each
+  "platform" in `Order` and in `store.MoveLease`; no option filter against the
+  inventory. Phase 4.
+- **Rooms.** Only the requested screen tool starts (not its needs); the helper
+  requests have `tool` and `options`, not `tools` and `started`; the `env` and
+  `path` of `tool.toml` do not reach scripts and leases yet; the cleanup check
+  does not update the inventory; the mise tool versions are not in the
+  inventory; tools that a machine no longer lists stay in `hostel/tools/`.
+  Phase 3.
+- **Guest and app.** `acquire <platform> --device`; `hostel.toml` `tools` give
+  only the default options; the agent guide (`guest/info.go`) is the old text;
+  the app's demo data uses the old names. Phases 5 and 6.
+- **E2E tests** still use the old platform names; phase 4 moves them to the
+  test tools `fake-sdk` and `fake-screen`.

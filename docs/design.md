@@ -204,7 +204,7 @@ There are two kinds of tool:
 
 | Kind | Examples | Definition |
 |---|---|---|
-| **mise tool** | `node:22`, `jdk:21`, `python:3.13`, `go:1.25` | None: any tool that mise can install. The server installs it with mise at room provisioning. The option is the version to install. |
+| **mise tool** | `node:22`, `jdk:21`, `python:3.13`, `go:1.25` | None: any tool that mise can install. The server installs it with mise at room provisioning. The option is the version to install; a machine entry must have it (`node` alone is an unknown tool, so a typing error such as `andriod-sdk` fails the check). A `needs` entry can name a mise tool without a version: the machine then gets the latest version, unless it lists one. `jdk` is the mise tool `java`. |
 | **Defined tool** | `android-sdk`, `android-emulator`, `xcode`, `ios-simulator`, `macos-desktop`, `windows-desktop` | A directory with `tool.toml`, scripts for each OS, and `GUIDE.md` (section 8). Hostel comes with these defaults; an admin can change them and add own tools. |
 
 The OS is a property of the machine, not a tool. Agents do not ask for an OS:
@@ -797,7 +797,7 @@ tools/
   macos-desktop/
     tool.toml   GUIDE.md   start.macos.sh   screenshot.macos.sh   stop.macos.sh
   windows-desktop/
-    tool.toml   GUIDE.md   start.windows.ps1   screenshot.windows.ps1   stop.windows.ps1
+    tool.toml   GUIDE.md   start.windows.ps1   screenshot.windows.ps1
 ```
 
 `tool.toml`:
@@ -871,10 +871,13 @@ Contract:
   running after the script ends.
 
 `hostel admin config check` (section 9) fails if a screen tool lacks `start` for
-an OS that it is available on, if a machine lists a tool that is neither a
-defined tool nor a mise tool, if a machine lists a tool that is not available on
-its OS (for example `windows-desktop` on Linux), if a `needs` entry is unknown or
-makes a loop, and on the old keys (`platforms`, `labels`, `requires`,
+an OS that it is available on, if a software tool has `start`, `screenshot`, or
+`stop` scripts, if a machine lists a tool that is neither a defined tool nor a
+mise tool with its version, if a machine lists a defined software tool with an
+option, or a screen tool with an option that the tool does not have, if a machine lists a tool that is not available on
+its OS (for example `windows-desktop` on Linux), if a `needs` entry is not a
+valid tool name or makes a loop (a need without a definition is a mise tool),
+and on the old keys (`platforms`, `labels`, `requires`,
 `devices`).
 
 **`GUIDE.md`.** A short text for agents: what the tool gives, its environment
@@ -913,7 +916,9 @@ guide shows only the guides of the tools that the server has.
 - **`macos-desktop`** (screen; macOS; `whole_machine = true`): section 9, "The
   Mac desktop".
 - **`windows-desktop`** (screen; Windows; `whole_machine = true`): section 9,
-  "The Windows desktop".
+  "The Windows desktop". Its `start` fails when the desktop program does not
+  run (no `hostel/desktop.json`). It has no `stop`: the desktop program ends
+  the lease's commands at cleanup.
 
 ## 9. Configuration files
 
@@ -2110,7 +2115,8 @@ Privilege escalation to root on a room stays out of scope.
   still runs.
 - The test tools in `test/tools/`: `fake-sdk` (software; `check` prints a
   version) and `fake-screen` (a screen tool with `needs = ["fake-sdk"]` and the
-  options `option-a`, `option-b`; its scripts simulate a screen: they write
+  options `option-a`, `option-b`, `option-c`, `max_options = 2`; its scripts
+  simulate a screen: they write
   `tool.env` and a fake screenshot), with scripts for `linux` and for `macos`.
   `fake-screen` reads markers in the room cache: `slow-start`, `fail-start`,
   `slow-stop`, `fail-stop`. Tests create them with `docker exec` to drive
