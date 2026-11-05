@@ -373,7 +373,9 @@ tool is at most its `max_options`, and at least one configured machine is a
 candidate (online or offline). Else the request fails at once (R4, owner decision
 2026-11-05) with the reason, for example "no machine has xcode and android-sdk
 together; machines with xcode: home/macbook". When all candidates are offline,
-the lease waits, and the answer says so.
+the lease waits, and the answer says so. This check uses the inventory of a
+room only when the room matches the machine's current settings: a stale room
+installs again before its next lease, so an old version cannot admit a request.
 
 **Assignment.** For each queued lease, in order, select the first possible option.
 Inside each option, candidate machines are in configuration order (providers in file
@@ -1162,8 +1164,9 @@ env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
 - Tools on the command line replace `tools`.
 - A `[tool.<name>]` applies when the lease has that tool: the lease asked for
-  it, or a tool that the lease asked for needs it (owner decision, 2026-11-05;
-  `[tool.android-sdk]` applies to a lease for `android-emulator`). It does not
+  it, or a tool that the lease asked for needs it, also a mise tool (owner
+  decision, 2026-11-05; `[tool.android-sdk]` and `[tool.jdk]` apply to a lease
+  for `android-emulator`). It does not
   apply to every lease on a machine that has the tool. Each section applies
   once, in the order of needs (the server gives the list: `lease_tools`,
   section 11).

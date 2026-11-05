@@ -299,6 +299,39 @@ func TestToolOptions(t *testing.T) {
 	}
 }
 
+// TestToolStaleInventory (M10e): a room whose machine settings changed gives
+// no options to the check at the request: a version that only its old
+// inventory has fails at once, also while a lease holds the room and it cannot
+// install again.
+func TestToolStaleInventory(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.useTools("fake-sdk")
+	f := twoMachinesIn(t, e, `["jq:1.7.1"]`, `["fake-screen"]`, `{ X = "y" }`)
+	f.e.mustHostel("acquire", "jq:1.7", "--task", "holder")
+	if r := f.e.adminHostel("config", "rooms", "set", "a", "tools=jq:1.6"); r.code != 0 {
+		t.Fatalf("set the tools of the machine: %s", r)
+	}
+	f.e.newRepoNamed("old", defaultRepoFiles())
+	if r := f.e.hostel("acquire", "jq:1.7", "--task", "old version", "--wait", "5s"); r.code != 69 {
+		t.Fatalf("acquire of the old version: %s, want exit code 69", r)
+	}
+}
+
+// TestToolMiseNeed (M10e): the [tool.<name>] of hostel.toml also applies to a
+// mise tool that came only as a need of a requested tool.
+func TestToolMiseNeed(t *testing.T) {
+	t.Parallel()
+	files := defaultRepoFiles()
+	files["hostel.toml"] = fixtureRepoConfig + "\n[tool.jq]\nenv = { JQ_SECTION = \"on\" }\n"
+	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-needs-jq", "jq:1.7.1"}, files: files,
+		tools: map[string]map[string]string{"fake-needs-jq": {"tool.toml": "description = \"Needs jq\"\nneeds = [\"jq\"]\n"}}})
+	f.e.mustHostel("acquire", "fake-needs-jq", "--task", "need")
+	if r := f.e.mustHostel("run", "--", "echo $JQ_SECTION"); r.stdout != "on\n" {
+		t.Fatalf("the env of [tool.jq]: %q", r.stdout)
+	}
+}
+
 // twoMachinesIn is twoMachines in an environment that has tool changes.
 func twoMachinesIn(t *testing.T, e *env, toolsA, toolsB, envB string) *fixture {
 	t.Helper()

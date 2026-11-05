@@ -99,6 +99,16 @@ func (v *toolView) inventory(roomID int64, tool string) []string {
 	return nil
 }
 
+// current reports a room that the machine's current settings describe: its
+// inventory says what a new lease can get. A stale room installs again before
+// its next lease.
+func (v *toolView) current(r store.Room, m *config.Machine) bool {
+	if r.State == protocol.RoomDestroyed || r.State == protocol.RoomRetired || r.State == protocol.RoomDestroying {
+		return false
+	}
+	return r.ConfigSHA256 == "" || r.ConfigSHA256 == machineHash(v.lc, m)
+}
+
 // roomHaves is what a room gives: its inventory, else its machine's
 // configuration.
 func (v *toolView) roomHaves(m *config.Machine, roomID int64) map[string]scheduler.Have {
@@ -120,7 +130,7 @@ func (v *toolView) machineHaves(m *config.Machine) map[string]scheduler.Have {
 	for name, h := range out {
 		var reported []string
 		for _, r := range v.rooms {
-			if r.Provider+"/"+r.Machine != m.Key() || r.State == protocol.RoomDestroyed || r.State == protocol.RoomRetired {
+			if r.Provider+"/"+r.Machine != m.Key() || !v.current(r, m) {
 				continue
 			}
 			for _, o := range v.inventory(r.ID, name) {
@@ -200,17 +210,24 @@ func leaseClosure(cfg *config.Server, tools []string) []*config.Tool {
 	return out
 }
 
-// leaseToolNames returns the names of a lease's tools and their needs: the
-// defined tools in the order of needs, then the other tools.
+// leaseToolNames returns the names of a lease's tools and their needs, also
+// the needs that are mise tools, in the order of needs.
 func leaseToolNames(cfg *config.Server, tools []string) []string {
 	out := []string{}
-	for _, t := range leaseClosure(cfg, tools) {
-		out = append(out, t.Name)
+	var visit func(name string)
+	visit = func(name string) {
+		if slices.Contains(out, name) {
+			return
+		}
+		if t := cfg.Tools[name]; t != nil {
+			for _, n := range toolNamesOf(t.Needs) {
+				visit(n)
+			}
+		}
+		out = append(out, name)
 	}
 	for _, name := range toolNamesOf(tools) {
-		if !slices.Contains(out, name) {
-			out = append(out, name)
-		}
+		visit(name)
 	}
 	return out
 }
