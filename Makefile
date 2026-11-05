@@ -31,7 +31,7 @@ release: dist
 	cd dist/release && for f in *; do printf '%s  %s\n' "$$(shasum -a 256 $$f | cut -d' ' -f1)" "$$f"; done > ../SHA256SUMS && mv ../SHA256SUMS .
 	@# The release workflow signs SHA256SUMS (m10d-implementation.md); a local
 	@# release without the key has no signature.
-	if [ -n "$${HOSTEL_RELEASE_KEY:-}" ]; then $(GO) run ./tools/signrelease $(VERSION) dist/release/SHA256SUMS > dist/release/SHA256SUMS.sig; fi
+	if [ -n "$${HOSTEL_RELEASE_KEY:-}" ]; then $(GO) run ./cmd/signrelease $(VERSION) dist/release/SHA256SUMS > dist/release/SHA256SUMS.sig; fi
 
 mise:
 	./build/fetch-mise.sh $(MISE_VERSION) build/mise-checksums.txt dist

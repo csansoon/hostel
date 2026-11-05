@@ -101,7 +101,7 @@ Owner decisions: `requirements.md`, section 3, 2026-11-04.
 
 1. **Decisions and plan.** This file, `requirements.md`, `plan.md`.
 2. **Releases and `hostel update`.** `internal/update` (source, versions,
-   signature, replace), the signing tool (`tools/signrelease`), the release
+   signature, replace), the signing tool (`cmd/signrelease`), the release
    workflow and key, `hostel update`, the notice and the version check.
 3. **Server update.** `update.Server`, `hostel server update`, the API, the
    restart with `exec`.

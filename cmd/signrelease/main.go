@@ -1,6 +1,6 @@
 // Command signrelease signs the SHA256SUMS of a release (m10d-implementation.md):
 //
-//	HOSTEL_RELEASE_KEY=<base64 Ed25519 seed> go run ./tools/signrelease <tag> <SHA256SUMS> > SHA256SUMS.sig
+//	HOSTEL_RELEASE_KEY=<base64 Ed25519 seed> go run ./cmd/signrelease <tag> <SHA256SUMS> > SHA256SUMS.sig
 //
 // The release workflow runs it; the key is the repository secret
 // HOSTEL_RELEASE_KEY.
