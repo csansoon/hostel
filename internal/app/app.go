@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,6 +44,11 @@ func Run(version string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, s)
 	}
 	return err
+}
+
+// api is the server for the app: a client, or the demo world.
+type api interface {
+	Do(ctx context.Context, method, path string, in, out any) error
 }
 
 // page is one screen of the app. The model keeps a stack of pages; Esc goes
@@ -78,7 +84,9 @@ type model struct {
 	width, height int
 
 	guest *config.Guest
-	c     *client.Client
+	c     api
+	// demo: made-up data, no server (RunDemo); nothing changes this computer.
+	demo bool
 	// gen counts connections: answers for an older connection are dropped.
 	gen int
 
@@ -107,6 +115,7 @@ type model struct {
 	keep []string
 	// help shows all keys.
 	help bool
+	anim animState
 }
 
 // binding is a key and what it does, for the footer and the key list.
@@ -201,17 +210,20 @@ func (m *model) top() page { return m.pages[len(m.pages)-1] }
 func (m *model) open(p page) tea.Cmd {
 	m.pages = append(m.pages, p)
 	m.msg = ""
+	slide := m.startSlide(1)
 	if l, ok := p.(loader); ok {
-		return l.load(m)
+		return tea.Batch(l.load(m), slide)
 	}
-	return nil
+	return slide
 }
 
-func (m *model) back() {
+func (m *model) back() tea.Cmd {
+	m.msg = ""
 	if len(m.pages) > 1 {
 		m.pages = m.pages[:len(m.pages)-1]
+		return m.startSlide(-1)
 	}
-	m.msg = ""
+	return nil
 }
 
 // Messages from the commands. gen ties an answer to its connection.
@@ -251,6 +263,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m, m.handleKey(msg)
+	case frameMsg:
+		return m, m.onFrame()
 	case statusMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -271,7 +285,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if c := m.confirm; c != nil && c.stale != nil && c.stale() {
 			m.confirm, m.msg = nil, "The queue changed: the move is cancelled. Look again, and try again."
 		}
-		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readPlatforms()}
+		now := time.Now()
+		for _, ms := range msg.st.Machines {
+			m.note("m:"+ms.Key, machineState(msg.st, ms, now).word)
+		}
+		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readPlatforms(), m.frame()}
 		// The server info, until a read of it works.
 		if m.info.Version == "" || reconnected {
 			cmds = append(cmds, m.readInfo())
@@ -296,7 +314,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(retryAfter, func(time.Time) tea.Msg { return platformsRetryMsg{gen: gen} })
 		}
 		m.platforms, m.platformsRead = msg.p, true
-		return m, nil
+		for _, pl := range m.platforms {
+			m.note("p:"+pl.Name, fmt.Sprint(freeMachines(m, pl), pl.Queue))
+		}
+		return m, m.frame()
 	case platformsRetryMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -445,8 +466,7 @@ func (m *model) handleKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	case "esc", "backspace", "left":
 		if len(m.pages) > 1 {
-			m.back()
-			return nil
+			return m.back()
 		}
 	case "1", "2", "3":
 		// Jump to a section of the main menu from any page.
@@ -573,7 +593,15 @@ func (m *model) View() string {
 		foot = append(foot, errStyle.Render("! "+clean(m.err)+" (trying again)"))
 	}
 	foot = append(foot, keyLine(m.footerKeys()))
-	return head + fitScreen(body, strings.Join(foot, "\n"), w, m.height-2)
+	footText := strings.Join(foot, "\n")
+	nf := strings.Count(footText, "\n") + 1
+	screen := strings.Split(fitScreen(body, footText, w, m.height-2), "\n")
+	lines, footLines := screen[:len(screen)-nf], screen[len(screen)-nf:]
+	m.anim.last = slices.Clone(lines)
+	if m.anim.slide != nil {
+		lines = m.slid(lines, w)
+	}
+	return head + strings.Join(append(lines, footLines...), "\n")
 }
 
 // footerKeys are the page's keys and the keys of the app.

@@ -288,8 +288,7 @@ func (p *addMachine) key(m *model, k tea.KeyMsg) tea.Cmd {
 	switch k.Type {
 	case tea.KeyEsc:
 		if p.step == 0 {
-			m.back()
-			return nil
+			return m.back()
 		}
 		p.step, p.errMsg = p.step-1, ""
 		p.field.SetValue(map[int]string{0: p.req.Name, 1: strings.Join(p.req.Platforms, ", ")}[p.step])

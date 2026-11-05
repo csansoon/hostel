@@ -34,7 +34,7 @@ type (
 // checkLatest reads the latest release tag in the background (owner
 // decision, 2026-11-04). HOSTEL_NO_UPDATE_CHECK=1 turns it off.
 func (m *model) checkLatest() tea.Cmd {
-	if os.Getenv("HOSTEL_NO_UPDATE_CHECK") == "1" {
+	if m.demo || os.Getenv("HOSTEL_NO_UPDATE_CHECK") == "1" {
 		return nil
 	}
 	return func() tea.Msg {

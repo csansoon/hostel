@@ -183,7 +183,10 @@ func window(lines []string, room int) []string {
 	if len(lines) <= room {
 		return lines
 	}
-	sel := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(ansi.Strip(l), selMark) })
+	sel := slices.IndexFunc(lines, func(l string) bool {
+		l = ansi.Strip(l)
+		return strings.Contains(l, selMark) || strings.Contains(l, barMark)
+	})
 	start := 0
 	if sel >= 0 {
 		start = min(max(sel-room/2, 0), len(lines)-room)
@@ -199,8 +202,12 @@ func window(lines []string, room int) []string {
 	return out
 }
 
-// selMark marks the selected row; window() looks for it to scroll.
-const selMark = "❯ "
+// selMark marks the selected row of a table, barMark the selected list
+// item; window() looks for them to scroll.
+const (
+	selMark = "❯ "
+	barMark = "▌"
+)
 
 // clean replaces control characters (also newlines and tabs) with spaces:
 // names and tasks come from users and must not move the screen. It also
@@ -212,6 +219,8 @@ func clean(s string) string {
 			return ' '
 		case r == '❯':
 			return '>'
+		case r == '▌':
+			return '|'
 		}
 		return r
 	}, s)
@@ -226,4 +235,54 @@ func move(sel, n int, k string) int {
 		return min(sel+1, max(n-1, 0))
 	}
 	return sel
+}
+
+// margin is the left margin of the body.
+const margin = "  "
+
+// contentWidth is the width of the body between the margins.
+func contentWidth(m *model) int { return min(m.screenWidth()-2*len(margin), 80) }
+
+// spread puts left at the start and right at the end of width cells; a long
+// left part gives way to the right one.
+func spread(left, right string, width int) string {
+	if right == "" {
+		return ansi.Truncate(left, width, "…")
+	}
+	left = ansi.Truncate(left, max(width-lipgloss.Width(right)-2, 1), "…")
+	return left + strings.Repeat(" ", max(width-lipgloss.Width(left)-lipgloss.Width(right), 2)) + right
+}
+
+// item is a list item: a title line and a dim second line, each with a part
+// on the right. The selected item has an amber bar on the left.
+func item(width int, sel bool, title, sub, right, rightSub string) string {
+	bar, ttl := "   ", boldStyle.Render(title)
+	if sel {
+		bar, ttl = accentStyle.Render(" "+barMark+" "), accentStyle.Bold(true).Render(title)
+	}
+	out := margin + bar + spread(ttl, right, width-3)
+	if sub != "" || rightSub != "" {
+		out += "\n" + margin + bar + spread(mutedStyle.Render(sub), rightSub, width-3)
+	}
+	return out
+}
+
+// row is a one-line list item, with the bar when it is selected.
+func row(width int, sel bool, text string) string {
+	bar := "   "
+	if sel {
+		bar = accentStyle.Render(" " + barMark + " ")
+	}
+	return margin + bar + ansi.Truncate(text, width-3, "…")
+}
+
+// heading is the title of a section: small capitals and a thin line.
+func heading(title string, width int) string {
+	t := mutedStyle.Bold(true).Render(strings.ToUpper(title))
+	return margin + t + " " + dimStyle.Render(strings.Repeat("─", max(width-lipgloss.Width(t)-1, 0)))
+}
+
+// cell pads a styled text to width cells.
+func cell(s string, width int) string {
+	return s + strings.Repeat(" ", max(width-lipgloss.Width(s), 0))
 }

@@ -2,9 +2,12 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
@@ -18,21 +21,21 @@ func newMainMenu() *mainMenu { return &mainMenu{} }
 // description for the footer, and its page (nil for Update, which asks and
 // runs).
 type menuEntry struct {
-	icon, label, hint string
+	icon, label, sub, hint string
 	count             func(m *model) string
 	open              func() page
 }
 
 func menuEntries(m *model) []menuEntry {
 	entries := []menuEntry{
-		{"⌂", "Lobby", "Lobby: the platforms, what each can run, which machines are free, and who waits.",
+		{"⌂", "Lobby", "Platforms, and who waits for each one", "Lobby: the platforms, what each can run, which machines are free, and who waits.",
 			func(m *model) string {
 				if n := waiting(m.st); n > 0 {
-					return fg(colYellow).Render(fmt.Sprintf("%d waiting", n))
+					return fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + fmt.Sprintf(" %d waiting", n))
 				}
 				return mutedStyle.Render("nobody waiting")
 			}, func() page { return &lobby{} }},
-		{"▦", "Rooms", "Rooms: the machines where agents run, and who uses each one now.",
+		{"▦", "Rooms", "Machines, and who uses each one now", "Rooms: the machines where agents run, and who uses each one now.",
 			func(m *model) string {
 				vacant, used := 0, 0
 				for _, ms := range m.st.Machines {
@@ -43,14 +46,14 @@ func menuEntries(m *model) []menuEntry {
 						used++
 					}
 				}
-				return fg(colGreen).Render(fmt.Sprintf("%d vacant", vacant)) + mutedStyle.Render(" · ") +
-					fg(colBlue).Render(fmt.Sprintf("%d occupied", used))
+				return fg(colGreen).Render(fmt.Sprintf("● %d vacant", vacant)) + "   " +
+					fg(colBlue).Render(fmt.Sprintf("◉ %d occupied", used))
 			}, func() page { return &rooms{} }},
-		{"⚿", "Front desk", "Front desk: this server, the people on it, invites, new machines, and check out.",
+		{"⚿", "Front desk", "This server, people, invites, new machines", "Front desk: this server, the people on it, invites, new machines, and check out.",
 			func(m *model) string { return "" }, func() page { return newFrontDesk() }},
 	}
 	if tag := m.updateAvailable(); tag != "" {
-		entries = append(entries, menuEntry{"⇪", "Update",
+		entries = append(entries, menuEntry{"⇪", "Update", "Install " + tag + " on this computer",
 			fmt.Sprintf("Update: install Hostel %s on this computer (it has %s); then open hostel again.", tag, m.version),
 			func(m *model) string { return fg(colYellow).Render(tag + " available") }, nil})
 	}
@@ -63,11 +66,93 @@ func (p *mainMenu) body(m *model) string {
 	if !m.loaded && m.err == "" {
 		return "\n  Reading the status …\n"
 	}
-	var rows [][]string
+	w := contentWidth(m)
+	var b strings.Builder
+	b.WriteString("\n" + building(m) + "\n\n")
 	for i, e := range menuEntries(m) {
-		rows = append(rows, []string{fmt.Sprintf("%d  %s  %s", i+1, accentStyle.Render(e.icon), e.label), e.count(m)})
+		b.WriteString(item(w, i == p.sel, e.icon+"  "+e.label, "   "+e.sub, e.count(m), "") + "\n\n")
 	}
-	return "\n" + table(rows, p.sel, nil)
+	return b.String()
+}
+
+// building draws the hostel: one window for each machine, in the color of
+// its state (▣ occupied, ▢ vacant, ◐ getting ready, ✕ broken, · offline),
+// with the server and the user beside it.
+func building(m *model) string {
+	const inner, perFloor = 25, 5
+	now := time.Now()
+	var wins []string
+	count := map[string]int{}
+	for _, ms := range m.st.Machines {
+		s := machineState(m.st, ms, now)
+		count[s.word]++
+		w := fg(s.color).Render("▢")
+		switch s.word {
+		case "Occupied":
+			w = fg(colBlue).Render("▣")
+		case "Getting ready":
+			w = s.dot()
+		case "Broken":
+			w = fg(colRed).Render("✕")
+		case "Offline", "Not connected", "Not ready":
+			w = dimStyle.Render("·")
+		}
+		if m.glowing("m:" + ms.Key) {
+			w = lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(ansi.Strip(w))
+		}
+		wins = append(wins, w)
+	}
+	wall := dimStyle.Render("│")
+	art := []string{
+		dimStyle.Render("╭" + strings.Repeat("─", inner) + "╮"),
+		wall + signStyle.Width(inner).Align(lipgloss.Center).Render("H O S T E L") + wall,
+		dimStyle.Render("├" + strings.Repeat("─", inner) + "┤"),
+	}
+	for i := 0; i < max(len(wins), 1); i += perFloor {
+		floor := ""
+		for j := i; j < i+perFloor; j++ {
+			c := " "
+			if j < len(wins) {
+				c = wins[j]
+			}
+			floor += "  " + c + "  "
+		}
+		art = append(art, wall+floor+wall)
+	}
+	half := (inner - 5) / 2
+	art = append(art,
+		wall+strings.Repeat(" ", half)+dimStyle.Render("╭───╮")+strings.Repeat(" ", inner-half-5)+wall,
+		dimStyle.Render("┴"+strings.Repeat("─", half)+"┴───┴"+strings.Repeat("─", inner-half-5)+"┴"))
+
+	role := clean(m.st.Role)
+	if m.admin() {
+		role = fg(colBlue).Render(role)
+	}
+	var legend []string
+	for _, k := range []struct{ word, glyph string }{{"Occupied", "▣"}, {"Vacant", "▢"}, {"Getting ready", "◐"}, {"Broken", "✕"}, {"Offline", "·"}} {
+		if n := count[k.word]; n > 0 {
+			c := map[string]lipgloss.Color{"Occupied": colBlue, "Vacant": colGreen, "Getting ready": colYellow, "Broken": colRed, "Offline": colDim}[k.word]
+			legend = append(legend, fg(c).Render(k.glyph)+" "+mutedStyle.Render(fmt.Sprintf("%d %s", n, strings.ToLower(k.word))))
+		}
+	}
+	info := []string{
+		boldStyle.Render(clean(m.guest.URL())),
+		mutedStyle.Render("Hostel " + clean(m.info.Version)),
+		"",
+		mutedStyle.Render("You are ") + clean(m.st.User) + mutedStyle.Render(" · ") + role,
+		"",
+		strings.Join(legend, "   "),
+	}
+	top := (len(art) - len(info)) / 2
+	var b strings.Builder
+	for i, l := range art {
+		b.WriteString(margin + " " + l)
+		if j := i - top; j >= 0 && j < len(info) {
+			b.WriteString("    " + info[j])
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (p *mainMenu) hint(m *model) string {

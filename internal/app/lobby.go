@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
@@ -80,23 +81,45 @@ func (p *lobby) body(m *model) string {
 	if m.platformsErr != "" {
 		stale = "  " + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n"
 	}
-	var rows [][]string
-	for _, pl := range m.platforms {
-		free, total := freeMachines(m, pl), len(onlineMachines(m, pl))
-		vacant := fg(colGreen).Render(fmt.Sprintf("%d of %d vacant", free, total))
-		switch {
-		case total == 0:
-			vacant = mutedStyle.Render("no machine online")
-		case free == 0:
-			vacant = fg(colBlue).Render(fmt.Sprintf("0 of %d vacant", total))
-		}
-		line := mutedStyle.Render("nobody waiting")
-		if pl.Queue > 0 {
-			line = fg(colYellow).Render(fmt.Sprintf("%d waiting", pl.Queue)) + mutedStyle.Render(" · next room "+waitText(pl.EstimatedWaitSeconds))
-		}
-		rows = append(rows, []string{clean(pl.Name), vacant, line})
+	w := contentWidth(m)
+	var b strings.Builder
+	b.WriteString(stale + "\n")
+	for i, pl := range m.platforms {
+		total := len(onlineMachines(m, pl))
+		sub := clean(pl.Description) + " · " + plural(len(pl.Machines), "machine")
+		b.WriteString(item(w, i == p.sel, clean(pl.Name), sub, m.vacancy(pl), waitLine(pl, total)) + "\n\n")
 	}
-	return stale + "\n" + table(rows, p.sel, []string{"PLATFORM", "MACHINES", "WAITING LINE"})
+	return b.String()
+}
+
+// vacancy is a platform's free machines: ● 2 vacant, ◉ all occupied, or no
+// machine online; it glows when it changes.
+func (m *model) vacancy(pl protocol.Platform) string {
+	free, total := freeMachines(m, pl), len(onlineMachines(m, pl))
+	s := state{fmt.Sprintf("%d vacant", free), colGreen, ""}
+	glyph := "●"
+	switch {
+	case total == 0:
+		return mutedStyle.Render("○ no machine online")
+	case free == 0:
+		s, glyph = state{"all occupied", colBlue, ""}, "◉"
+	}
+	if m.glowing("p:" + pl.Name) {
+		return fg(s.color).Render(glyph) + " " + lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(s.word)
+	}
+	return fg(s.color).Render(glyph + " " + s.word)
+}
+
+// waitLine is a platform's waiting line in a few words.
+func waitLine(pl protocol.Platform, online int) string {
+	if pl.Queue == 0 {
+		return mutedStyle.Render("nobody waiting")
+	}
+	next := "next room " + waitText(pl.EstimatedWaitSeconds)
+	if online == 0 {
+		next = "no machine online"
+	}
+	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", pl.Queue)) + mutedStyle.Render(" · "+next)
 }
 
 func (p *lobby) hint(m *model) string {
@@ -111,7 +134,7 @@ func (p *lobby) keys(m *model) []binding { return []binding{{"↑↓", "move"}, 
 
 func (p *lobby) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if k.String() == "enter" && p.sel < len(m.platforms) {
-		return m.open(&platformPage{name: m.platforms[p.sel].Name})
+		return m.open(&platformPage{name: m.platforms[p.sel].Name, onMachines: true})
 	}
 	p.sel = move(p.sel, len(m.platforms), k.String())
 	return nil
@@ -158,77 +181,76 @@ func (p *platformPage) body(m *model) string {
 		return "\n  This platform is not on the server any more.\n"
 	}
 	now := time.Now()
-	w := m.screenWidth()
-	var about strings.Builder
-	if len(pl.Devices) > 0 {
-		about.WriteString(field("Devices", chips(pl.Devices, colBlue)+mutedStyle.Render(fmt.Sprintf("  up to %d", pl.MaxDevices))) + "\n")
-	}
-	typical := mutedStyle.Render("not known yet")
-	if pl.TypicalLeaseSeconds > 0 {
-		typical = boldStyle.Render(ago(time.Duration(pl.TypicalLeaseSeconds) * time.Second))
-	}
-	about.WriteString(field("Typical stay", typical) + "\n")
-	next := fg(colGreen).Render("now")
-	if pl.EstimatedWaitSeconds > 0 {
-		next = fg(colYellow).Render(waitText(pl.EstimatedWaitSeconds))
-	}
-	about.WriteString(field("Next room", next))
-
-	lw, rw, wide := side(w)
+	w := contentWidth(m)
 	machines := p.machines(m, pl)
-	var mrows [][]string
-	for _, ms := range machines {
-		s := machineState(m.st, ms, now)
-		mrows = append(mrows, []string{s.dot() + " " + clean(ms.Key), fg(s.color).Render(s.word)})
-	}
-	msel := -1
-	if p.onMachines {
-		_, msel = p.selectedMachine(m, pl)
-	}
-	free := freeMachines(m, pl)
-	vacantColor := colGreen
-	if free == 0 {
-		vacantColor = colBlue
-	}
-	mbody := table(mrows, msel, nil)
-	if len(mrows) == 0 {
-		mbody = mutedStyle.Render("No machine for " + clean(pl.Name) + " is online.")
-	}
-	mcard := card(boldStyle.Render("Machines")+" "+fg(vacantColor).Render(fmt.Sprintf("%d of %d vacant", free, len(machines))), mbody, lw, p.onMachines)
-
-	q, sel := p.selected(m)
-	var qbody string
+	q, qsel := p.selected(m)
 	if len(q) == 0 {
-		qbody = mutedStyle.Render("Nobody is waiting.")
-	} else {
-		var rows [][]string
-		for _, l := range q {
-			pos := "-"
-			if l.Position > 0 {
-				pos = fmt.Sprintf("%d", l.Position)
-			}
-			prio := mutedStyle.Render("○ " + l.Priority)
-			switch l.Priority {
-			case "high":
-				prio = fg(colRed).Render("● high")
-			case "normal":
-				prio = fg(colYellow).Render("● normal")
-			}
-			rows = append(rows, []string{accentStyle.Render(pos), clean(l.User), clean(l.Task), prio, ago(now.Sub(l.CreatedAt)), fg(colYellow).Render(waitText(l.EstimatedWaitSeconds))})
-		}
-		if p.onMachines {
-			sel = -1
-		}
-		qbody = table(rows, sel, []string{"#", "GUEST", "TASK", "PRIORITY", "WAITING", "ROOM IN"})
+		p.onMachines = true
 	}
-	qcard := card(boldStyle.Render("Waiting line")+" "+fg(colYellow).Render(fmt.Sprint(len(q))), qbody, rw, !p.onMachines)
-
-	head := boldStyle.Render(clean(pl.Name)) + mutedStyle.Render(" · "+clean(pl.Description))
-	stale := ""
+	var b strings.Builder
 	if m.platformsErr != "" {
-		stale = "  " + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n"
+		b.WriteString(margin + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n")
 	}
-	return stale + "\n" + card(head, about.String(), w, false) + "\n" + join(mcard, qcard, wide)
+
+	// The header: the name, what it is, and the state in one line.
+	b.WriteString("\n" + margin + "   " + accentStyle.Bold(true).Render(clean(pl.Name)) + "\n")
+	b.WriteString(margin + "   " + mutedStyle.Render(clean(pl.Description)) + "\n\n")
+	typical := "typical stay not known yet"
+	if pl.TypicalLeaseSeconds > 0 {
+		typical = "typical stay " + ago(time.Duration(pl.TypicalLeaseSeconds)*time.Second)
+	}
+	b.WriteString(margin + "   " + m.vacancy(pl) + "     " + waitLine(pl, len(machines)) + "     " + mutedStyle.Render(typical) + "\n\n\n")
+
+	// The machines: one line each.
+	b.WriteString(heading("Machines", w) + "\n\n")
+	if len(machines) == 0 {
+		b.WriteString(margin + "   " + mutedStyle.Render("No machine for "+clean(pl.Name)+" is online.") + "\n")
+	}
+	_, msel := p.selectedMachine(m, pl)
+	nameW := 0
+	for _, ms := range machines {
+		nameW = max(nameW, lipgloss.Width(clean(ms.Key)))
+	}
+	for i, ms := range machines {
+		s := machineState(m.st, ms, now)
+		word := m.word("m:"+ms.Key, s)
+		line := s.dot() + " " + cell(boldStyle.Render(clean(ms.Key)), nameW) + "   " + cell(word, len("No new leases")) + "   " + mutedStyle.Render(s.detail)
+		b.WriteString(row(w, p.onMachines && i == msel, line) + "\n")
+	}
+
+	// The waiting line: two lines each.
+	b.WriteString("\n\n" + heading("Waiting line", w) + "\n\n")
+	if len(q) == 0 {
+		b.WriteString(margin + "   " + mutedStyle.Render("Nobody is waiting.") + "\n\n")
+	}
+	for i, l := range q {
+		pos := "–"
+		if l.Position > 0 {
+			pos = fmt.Sprint(l.Position)
+		}
+		prio := l.Priority + " priority"
+		switch l.Priority {
+		case "high":
+			prio = fg(colRed).Render("▲ high priority")
+		case "low":
+			prio = mutedStyle.Render("▼ low priority")
+		}
+		title := pos + "  " + clean(l.User) + "  " + fmt.Sprintf("%q", clean(l.Task))
+		sub := "   " + prio + mutedStyle.Render(" · waiting "+ago(now.Sub(l.CreatedAt)))
+		right := fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + " room in " + waitText(l.EstimatedWaitSeconds))
+		b.WriteString(item(w, !p.onMachines && i == qsel, title, sub, right, "") + "\n\n")
+	}
+
+	// The devices.
+	if len(pl.Devices) > 0 {
+		b.WriteString("\n\n" + heading("Devices", w) + "\n\n")
+		var ds []string
+		for _, d := range pl.Devices {
+			ds = append(ds, fg(colBlue).Render(clean(d)))
+		}
+		b.WriteString(margin + "   " + strings.Join(ds, "    ") + "      " + mutedStyle.Render(fmt.Sprintf("up to %d at the same time", pl.MaxDevices)) + "\n")
+	}
+	return b.String()
 }
 
 // selectedMachine returns the machines of the card and the index of the
@@ -276,7 +298,7 @@ func (p *platformPage) canEnd(m *model, l protocol.LeaseStatus) bool {
 }
 
 func (p *platformPage) keys(m *model) []binding {
-	ks := []binding{{"↑↓", "move"}, {"tab", "next card"}}
+	ks := []binding{{"↑↓", "move"}, {"tab", "next section"}}
 	if p.onMachines {
 		return append(ks, binding{"enter", "open the machine"})
 	}
@@ -301,6 +323,11 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if p.onMachines {
 		pl, _ := p.platform(m)
 		ms, i := p.selectedMachine(m, pl)
+		// Down from the last machine goes on to the waiting line.
+		if q, _ := p.selected(m); (k.String() == "down" || k.String() == "j") && i == len(ms)-1 && len(q) > 0 {
+			p.onMachines, p.sel = false, q[0].ID
+			return nil
+		}
 		if i < 0 {
 			return nil
 		}
@@ -319,6 +346,9 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	case "up", "k":
 		if i > 0 {
 			p.sel = q[i-1].ID
+		} else if pl, _ := p.platform(m); len(p.machines(m, pl)) > 0 {
+			ms := p.machines(m, pl)
+			p.onMachines, p.machineSel = true, ms[len(ms)-1].Key
 		}
 	case "down", "j":
 		if i < len(q)-1 {

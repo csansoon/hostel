@@ -87,14 +87,16 @@ type state struct {
 	detail string
 }
 
-// dot is the state's icon in its color: ● vacant (green) or occupied
-// (blue), ◐ getting ready, ◌ no new leases, ✕ broken, ○ offline or not
+// dot is the state's icon in its color: ● vacant (green), ◉ occupied
+// (blue), ◐ getting ready (it turns), ◌ no new leases, ✕ broken, ○ offline or not
 // connected.
 func (s state) dot() string {
 	mark := "●"
 	switch s.word {
+	case "Occupied":
+		mark = "◉"
 	case "Getting ready":
-		mark = "◐"
+		mark = spin("◐", "◓", "◑", "◒")
 	case "No new leases":
 		mark = "◌"
 	case "Broken":
@@ -228,4 +230,13 @@ func ago(d time.Duration) string {
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
+// word is the state's word in its color; a state that just changed glows
+// (the word on its color) for a moment.
+func (m *model) word(key string, s state) string {
+	if m.glowing(key) {
+		return lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(s.word)
+	}
+	return fg(s.color).Render(s.word)
 }

@@ -77,6 +77,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printHelp(stderr)
 		return 2
 	}
+	if args[0] == "--demo" && len(args) == 1 {
+		// The app with made-up data, to try its screens without a server.
+		if err := app.RunDemo(version.Version, stdout); err != nil {
+			fmt.Fprintln(stderr, "hostel:", err)
+			return 1
+		}
+		return 0
+	}
 	switch args[0] {
 	case "--version":
 		fmt.Fprintln(stdout, "hostel", version.Version)

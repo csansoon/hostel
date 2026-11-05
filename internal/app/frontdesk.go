@@ -83,6 +83,10 @@ func (p *frontDesk) entries(m *model) []deskEntry {
 // checkOut asks, then disconnects this computer.
 func checkOut(m *model) tea.Cmd {
 	g := m.guest
+	if m.demo {
+		m.msg = "Demo: check out does nothing here."
+		return nil
+	}
 	m.ask(fmt.Sprintf("Check out from %s? Agents on this computer lose the connection too.", g.URL()), func() tea.Cmd {
 		return func() tea.Msg {
 			warning, err := connect.Disconnect(context.Background(), g)
