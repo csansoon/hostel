@@ -336,6 +336,14 @@ func (s *Store) SetRoomTool(ctx context.Context, rt RoomTool) error {
 	return err
 }
 
+// RemoveRoomTools deletes the inventory rows of a room whose tool is not in
+// keep (tools that its machine no longer lists).
+func (s *Store) RemoveRoomTools(ctx context.Context, roomID int64, keep []string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM room_tools WHERE room_id = ? AND tool NOT IN (SELECT value FROM json_each(?))`,
+		roomID, jsonText(nonNil(keep)))
+	return err
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {

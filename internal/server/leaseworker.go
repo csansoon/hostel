@@ -167,25 +167,20 @@ func (s *Server) openSlot(ctx context.Context, roomID int64, slot string) (*room
 	return &roomops.Room{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}, r, nil
 }
 
-func (s *Server) readyFor(ctx context.Context, r store.Room, m *config.Machine, tool string) (bool, error) {
+// readyFor reports whether a room has installed and checked each tool of a
+// lease and their needs.
+func (s *Server) readyFor(ctx context.Context, r store.Room, m *config.Machine, tools []string) (bool, error) {
 	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
 		return false, err
 	}
-	return roomReady(s.live.Load(), rts, r, m)[tool], nil
-}
-
-// leaseTool returns the defined tool that a lease asks for, or nil (a lease
-// for an OS). Until leases have a list of tools (M10e phase 4), a lease names
-// one tool.
-func (s *Server) leaseTool(l store.Lease) *config.Tool { return s.config().Tools[l.Platform] }
-
-// startTool returns the screen tool that starts for a lease, or nil.
-func (s *Server) startTool(l store.Lease) *config.Tool {
-	if t := s.leaseTool(l); t != nil && t.Screen {
-		return t
+	ready := roomReady(s.live.Load(), rts, r, m)
+	for _, name := range toolNamesOf(tools) {
+		if !ready[name] {
+			return false, nil
+		}
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Server) stepAssigned(ctx context.Context, l store.Lease) error {
@@ -199,7 +194,7 @@ func (s *Server) stepAssigned(ctx context.Context, l store.Lease) error {
 	}
 	next := protocol.LeaseProvisioning
 	if r.State == protocol.RoomRunning {
-		if ready, err := s.readyFor(ctx, r, m, l.Platform); err != nil {
+		if ready, err := s.readyFor(ctx, r, m, l.Tools); err != nil {
 			return err
 		} else if ready {
 			next = protocol.LeasePreparing
@@ -210,7 +205,7 @@ func (s *Server) stepAssigned(ctx context.Context, l store.Lease) error {
 }
 
 // stepProvisioning waits while the room is in creation or resume, then runs the
-// install scripts of the lease's tool and its needs if the room is not yet
+// install scripts of the lease's tools and their needs if the room is not yet
 // ready for them.
 func (s *Server) stepProvisioning(ctx context.Context, l store.Lease) error {
 	for {
@@ -246,13 +241,9 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 	lc := s.live.Load()
 	timeout := leaseStepTimeout
 	var closure []string
-	if t := lc.cfg.Tools[l.Platform]; t != nil {
-		closure = lc.cfg.ToolClosure(t.Name)
-		for _, n := range closure {
-			timeout += lc.cfg.Tools[n].ScriptTimeout(config.StepInstall) + lc.cfg.Tools[n].ScriptTimeout(config.StepCheck)
-		}
-	} else if !config.IsOSName(l.Platform) {
-		return fmt.Errorf("tool %s: not in the configuration", l.Platform)
+	for _, t := range leaseClosure(lc.cfg, l.Tools) {
+		closure = append(closure, t.Name)
+		timeout += t.ScriptTimeout(config.StepInstall) + t.ScriptTimeout(config.StepCheck)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -294,11 +285,13 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 }
 
 // stepPreparing checks the helper and scripts by hash, writes the lease data
-// on the room, and runs the start script of the lease's screen tool.
+// on the room, and runs the start script of each screen tool of the lease, in
+// the order of needs (design, section 8). It records each screen tool that
+// started, so that cleanup stops only those.
 func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
-	t := s.startTool(l)
+	lc := s.live.Load()
 	timeout := leaseStepTimeout
-	if t != nil {
+	for _, t := range leaseClosure(lc.cfg, l.Tools) {
 		timeout += t.ScriptTimeout(config.StepStart)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -315,29 +308,36 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err != nil {
 		return err
 	}
-	upload, err := s.roomUpload(s.live.Load(), room, m)
+	upload, err := s.roomUpload(lc, room, m)
 	if err != nil {
 		return err
 	}
 	if _, err := room.Sync(ctx, upload); err != nil {
 		return err
 	}
-	begin := protocol.BeginRequest{LeaseID: l.ID, Options: []string{}}
-	if lt := s.leaseTool(l); lt != nil {
-		begin.Exclusive = lt.WholeMachine
+	view, err := s.loadToolView(ctx)
+	if err != nil {
+		return err
 	}
-	if t != nil {
-		begin.Tool, begin.Options = t.Name, l.Devices
-	}
+	starts := planStarts(lc.cfg, l, view.roomHaves(m, r.ID))
+	begin := protocol.BeginRequest{LeaseID: l.ID, Tools: leaseToolEntries(l.Tools, starts), Started: starts,
+		Exclusive: leaseRequest(lc.cfg, l).Exclusive}
 	if err := room.Helper(ctx, []string{"begin", "--slot", l.SlotName}, begin, nil); err != nil {
 		return err
 	}
 	if err := s.store.SetBegan(ctx, l.ID, time.Now()); err != nil {
 		return err
 	}
-	if t != nil && t.Script(m.OS, config.StepStart) != "" {
+	// A repeated step (after a restart) keeps what started before: the
+	// start scripts are idempotent, and cleanup must stop those tools.
+	started := slices.Clone(l.Started)
+	for _, st := range starts {
+		t := lc.cfg.Tools[st.Name]
+		if t == nil || t.Script(m.OS, config.StepStart) == "" {
+			continue
+		}
 		timeout := t.ScriptTimeout(config.StepStart)
-		env := map[string]string{"HOSTEL_LEASE_ID": l.ID, "HOSTEL_TOOL_OPTIONS": strings.Join(l.Devices, ",")}
+		env := map[string]string{"HOSTEL_LEASE_ID": l.ID, "HOSTEL_TOOL_OPTIONS": strings.Join(st.Options, ",")}
 		resp, err := room.RunScript(ctx, t.Name, config.StepStart, l.SlotName,
 			protocol.RunScriptRequest{Env: env, TimeoutSeconds: int(timeout / time.Second)})
 		if err != nil {
@@ -350,6 +350,12 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 		}
 		if resp.ExitCode != 0 {
 			return fmt.Errorf("tool %s: start script exited with code %d", t.Name, resp.ExitCode)
+		}
+		st.Facts = resp.Facts
+		started = slices.DeleteFunc(started, func(o protocol.StartedTool) bool { return o.Name == st.Name })
+		started = append(started, st)
+		if err := s.store.SetStarted(ctx, l.ID, started); err != nil {
+			return err
 		}
 	}
 	now := time.Now()
@@ -443,13 +449,8 @@ func (s *Server) cleanupScriptsTimeout() time.Duration {
 // cleanupRequest is the input of the helper cleanup: from the database, so a
 // repeated cleanup does not need lease.json.
 func (s *Server) cleanupRequest(ctx context.Context, l store.Lease) protocol.CleanupRequest {
-	req := protocol.CleanupRequest{LeaseID: l.ID, Options: []string{}}
-	if lt := s.leaseTool(l); lt != nil {
-		req.Exclusive = lt.WholeMachine
-	}
-	if t := s.startTool(l); t != nil {
-		req.Tool, req.Options = t.Name, l.Devices
-	}
+	req := protocol.CleanupRequest{LeaseID: l.ID, Tools: leaseToolEntries(l.Tools, l.Started), Started: nonNilStarted(l.Started),
+		Exclusive: leaseRequest(s.config(), l).Exclusive}
 	if r, err := s.store.Room(ctx, l.RoomID); err == nil {
 		if m, err := s.machineOf(r); err == nil {
 			req.Ports = append(req.Ports, slotConfig(m, l.SlotName).Ports...)
@@ -477,6 +478,34 @@ func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
 	return s.runCleanup(ctx, room, l.RoomID, l.SlotName, s.cleanupRequest(ctx, l))
 }
 
+// recordChecks writes the results of the check scripts of a cleanup to the
+// room's inventory.
+func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protocol.ToolCheck) error {
+	r, err := s.store.Room(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	m, err := s.machineOf(r)
+	if err != nil {
+		return err
+	}
+	for _, c := range checks {
+		t := s.config().Tools[c.Tool]
+		if t == nil {
+			continue
+		}
+		row := store.RoomTool{RoomID: roomID, Tool: c.Tool, ScriptsSHA256: s.toolUploads()[c.Tool][m.OS].Hash, State: store.ToolReady,
+			Option: c.Option, Env: envNames(t), CheckedAt: time.Now()}
+		if c.Error != "" {
+			row.State, row.Option = store.ToolFailed, ""
+		}
+		if err := s.store.SetRoomTool(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // runCleanup sets the tools for check at the time of the cleanup: a stored
 // request (of a dirty slot) can be older than the room's last provision.
 func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int64, slot string, req protocol.CleanupRequest) error {
@@ -496,6 +525,9 @@ func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int6
 	}
 	var resp protocol.CleanupResponse
 	if err := room.Helper(ctx, []string{"cleanup", "--slot", slot}, req, &resp); err != nil {
+		return err
+	}
+	if err := s.recordChecks(ctx, roomID, resp.Checks); err != nil {
 		return err
 	}
 	var failed []string

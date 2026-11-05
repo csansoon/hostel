@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/csansoon/hostel/internal/config"
@@ -44,22 +45,9 @@ func toolUploads(cfg *config.Server) (map[string]map[string]roomops.Tool, error)
 	return out, nil
 }
 
-// leaseRequest is what a lease asks the scheduler for. Until leases have a
-// list of tools (M10e phase 4), a lease's platform names one defined tool, or
-// an OS for no tool. ok is false when the tool is not in the configuration.
-func (s *Server) leaseRequest(l store.Lease) (req scheduler.Request, ok bool) {
-	t := s.config().Tools[l.Platform]
-	osOnly := t == nil && config.IsOSName(l.Platform)
-	if t == nil && !osOnly {
-		return req, false
-	}
-	return scheduler.Request{Platform: l.Platform, PlatformOS: osOnly, PoolTunnels: poolTunnels(l.Tunnels),
-		Fresh: l.Fresh, Exclusive: t != nil && t.WholeMachine}, true
-}
-
 // roomReady returns what a room is ready for: each tool of its machine whose
 // defined tools (the tool and its needs) the room has installed and checked
-// with the current files, and the room's OS.
+// with the current files. A mise tool is ready on each provisioned room.
 func roomReady(lc *liveConfig, rts []store.RoomTool, r store.Room, m *config.Machine) map[string]bool {
 	have := map[string]bool{}
 	for _, rt := range rts {
@@ -67,7 +55,7 @@ func roomReady(lc *liveConfig, rts []store.RoomTool, r store.Room, m *config.Mac
 			have[rt.Tool] = true
 		}
 	}
-	ready := map[string]bool{m.OS: true}
+	ready := map[string]bool{}
 	for _, mt := range m.ToolList {
 		ok := true
 		for _, n := range lc.cfg.ToolClosure(mt.Name) {
@@ -78,24 +66,22 @@ func roomReady(lc *liveConfig, rts []store.RoomTool, r store.Room, m *config.Mac
 	return ready
 }
 
-func (s *Server) schedMachines() []scheduler.Machine {
-	var out []scheduler.Machine
-	lc := s.live.Load()
-	for _, m := range lc.cfg.Machines() {
-		pool := -1
-		for _, sl := range m.Slots {
-			if pool < 0 || len(sl.Ports) < pool {
-				pool = len(sl.Ports)
-			}
-		}
-		out = append(out, scheduler.Machine{
-			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), OS: m.OS, Tools: toolNames(m),
-			CanResume: lc.providers[m.Provider].Capabilities(m.Name).CanStop,
-			PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
-			MaxLease: m.MaxLease.D(), MaxLifetime: m.MaxLifetime.D(),
-		})
+// setWaiting keeps the waiting line of the last scheduler pass, for the
+// "waiting behind" of the lease answers.
+func (s *Server) setWaiting(ws []scheduler.Waiting) {
+	m := map[string]scheduler.Waiting{}
+	for _, w := range ws {
+		m[w.LeaseID] = w
 	}
-	return out
+	s.waitingMu.Lock()
+	s.waiting = m
+	s.waitingMu.Unlock()
+}
+
+func (s *Server) waitingOf(id string) scheduler.Waiting {
+	s.waitingMu.Lock()
+	defer s.waitingMu.Unlock()
+	return s.waiting[id]
 }
 
 func (s *Server) schedProviders() []scheduler.Provider {
@@ -126,38 +112,31 @@ func (s *Server) schedule(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	view, err := s.loadToolView(ctx)
+	if err != nil {
+		return err
+	}
+	lc, rooms := view.lc, view.rooms
 	var queued []scheduler.Lease
 	byID := map[string]store.Lease{}
 	for _, l := range leases {
 		if l.State != protocol.LeaseQueued {
 			continue
 		}
-		req, ok := s.leaseRequest(l)
-		if !ok {
-			continue // removed while the lease was queued; it waits for the tool
-		}
 		byID[l.ID] = l
 		queued = append(queued, scheduler.Lease{ID: l.ID, Priority: l.Priority, ManualPosition: l.ManualPosition, CreatedAt: l.CreatedAt,
-			Request: req})
+			Request: leaseRequest(lc.cfg, l)})
 	}
 	if len(queued) == 0 {
+		s.setWaiting(nil)
 		return nil
-	}
-	rooms, err := s.store.Rooms(ctx)
-	if err != nil {
-		return err
 	}
 	slots, err := s.store.Slots(ctx)
 	if err != nil {
 		return err
 	}
-	rts, err := s.store.RoomTools(ctx)
-	if err != nil {
-		return err
-	}
 	roomByID := map[int64]store.Room{}
 	var srooms []scheduler.Room
-	lc := s.live.Load()
 	for _, r := range rooms {
 		roomByID[r.ID] = r
 		m := lc.cfg.Machine(r.Provider + "/" + r.Machine)
@@ -168,7 +147,7 @@ func (s *Server) schedule(ctx context.Context) error {
 		// provisions again when it is free (refreshRooms).
 		stale := r.ConfigSHA256 != "" && r.ConfigSHA256 != machineHash(lc, m)
 		sr := scheduler.Room{ID: r.ID, Machine: m.Key(), State: r.State, Drained: r.Drained || stale, CreatedAt: r.CreatedAt,
-			Ready: roomReady(lc, rts, r, m)}
+			Tools: view.roomHaves(m, r.ID), Ready: roomReady(lc, view.rts, r, m)}
 		for _, sl := range slots {
 			if sl.RoomID == r.ID {
 				sr.Slots = append(sr.Slots, scheduler.Slot{Name: sl.Name, State: sl.State, PoolPorts: len(slotConfig(m, sl.Name).Ports)})
@@ -177,8 +156,10 @@ func (s *Server) schedule(ctx context.Context) error {
 		srooms = append(srooms, sr)
 	}
 	now := time.Now()
-	out := scheduler.Schedule(scheduler.Input{Now: now, Machines: s.schedMachines(),
-		Providers: s.schedProviders(), Rooms: srooms, Leases: queued, Full: s.full.current(s.config().LimitRetry.D())})
+	machines := view.schedMachines()
+	out := scheduler.Schedule(scheduler.Input{Now: now, Machines: machines,
+		Providers: s.schedProviders(), Rooms: srooms, Leases: queued, Full: s.full.current(lc.cfg.LimitRetry.D())})
+	s.setWaiting(out.Waiting)
 	for _, id := range out.Evict {
 		s.log.Info("evict an idle room to make space", "room_id", id)
 		if _, err := s.store.SetRoomState(ctx, id, []string{protocol.RoomRunning, protocol.RoomStopped}, protocol.RoomDestroying,
@@ -188,7 +169,7 @@ func (s *Server) schedule(ctx context.Context) error {
 	}
 	for _, a := range out.Assignments {
 		l := byID[a.LeaseID]
-		m := s.config().Machine(a.Machine)
+		m := lc.cfg.Machine(a.Machine)
 		// The ports come first: a lease whose tunnels cannot be placed fails
 		// before any room is resumed or created for it.
 		ports, err := tunnelPorts(l.Tunnels, slotConfig(m, a.Slots[0]).Ports)
@@ -242,24 +223,13 @@ func (s *Server) schedule(ctx context.Context) error {
 	for _, w := range out.Waiting {
 		reason := w.Reason
 		if reason == scheduler.ReasonNoSlot {
-			reason = s.brokenReason(byID[w.LeaseID], rooms, reason)
+			reason = brokenReason(scheduler.Candidates(machines, leaseRequest(lc.cfg, byID[w.LeaseID])), rooms, reason)
 		}
 		if err := s.store.SetQueue(ctx, w.LeaseID, w.Position, reason); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// toolNames returns the names of the machine's tools.
-func toolNames(m *config.Machine) []string {
-	var out []string
-	for _, t := range m.ToolList {
-		if !slices.Contains(out, t.Name) {
-			out = append(out, t.Name)
-		}
-	}
-	return out
 }
 
 func slotConfig(m *config.Machine, name string) config.Slot {
@@ -303,29 +273,31 @@ func tunnelPorts(tunnels []protocol.TunnelRequest, pool []int) (map[string]int, 
 }
 
 // brokenReason tells a waiting guest why: if every room of its candidate
-// machines is broken, the reason names the room's broken reason (R7).
-func (s *Server) brokenReason(l store.Lease, rooms []store.Room, fallback string) string {
-	req, ok := s.leaseRequest(l)
-	if !ok {
-		return fmt.Sprintf("the tool %s was removed from the server", l.Platform)
-	}
-	cands := scheduler.Candidates(s.schedMachines(), req)
+// machines is broken, the reason names the room's broken reason (R7); if all
+// of them are offline, it says that the lease waits for one of them.
+func brokenReason(cands []string, rooms []store.Room, fallback string) string {
 	reason := ""
+	var offline []string
 	for _, r := range rooms {
-		if !slices.Contains(cands, r.Provider+"/"+r.Machine) {
+		if !slices.Contains(cands, r.Provider+"/"+r.Machine) || r.State == protocol.RoomDestroyed || r.State == protocol.RoomRetired {
 			continue
 		}
 		if r.State != protocol.RoomBroken {
 			return fallback
 		}
-		if reason == "" {
+		if r.BrokenReason == reasonUnreachable {
+			offline = append(offline, r.Name)
+		} else if reason == "" {
 			reason = "room broken: " + r.BrokenReason
 		}
 	}
-	if reason == "" {
-		return fallback
+	switch {
+	case reason != "":
+		return reason
+	case len(offline) > 0:
+		return "every machine with these tools is offline (" + strings.Join(offline, ", ") + "); the lease waits until one is back"
 	}
-	return reason
+	return fallback
 }
 
 // fixedPortInUse returns a fixed room port of the lease that another active

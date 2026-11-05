@@ -271,6 +271,14 @@ func (r *Room) Sync(ctx context.Context, u Upload) (string, error) {
 			}
 		}
 	}
+	// A tool that the machine no longer lists leaves the room.
+	for name := range info.Hashes.Tools {
+		if _, ok := u.Tools[name]; !ok && config.ValidName(name) {
+			if err := r.uploadTool(ctx, name, Tool{Hash: hashes.Dir(nil)}); err != nil {
+				return "", err
+			}
+		}
+	}
 	for name, p := range u.Tools {
 		have := info.Hashes.Tools[name]
 		if have == p.Hash {

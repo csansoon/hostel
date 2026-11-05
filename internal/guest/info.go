@@ -2,8 +2,10 @@ package guest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -36,35 +38,145 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d min", int(d.Minutes()))
 }
 
-// Platforms is "hostel platforms" (R1).
-func Platforms(args []string, stdout, stderr io.Writer) int {
-	fs := cli.NewFlagSet("hostel platforms", stderr)
-	if _, err := cli.Parse(fs, args); err != nil {
+// Tools is "hostel tools [<tool>] [--json]" (R1).
+func Tools(args []string, stdout, stderr io.Writer) int {
+	fs := cli.NewFlagSet("hostel tools", stderr)
+	asJSON := fs.Bool("json", false, "print JSON")
+	pos, err := cli.Parse(fs, args)
+	if err != nil || len(pos) > 1 {
+		fmt.Fprintln(stderr, "hostel: usage: hostel tools [<tool>] [--json]")
 		return ExitUsage
 	}
 	api, err := apiClient()
 	if err != nil {
 		return fail(stderr, err)
 	}
-	var list []protocol.Platform
-	if err := api.Do(context.Background(), "GET", "/v1/platforms", nil, &list); err != nil {
+	var list protocol.Tools
+	if err := api.Do(context.Background(), "GET", "/v1/tools", nil, &list); err != nil {
 		return fail(stderr, err)
 	}
-	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PLATFORM\tKIND\tDEVICES\tFREE\tQUEUE\tEST. WAIT\tDESCRIPTION")
-	for _, p := range list {
-		devices := "-"
-		if len(p.Devices) > 0 {
-			devices = strings.Join(p.Devices, ", ")
+	if len(pos) == 1 {
+		i := slices.IndexFunc(list.Tools, func(t protocol.Tool) bool { return t.Name == pos[0] })
+		if i < 0 {
+			fmt.Fprintf(stderr, "hostel: no machine of this server has the tool %q; run \"hostel tools\" for the list\n", pos[0])
+			return ExitUnavailable
 		}
-		free := fmt.Sprint(p.FreeSlots)
-		wait := FormatWait(p.EstimatedWaitSeconds)
-		if p.FreeSlots == 0 && p.NewRoom {
+		if *asJSON {
+			return printJSON(stdout, stderr, list.Tools[i])
+		}
+		printTool(stdout, list.Tools[i])
+		return 0
+	}
+	if *asJSON {
+		return printJSON(stdout, stderr, list)
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "TOOL\tOPTIONS\tSCREEN\tMACHINES\tFREE\tWAITING\tEST. WAIT")
+	for _, t := range list.Tools {
+		screen := ""
+		if t.Screen {
+			screen = "yes"
+		}
+		var machines []string
+		for _, m := range t.Machines {
+			machines = append(machines, m.Key)
+		}
+		free := fmt.Sprint(t.FreeSlots)
+		wait := FormatWait(t.EstimatedWaitSeconds)
+		if t.FreeSlots == 0 && t.NewRoom {
 			free, wait = "-", "new room"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", p.Name, p.Kind, devices, free, p.Queue, wait, p.Description)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", t.Name, dash(strings.Join(t.Options, ", ")), screen,
+			strings.Join(machines, ", "), free, t.Waiting, wait)
 	}
 	tw.Flush()
+	fmt.Fprintln(stdout, list.Note)
+	return 0
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func printJSON(stdout, stderr io.Writer, v any) int {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return fail(stderr, err)
+	}
+	return 0
+}
+
+// printTool prints the details of one tool and its guide.
+func printTool(w io.Writer, t protocol.Tool) {
+	head := t.Name
+	if len(t.Options) > 0 {
+		head += " " + strings.Join(t.Options, ", ")
+	}
+	desc := t.Description
+	if t.Mise {
+		desc = "installed with mise"
+	}
+	fmt.Fprintf(w, "%s: %s\n", head, desc)
+	if t.Screen {
+		kind := "a screen: it starts for each lease that asks for it"
+		if t.WholeMachine {
+			kind += "; the lease takes the whole machine"
+		}
+		fmt.Fprintf(w, "  screen       %s\n", kind)
+	}
+	if len(t.Needs) > 0 {
+		fmt.Fprintf(w, "  needs        %s\n", strings.Join(t.Needs, ", "))
+	}
+	if len(t.Env) > 0 {
+		fmt.Fprintf(w, "  environment  %s\n", strings.Join(t.Env, ", "))
+	}
+	var machines []string
+	for _, m := range t.Machines {
+		desc := m.OS
+		if len(m.Options) > 0 {
+			desc = strings.Join(m.Options, ", ") + ", " + desc
+		}
+		if m.OnDemand {
+			desc += "; on demand"
+		}
+		if !m.Online {
+			desc += "; offline"
+		}
+		machines = append(machines, m.Key+" ("+desc+")")
+	}
+	fmt.Fprintf(w, "  machines     %s\n", strings.Join(machines, ", "))
+	fmt.Fprintf(w, "  free         %d slots, %d waiting, estimated wait %s\n", t.FreeSlots, t.Waiting, FormatWait(t.EstimatedWaitSeconds))
+	if g := strings.TrimSpace(t.Guide); g != "" {
+		fmt.Fprintf(w, "\n%s\n", g)
+	}
+}
+
+// Info is "hostel info": the lease facts again.
+func Info(args []string, stdout, stderr io.Writer) int {
+	fs := cli.NewFlagSet("hostel info", stderr)
+	if _, err := cli.Parse(fs, args); err != nil {
+		return ExitUsage
+	}
+	l, code := openLease(stderr)
+	if l == nil {
+		return code
+	}
+	var pl protocol.Lease
+	if err := l.api.Do(context.Background(), "GET", "/v1/leases/"+l.st.LeaseID, nil, &pl); err == nil && pl.Access != nil {
+		l.st.Access, l.st.Started, l.st.Machine = pl.Access, pl.Started, pl.Provider+"/"+pl.Machine
+		if err := l.st.Save(); err != nil {
+			return l.fail(stderr, err)
+		}
+	}
+	rc, err := l.repo.RepoConfig()
+	if err != nil {
+		return l.fail(stderr, err)
+	}
+	printFacts(l.st, rc, stdout)
 	return 0
 }
 

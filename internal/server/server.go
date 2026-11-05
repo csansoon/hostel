@@ -25,6 +25,7 @@ import (
 	"github.com/csansoon/hostel/internal/gateway"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/provider"
+	"github.com/csansoon/hostel/internal/scheduler"
 	"github.com/csansoon/hostel/internal/store"
 	"github.com/csansoon/hostel/internal/tlspin"
 	"github.com/csansoon/hostel/internal/update"
@@ -72,6 +73,9 @@ type Server struct {
 	runCtx context.Context
 	// connectLimit limits failed POST /v1/connect attempts.
 	connectLimit connectLimiter
+	// waiting is the waiting line of the last scheduler pass.
+	waitingMu sync.Mutex
+	waiting   map[string]scheduler.Waiting
 	// lastReconcile and lastPresence are used only by the loop goroutine.
 	lastReconcile, lastPresence time.Time
 }
@@ -149,6 +153,10 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, start.tools, start.toolsDir, nil)
 	if err != nil {
 		return err
+	}
+	lc.warning = start.warning
+	if lc.warning != "" {
+		log.Warn(lc.warning)
 	}
 	s.live.Store(lc)
 	s.runCtx = ctx
@@ -254,7 +262,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/info", s.authRoom(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /v1/rooms/{name...}", s.auth(s.handleRoomDetails))
-	mux.HandleFunc("GET /v1/platforms", s.auth(s.handlePlatforms))
+	mux.HandleFunc("GET /v1/tools", s.auth(s.handleTools))
 	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
 	mux.HandleFunc("GET /v1/leases/{id}", s.auth(s.handleGetLease))
 	mux.HandleFunc("POST /v1/leases/{id}/touch", s.auth(s.handleTouch))
@@ -298,8 +306,9 @@ func (s *Server) routes() http.Handler {
 }
 
 // minGuestVersion is the oldest guest that this server accepts. Raise it only
-// with a change that breaks the API (m10d-implementation.md).
-const minGuestVersion = "v0.1.0"
+// with a change that breaks the API (m10d-implementation.md). M10e (tools
+// replace platforms) is the release v0.3.0.
+const minGuestVersion = "v0.3.0"
 
 // versioned adds the server version to each answer, and refuses a guest that
 // is older than minGuestVersion. A request without a version (v0.1.0, curl)

@@ -25,7 +25,6 @@ import (
 // still queued.
 func Release(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel release", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) > 1 {
 		return ExitUsage
@@ -47,7 +46,7 @@ func Release(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	st, err := repo.SelectState(*platform)
+	st, err := repo.ActiveState()
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -71,11 +70,10 @@ func Release(args []string, stdout, stderr io.Writer) int {
 // Diff is "hostel diff": the room changes against the last sync.
 func Diff(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel diff", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -93,13 +91,12 @@ func Diff(args []string, stdout, stderr io.Writer) int {
 // Cp is "hostel cp <from> <to>". A ":" prefix marks a path in the work directory.
 func Cp(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel cp", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 2 || strings.HasPrefix(pos[0], ":") == strings.HasPrefix(pos[1], ":") {
 		fmt.Fprintln(stderr, "hostel: usage: hostel cp <local> :<room path> | hostel cp :<room path> <local>")
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -402,11 +399,10 @@ func sshConfigPath(p string) (string, error) {
 // SSHConfig is "hostel ssh-config".
 func SSHConfig(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel ssh-config", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -423,12 +419,11 @@ func SSHConfig(args []string, stdout, stderr io.Writer) int {
 // the system ssh client.
 func SSH(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel ssh", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	pos, err := cli.Parse(fs, args)
 	if err != nil {
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}

@@ -43,12 +43,12 @@ func apiClient() (*client.Client, error) {
 }
 
 // openLease selects the lease of the worktree and records guest activity.
-func openLease(platform string, stderr io.Writer) (*lease, int) {
+func openLease(stderr io.Writer) (*lease, int) {
 	repo, err := FindRepo()
 	if err != nil {
 		return nil, fail(stderr, err)
 	}
-	st, err := repo.SelectState(platform)
+	st, err := repo.ActiveState()
 	if err != nil {
 		return nil, fail(stderr, err)
 	}
@@ -61,7 +61,7 @@ func openLease(platform string, stderr io.Writer) (*lease, int) {
 		return nil, fail(stderr, err)
 	}
 	if st.Access == nil {
-		return nil, fail(stderr, fmt.Errorf("the %s lease is not ready yet; run \"hostel acquire %s --task ...\" again", st.Platform, st.Platform))
+		return nil, fail(stderr, fmt.Errorf("the lease %s is not ready yet; run the same \"hostel acquire\" command again", st.LeaseID))
 	}
 	// Every lease command starts the port process again if it stopped.
 	if tunnels, err := loadTunnels(st); err == nil && len(tunnels) > 0 {
@@ -80,7 +80,7 @@ func (l *lease) touch() error {
 	if errors.As(err, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Code == protocol.CodeLeaseEnded) {
 		l.st.Final = true
 		l.st.Save()
-		return &leaseEndedError{fmt.Sprintf("%s; run \"hostel acquire %s --task ...\" for a new lease", apiErr.Message, l.st.Platform)}
+		return &leaseEndedError{fmt.Sprintf("%s; run \"hostel acquire [<tool>...] --task ...\" for a new lease", apiErr.Message)}
 	}
 	return err
 }

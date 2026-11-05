@@ -22,7 +22,7 @@ func (p *lobby) title() string { return "Lobby" }
 func queued(st protocol.Status, platform string) []protocol.LeaseStatus {
 	var out []protocol.LeaseStatus
 	for _, l := range st.Leases {
-		if l.State == protocol.LeaseQueued && l.Platform == platform {
+		if l.State == protocol.LeaseQueued && asks(l, platform) {
 			out = append(out, l)
 		}
 	}
@@ -38,11 +38,17 @@ func queued(st protocol.Status, platform string) []protocol.LeaseStatus {
 	return out
 }
 
+// asks reports whether a lease asked for a tool.
+func asks(l protocol.LeaseStatus, tool string) bool {
+	return slices.ContainsFunc(l.Tools, func(t string) bool { name, _, _ := strings.Cut(t, ":"); return name == tool })
+}
+
 // onlineMachines are the machines of a platform that are not offline: the
 // Lobby leaves out the offline ones (owner decision, 2026-11-03).
-func onlineMachines(m *model, p protocol.Platform) []protocol.MachineStatus {
+func onlineMachines(m *model, p protocol.Tool) []protocol.MachineStatus {
 	var out []protocol.MachineStatus
-	for _, key := range p.Machines {
+	for _, tm := range p.Machines {
+		key := tm.Key
 		if i := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == key }); i >= 0 && online(m.st, m.st.Machines[i]) {
 			out = append(out, m.st.Machines[i])
 		}
@@ -51,7 +57,7 @@ func onlineMachines(m *model, p protocol.Platform) []protocol.MachineStatus {
 }
 
 // freeMachines counts the machines of a platform that can take a lease now.
-func freeMachines(m *model, p protocol.Platform) int {
+func freeMachines(m *model, p protocol.Tool) int {
 	n := 0
 	for _, ms := range onlineMachines(m, p) {
 		if machineFree(m.st, ms, p.Name) {
@@ -94,7 +100,7 @@ func (p *lobby) body(m *model) string {
 
 // vacancy is a platform's free machines: ● 2 vacant, ◉ all occupied, or no
 // machine online; it glows when it changes.
-func (m *model) vacancy(pl protocol.Platform) string {
+func (m *model) vacancy(pl protocol.Tool) string {
 	free, total := freeMachines(m, pl), len(onlineMachines(m, pl))
 	s := state{fmt.Sprintf("%d vacant", free), colGreen, ""}
 	glyph := "●"
@@ -111,15 +117,15 @@ func (m *model) vacancy(pl protocol.Platform) string {
 }
 
 // waitLine is a platform's waiting line in a few words.
-func waitLine(pl protocol.Platform, online int) string {
-	if pl.Queue == 0 {
+func waitLine(pl protocol.Tool, online int) string {
+	if pl.Waiting == 0 {
 		return mutedStyle.Render("nobody waiting")
 	}
 	next := "next room " + waitText(pl.EstimatedWaitSeconds)
 	if online == 0 {
 		next = "no machine online"
 	}
-	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", pl.Queue)) + mutedStyle.Render(" · "+next)
+	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", pl.Waiting)) + mutedStyle.Render(" · "+next)
 }
 
 func (p *lobby) hint(m *model) string {
@@ -155,10 +161,10 @@ type platformPage struct {
 
 func (p *platformPage) title() string { return p.name }
 
-func (p *platformPage) platform(m *model) (protocol.Platform, bool) {
-	i := slices.IndexFunc(m.platforms, func(pl protocol.Platform) bool { return pl.Name == p.name })
+func (p *platformPage) platform(m *model) (protocol.Tool, bool) {
+	i := slices.IndexFunc(m.platforms, func(pl protocol.Tool) bool { return pl.Name == p.name })
 	if i < 0 {
-		return protocol.Platform{}, false
+		return protocol.Tool{}, false
 	}
 	return m.platforms[i], true
 }
@@ -239,20 +245,20 @@ func (p *platformPage) body(m *model) string {
 	}
 
 	// The devices.
-	if len(pl.Devices) > 0 {
+	if len(pl.Options) > 0 {
 		b.WriteString("\n\n" + heading("Devices", w) + "\n\n")
 		var ds []string
-		for _, d := range pl.Devices {
+		for _, d := range pl.Options {
 			ds = append(ds, fg(colBlue).Render(clean(d)))
 		}
-		b.WriteString(margin + "   " + strings.Join(ds, "    ") + "      " + mutedStyle.Render(fmt.Sprintf("up to %d at the same time", pl.MaxDevices)) + "\n")
+		b.WriteString(margin + "   " + strings.Join(ds, "    ") + "      " + mutedStyle.Render(fmt.Sprintf("up to %d at the same time", pl.MaxOptions)) + "\n")
 	}
 	return b.String()
 }
 
 // selectedMachine returns the machines of the card and the index of the
 // selected one (the first when it is gone).
-func (p *platformPage) selectedMachine(m *model, pl protocol.Platform) ([]protocol.MachineStatus, int) {
+func (p *platformPage) selectedMachine(m *model, pl protocol.Tool) ([]protocol.MachineStatus, int) {
 	ms := p.machines(m, pl)
 	i := slices.IndexFunc(ms, func(x protocol.MachineStatus) bool { return x.Key == p.machineSel })
 	if i < 0 && len(ms) > 0 {
@@ -262,7 +268,7 @@ func (p *platformPage) selectedMachine(m *model, pl protocol.Platform) ([]protoc
 }
 
 // machines are the online machines that serve the platform, in state order.
-func (p *platformPage) machines(m *model, pl protocol.Platform) []protocol.MachineStatus {
+func (p *platformPage) machines(m *model, pl protocol.Tool) []protocol.MachineStatus {
 	return byState(m.st, onlineMachines(m, pl), time.Now())
 }
 

@@ -6,6 +6,7 @@ package scheduler
 import (
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
@@ -14,17 +15,68 @@ import (
 // lifetimeMargin is the extra room lifetime that a lease needs after max_lease.
 const lifetimeMargin = 5 * time.Minute
 
-// Request is what a lease asks for. Until leases have a list of tools (M10e
-// phase 4), a lease names one tool, or an OS for no tool.
+// Want is one requested tool: "name" or "name:option".
+type Want struct {
+	Name   string
+	Option string
+}
+
+// Request is what a lease asks for.
 type Request struct {
-	Platform string
-	// PlatformOS is true when Platform is an OS (linux, macos, windows).
-	PlatformOS bool
+	// Tools are the requested tools; none: any machine.
+	Tools []Want
 	// PoolTunnels is the number of tunnels without a fixed room port.
 	PoolTunnels int
 	Fresh       bool
 	// Exclusive leases take all slots of a room.
 	Exclusive bool
+}
+
+// Have is what a machine or a room gives of one tool.
+type Have struct {
+	Screen bool
+	// Options are the versions of a software tool, or the options of a
+	// screen tool; empty when they are not known.
+	Options []string
+	// Checked: Options come from the inventory (what check reported), not
+	// from the configuration.
+	Checked bool
+}
+
+// Matches reports whether the tool satisfies a requested option (design,
+// section 3). A screen option matches exactly. A version matches the whole
+// version or its first dot-separated parts; a configured version (before the
+// inventory) also matches a more exact request ("22" can install 22.11).
+func (h Have) Matches(option string) bool {
+	if option == "" || len(h.Options) == 0 {
+		return true
+	}
+	if h.Screen {
+		return slices.Contains(h.Options, option)
+	}
+	for _, have := range h.Options {
+		if VersionMatches(option, have) || (!h.Checked && (have == "latest" || VersionMatches(have, option))) {
+			return true
+		}
+	}
+	return false
+}
+
+// VersionMatches reports whether want is the whole version have or its first
+// dot-separated parts: "22" matches "22.11.0", not "2.2".
+func VersionMatches(want, have string) bool {
+	return have == want || strings.HasPrefix(have, want+".")
+}
+
+// gives reports whether tools satisfy every tool of the request.
+func gives(tools map[string]Have, r Request) bool {
+	for _, w := range r.Tools {
+		h, ok := tools[w.Name]
+		if !ok || !h.Matches(w.Option) {
+			return false
+		}
+	}
+	return true
 }
 
 // Machine is one machine of the configuration.
@@ -33,8 +85,9 @@ type Machine struct {
 	Provider  string
 	OnDemand  bool
 	CanResume bool
-	OS        string
-	Tools     []string // the names of the machine's tools
+	// Tools are the machine's tools: the inventories of its rooms where
+	// they have one, else the configuration.
+	Tools map[string]Have
 	// PoolPorts is the smallest number of pool ports of its slots.
 	PoolPorts int
 	// Slots are the slot names of a new room.
@@ -64,8 +117,11 @@ type Room struct {
 	State     string
 	Drained   bool
 	CreatedAt time.Time
+	// Tools are what the room gives: its inventory, else its machine's
+	// configuration.
+	Tools map[string]Have
 	// Ready lists the tools that the room has installed and checked with
-	// the current scripts, with their needs; and the room's OS.
+	// the current scripts, with their needs.
 	Ready map[string]bool
 	Slots []Slot
 }
@@ -104,7 +160,7 @@ const (
 	// UseRoom: a free slot in a running room that is ready for the lease.
 	UseRoom Action = "use"
 	// ProvisionRoom: a free slot in a running room; the install scripts of
-	// the lease's tool run first.
+	// the lease's tools run first.
 	ProvisionRoom Action = "provision"
 	// ResumeRoom: a stopped room.
 	ResumeRoom Action = "resume"
@@ -133,9 +189,12 @@ const (
 
 type Waiting struct {
 	LeaseID string
-	// Position is 1 for the first waiting lease of its platform.
+	// Position is 1 for the first lease of the waiting line.
 	Position int
-	Reason   string
+	// Behind counts the waiting leases before it that share one of its
+	// candidate machines.
+	Behind int
+	Reason string
 }
 
 type Output struct {
@@ -145,42 +204,20 @@ type Output struct {
 	Waiting []Waiting
 }
 
-// Order sorts queued leases (multiplayer.md, section 9). Each platform has
-// its own queue: leases that an admin placed first (by their manual position),
-// then the priority lane (high first), then the request time; there is no
-// aging. The queues are merged by their first leases (lane, then request
-// time), so an admin's placement never passes leases of another platform.
+// Order sorts queued leases into the one waiting line (design, section 5):
+// leases that an admin placed first (by their manual position), then the
+// priority lane (high first), then the request time; there is no aging.
 func Order(leases []Lease) {
-	queues := map[string][]Lease{}
-	var platforms []string
-	for _, l := range leases {
-		if _, ok := queues[l.Platform]; !ok {
-			platforms = append(platforms, l.Platform)
+	sort.SliceStable(leases, func(i, j int) bool {
+		a, b := leases[i], leases[j]
+		if (a.ManualPosition > 0) != (b.ManualPosition > 0) {
+			return a.ManualPosition > 0
 		}
-		queues[l.Platform] = append(queues[l.Platform], l)
-	}
-	for _, q := range queues {
-		sort.SliceStable(q, func(i, j int) bool {
-			a, b := q[i], q[j]
-			if (a.ManualPosition > 0) != (b.ManualPosition > 0) {
-				return a.ManualPosition > 0
-			}
-			if a.ManualPosition != b.ManualPosition {
-				return a.ManualPosition < b.ManualPosition
-			}
-			return before(a, b)
-		})
-	}
-	sort.Strings(platforms)
-	for i := range leases {
-		best := ""
-		for _, p := range platforms {
-			if len(queues[p]) > 0 && (best == "" || before(queues[p][0], queues[best][0])) {
-				best = p
-			}
+		if a.ManualPosition != b.ManualPosition {
+			return a.ManualPosition < b.ManualPosition
 		}
-		leases[i], queues[best] = queues[best][0], queues[best][1:]
-	}
+		return before(a, b)
+	})
 }
 
 // before is the order without placements: lane, then request time.
@@ -196,14 +233,18 @@ func before(a, b Lease) bool {
 
 // Serves reports whether the machine can ever satisfy the request.
 func (m *Machine) Serves(r Request) bool {
-	if r.PlatformOS {
-		if m.OS != r.Platform {
+	return gives(m.Tools, r) && m.PoolPorts >= r.PoolTunnels && (!r.Fresh || m.OnDemand)
+}
+
+// ready reports whether the room has installed and checked each requested
+// tool.
+func (r *room) ready(req Request) bool {
+	for _, w := range req.Tools {
+		if !r.Ready[w.Name] {
 			return false
 		}
-	} else if !slices.Contains(m.Tools, r.Platform) {
-		return false
 	}
-	return m.PoolPorts >= r.PoolTunnels && (!r.Fresh || m.OnDemand)
+	return true
 }
 
 // Candidates returns the keys of the machines that can satisfy the request, in
@@ -255,7 +296,7 @@ func Schedule(in Input) Output {
 	Order(leases)
 
 	var out Output
-	positions := map[string]int{}
+	var waiting []waitingLease
 	for _, l := range leases {
 		all := Candidates(in.Machines, l.Request)
 		var free []*Machine
@@ -276,18 +317,26 @@ func Schedule(in Input) Output {
 		for _, k := range all {
 			p.blocked[k] = true
 		}
-		positions[l.Platform]++
-		out.Waiting = append(out.Waiting, Waiting{LeaseID: l.ID, Position: positions[l.Platform], Reason: reason})
+		behind := 0
+		for _, w := range waiting {
+			if slices.ContainsFunc(all, func(k string) bool { return slices.Contains(w.machines, k) }) {
+				behind++
+			}
+		}
+		waiting = append(waiting, waitingLease{all})
+		out.Waiting = append(out.Waiting, Waiting{LeaseID: l.ID, Position: len(waiting), Behind: behind, Reason: reason})
 	}
 	return out
 }
+
+type waitingLease struct{ machines []string }
 
 func (p *pass) assign(l Lease, machines []*Machine) (Assignment, bool) {
 	if !l.Fresh {
 		for _, ready := range []bool{true, false} {
 			for _, m := range machines {
 				for _, r := range p.roomsOf(m.Key) {
-					if r.evicted || r.State != protocol.RoomRunning || r.Drained || r.Ready[l.Platform] != ready || !p.lifetimeOK(r) {
+					if r.evicted || r.State != protocol.RoomRunning || r.Drained || !gives(r.Tools, l.Request) || r.ready(l.Request) != ready || !p.lifetimeOK(r) {
 						continue
 					}
 					if slots := r.take(l.Request); slots != nil {
@@ -305,7 +354,7 @@ func (p *pass) assign(l Lease, machines []*Machine) (Assignment, bool) {
 				continue
 			}
 			for _, r := range p.roomsOf(m.Key) {
-				if r.evicted || r.State != protocol.RoomStopped || r.Drained || !p.lifetimeOK(r) {
+				if r.evicted || r.State != protocol.RoomStopped || r.Drained || !gives(r.Tools, l.Request) || !p.lifetimeOK(r) {
 					continue
 				}
 				if slots := r.take(l.Request); slots != nil {

@@ -34,6 +34,9 @@ type liveConfig struct {
 	toolsDir string
 	// uploads has the tool files and hashes for each tool and OS.
 	uploads map[string]map[string]roomops.Tool
+	// warning is a problem of the stored configuration that an admin must
+	// fix (GET /v1/status); a new configuration clears it.
+	warning string
 }
 
 func (s *Server) config() *config.Server { return s.live.Load().cfg }
@@ -106,7 +109,9 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 			if err := writeOnce(file+".pre-m9", data); err != nil {
 				return nil, err
 			}
-			if _, err := config.LoadServer(file); err != nil {
+			// A file of the form before M10e is imported too: the server
+			// then starts without providers and machines (below).
+			if _, err := config.LoadServer(file); err != nil && config.OldForm(doc) == nil {
 				return nil, err
 			}
 			if _, err := st.AddConfig(ctx, 0, string(doc), 0, now); err != nil {
@@ -138,11 +143,20 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 		return nil, fmt.Errorf("write the tools: %w", err)
 	}
 	removeOldToolDirs(paths.DataDir, dir)
-	cfg, err := config.LoadServerDocument(file, data, config.Document{Revision: latest.Revision, Data: []byte(latest.Document), Tools: tools, ToolsDir: dir})
+	document, warning := latest.Document, ""
+	if oldErr := config.OldForm([]byte(document)); oldErr != nil {
+		// No compatibility with the configuration before M10e (owner
+		// decision, 2026-11-05), but the server stays reachable: it starts
+		// without providers and machines, and an admin writes the new form.
+		warning = fmt.Sprintf("the stored configuration (revision %d) has the form before M10e, so the server runs without providers and machines; write the configuration again in the new form with \"hostel config edit\" (machines list tools): %v",
+			latest.Revision, strings.ReplaceAll(oldErr.Error(), "\n", "; "))
+		document = ""
+	}
+	cfg, err := config.LoadServerDocument(file, data, config.Document{Revision: latest.Revision, Data: []byte(document), Tools: tools, ToolsDir: dir})
 	if err != nil {
 		return nil, err
 	}
-	return &startConfig{cfg: cfg, revision: latest.Revision, document: latest.Document, tools: tools, toolsDir: dir, local: data}, nil
+	return &startConfig{cfg: cfg, revision: latest.Revision, document: document, tools: tools, toolsDir: dir, local: data, warning: warning}, nil
 }
 
 // startConfig is the configuration at the start.
@@ -153,7 +167,8 @@ type startConfig struct {
 	tools    map[string]map[string]string
 	toolsDir string
 	// local is server.toml: its keys change only with a restart.
-	local []byte
+	local   []byte
+	warning string
 }
 
 // writeOnce writes a file unless it exists.
@@ -254,9 +269,10 @@ func (s *Server) applyTool(ctx context.Context, name, state string, files map[st
 	if err != nil {
 		return 0, errConfig{err.Error()}
 	}
+	lc.warning = old.warning
 	s.schedMu.Lock()
 	defer s.schedMu.Unlock()
-	if err := s.checkLeaseTools(ctx, cfg); err != nil {
+	if err := s.checkActiveTools(ctx, cfg); err != nil {
 		return 0, err
 	}
 	// Cleanup runs the stop script of the version that started the lease.
@@ -265,7 +281,7 @@ func (s *Server) applyTool(ctx context.Context, name, state string, files map[st
 		return 0, err
 	}
 	for _, l := range leases {
-		if l.Platform != name {
+		if !leaseUses(l, name) {
 			continue
 		}
 		if l.State != protocol.LeaseQueued {
@@ -273,10 +289,8 @@ func (s *Server) applyTool(ctx context.Context, name, state string, files map[st
 		}
 		// A queued lease was checked against the old version: its options
 		// must fit the new one.
-		if nt := cfg.Tools[name]; nt != nil {
-			if _, _, msg := checkOptions(nt, l.Devices); msg != "" {
-				return 0, errConfig{fmt.Sprintf("the queued lease %s does not fit the new version of %s (%s); change the tool when the lease has ended, or release it", l.ID, name, msg)}
-			}
+		if _, _, msg := checkLeaseTools(cfg, l.Tools); msg != "" {
+			return 0, errConfig{fmt.Sprintf("the queued lease %s does not fit the new version of %s (%s); change the tool when the lease has ended, or release it", l.ID, name, msg)}
 		}
 	}
 	rev, err := s.store.AddToolRevision(ctx, name, state, files, userID, time.Now())
@@ -289,16 +303,18 @@ func (s *Server) applyTool(ctx context.Context, name, state string, files map[st
 	return rev, nil
 }
 
-// checkLeaseTools refuses a configuration without the tool of a lease that
+// checkActiveTools refuses a configuration without a tool of a lease that
 // has not ended (the lease steps need the tool).
-func (s *Server) checkLeaseTools(ctx context.Context, cfg *config.Server) error {
+func (s *Server) checkActiveTools(ctx context.Context, cfg *config.Server) error {
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
 		return err
 	}
 	for _, l := range leases {
-		if cfg.Tools[l.Platform] == nil && !config.IsOSName(l.Platform) {
-			return errConfig{fmt.Sprintf("the lease %s (%s) uses the tool %s; remove the tool when its leases have ended", l.ID, l.State, l.Platform)}
+		for _, name := range toolNamesOf(l.Tools) {
+			if cfg.Tools[name] == nil && !listedBy(cfg, name) {
+				return errConfig{fmt.Sprintf("the lease %s (%s) uses the tool %s; remove the tool when its leases have ended", l.ID, l.State, name)}
+			}
 		}
 	}
 	return nil
@@ -307,7 +323,7 @@ func (s *Server) checkLeaseTools(ctx context.Context, cfg *config.Server) error 
 // checkRemovals refuses a configuration that removes a machine whose room has
 // an active lease, or a provider that still has rooms of its own.
 func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
-	if err := s.checkLeaseTools(ctx, cfg); err != nil {
+	if err := s.checkActiveTools(ctx, cfg); err != nil {
 		return err
 	}
 	rooms, err := s.store.Rooms(ctx)
@@ -348,9 +364,9 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 			if om := s.config().Machine(key); om != nil {
 				for _, l := range leases {
 					changed := !reflect.DeepEqual(om.Slots, nm.Slots) || om.Address != nm.Address || om.Connect != nm.Connect ||
-						om.OS != nm.OS || (l.Platform != nm.OS && nm.Tool(l.Platform) == nil)
+						om.OS != nm.OS || slices.ContainsFunc(toolNamesOf(l.Tools), func(t string) bool { return nm.Tool(t) == nil })
 					if changed && l.RoomID == r.ID && l.State != protocol.LeaseQueued {
-						errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: slots, address, connect, os, and the lease's tool stay while the room %s has the active lease %s; drain the room (hostel config rooms drain %s) and change them when the lease ends", r.Provider, r.Machine, r.Name, l.ID, r.Name))
+						errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: slots, address, connect, os, and the lease's tools stay while the room %s has the active lease %s; drain the room (hostel config rooms drain %s) and change them when the lease ends", r.Provider, r.Machine, r.Name, l.ID, r.Name))
 						break
 					}
 				}

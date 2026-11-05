@@ -80,7 +80,6 @@ func Tunnel(args []string, stdout, stderr io.Writer) int {
 		return usage()
 	}
 	fs := cli.NewFlagSet("hostel tunnel "+args[0], stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	localPort := fs.Int("local-port", 0, "local port")
 	localEnv := fs.String("local-port-env", "", "variable in .env (or the environment) with the local port")
 	roomPort := fs.Int("room-port", 0, "fixed room port (1024 to 65535)")
@@ -122,7 +121,7 @@ func Tunnel(args []string, stdout, stderr io.Writer) int {
 	if set["room-port"] {
 		req.RoomPort = roomPort
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -151,7 +150,6 @@ func Forward(args []string, stdout, stderr io.Writer) int {
 		return ExitUsage
 	}
 	fs := cli.NewFlagSet("hostel forward", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	localPort := fs.Int("local-port", 0, "local port (default: the room port, or a free port)")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) == 0 {
@@ -183,7 +181,7 @@ func Forward(args []string, stdout, stderr io.Writer) int {
 	default:
 		return usage()
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}

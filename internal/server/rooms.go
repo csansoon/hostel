@@ -184,7 +184,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	// them. A failure is a room provisioning failure. It also runs without
 	// tools and without agent-device, because it removes an agent-device
 	// command that an earlier configuration installed.
-	var resp protocol.RunScriptResponse
+	var resp protocol.MiseInstallResponse
 	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.config().Mise.AgentDeviceEnabled()}
 	if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
 		return err
@@ -192,6 +192,22 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if resp.TimedOut || resp.ExitCode != 0 {
 		s.store.AddEvent(ctx, time.Now(), "", r.ID, "mise", fmt.Sprintf("mise install exited with code %d\n%s", resp.ExitCode, resp.OutputTail))
 		return fmt.Errorf("machine-level tools: mise install failed (exit code %d); see the events", resp.ExitCode)
+	}
+	// The inventory has each tool of the machine: the mise tools with the
+	// versions that mise installed; tools that the machine no longer lists
+	// leave it.
+	var keep []string
+	for _, mt := range m.ToolList {
+		keep = append(keep, mt.Name)
+		if mt.Mise {
+			if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: r.ID, Tool: mt.Name, State: store.ToolReady,
+				Option: resp.Versions[mt.Name], CheckedAt: time.Now()}); err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.store.RemoveRoomTools(ctx, r.ID, keep); err != nil {
+		return err
 	}
 	ready, err := s.installedTools(ctx, r.ID)
 	if err != nil {
@@ -266,7 +282,7 @@ func (s *Server) provisionSlotUser(ctx context.Context, r store.Room, m *config.
 	if _, err := room.Sync(ctx, upload); err != nil {
 		return err
 	}
-	var resp protocol.RunScriptResponse
+	var resp protocol.MiseInstallResponse
 	req := protocol.MiseInstallRequest{TimeoutSeconds: int(miseInstallTimeout.Seconds()), AgentDevice: s.config().Mise.AgentDeviceEnabled()}
 	if err := room.Helper(ctx, []string{"mise-install"}, req, &resp); err != nil {
 		return err
@@ -357,7 +373,7 @@ func (s *Server) runChecks(ctx context.Context, room *roomops.Room, roomID int64
 func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64, osName string, t *config.Tool) error {
 	sum := s.toolUploads()[t.Name][osName].Hash
 	row := store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: sum, State: store.ToolReady,
-		Env: sortedKeys(t.Env), CheckedAt: time.Now()}
+		Env: envNames(t), CheckedAt: time.Now()}
 	if t.Script(osName, config.StepCheck) != "" {
 		timeout := t.ScriptTimeout(config.StepCheck)
 		resp, err := room.RunScript(ctx, t.Name, config.StepCheck, "", protocol.RunScriptRequest{TimeoutSeconds: int(timeout / time.Second)})
@@ -383,7 +399,7 @@ func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64,
 func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int64, osName string, t *config.Tool, up roomops.Tool) error {
 	if t.Script(osName, config.StepInstall) != "" {
 		if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: up.Hash,
-			State: store.ToolInstalling, Env: sortedKeys(t.Env), CheckedAt: time.Now()}); err != nil {
+			State: store.ToolInstalling, Env: envNames(t), CheckedAt: time.Now()}); err != nil {
 			return err
 		}
 		timeout := t.ScriptTimeout(config.StepInstall)
@@ -397,7 +413,7 @@ func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int
 			fmt.Sprintf("%s install exited with code %d\n%s", t.Name, resp.ExitCode, resp.OutputTail))
 		if resp.TimedOut || resp.ExitCode != 0 {
 			if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: up.Hash,
-				State: store.ToolFailed, Env: sortedKeys(t.Env), CheckedAt: time.Now()}); err != nil {
+				State: store.ToolFailed, Env: envNames(t), CheckedAt: time.Now()}); err != nil {
 				return err
 			}
 			if resp.TimedOut {

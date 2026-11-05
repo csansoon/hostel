@@ -179,7 +179,16 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
 	// 3. mise env in work/: tool paths and the repository's mise [env].
 	mergeEnv(env, h.miseEnv(h.workDir(slot), env, warn))
-	// 4. tool.env from start. 5. lease.env from the guest.
+	// 4. The env and path of the machine's software tools and of the
+	// screen tools that started for the lease.
+	screens := map[string]bool{}
+	for _, st := range lease.Started {
+		screens[st.Name] = true
+	}
+	if err := h.addToolEnv(env, screens); err != nil {
+		return nil, err
+	}
+	// 5. tool.env from start. 6. lease.env from the guest.
 	for _, f := range []string{"tool.env", "lease.env"} {
 		m, err := readEnvFile(filepath.Join(h.slotDir(slot), f))
 		if err != nil {
@@ -187,9 +196,9 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 		}
 		mergeEnv(env, m)
 	}
-	// 6. The lease variables.
+	// 7. The lease variables.
 	env["HOSTEL_LEASE"] = lease.LeaseID
-	env["HOSTEL_TOOLS"] = toolsEnv(lease.Tool, lease.Options)
+	env["HOSTEL_TOOLS"] = strings.Join(lease.Tools, ",")
 	env["HOSTEL_SLOT"] = slot
 	env["HOSTEL_WORK_DIR"] = h.workDir(slot)
 	env["HOSTEL_CACHE_DIR"] = filepath.Join(h.root, "cache")

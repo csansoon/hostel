@@ -91,7 +91,7 @@ type model struct {
 
 	st        protocol.Status
 	loaded    bool
-	platforms []protocol.Platform
+	platforms []protocol.Tool
 	// platformsRead is true after the first answer of GET /v1/platforms;
 	// platformsErr is the error of the last one.
 	platformsRead bool
@@ -213,7 +213,7 @@ type (
 	}
 	platformsMsg struct {
 		gen, seq int
-		p        []protocol.Platform
+		p        []protocol.Tool
 		err      error
 	}
 	infoMsg struct {
@@ -298,7 +298,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.platforms, m.platformsRead = msg.p, true
 		for _, pl := range m.platforms {
-			m.note("p:"+pl.Name, fmt.Sprint(freeMachines(m, pl), pl.Queue))
+			m.note("p:"+pl.Name, fmt.Sprint(freeMachines(m, pl), pl.Waiting))
 		}
 		return m, m.frame()
 	case platformsRetryMsg:
@@ -480,9 +480,9 @@ func (m *model) readPlatforms() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		var p []protocol.Platform
-		err := c.Do(ctx, "GET", "/v1/platforms", nil, &p)
-		return platformsMsg{gen: gen, seq: seq, p: p, err: err}
+		var list protocol.Tools
+		err := c.Do(ctx, "GET", "/v1/tools", nil, &list)
+		return platformsMsg{gen: gen, seq: seq, p: list.Tools, err: err}
 	}
 }
 

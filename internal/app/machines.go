@@ -36,10 +36,15 @@ func roomLeases(st protocol.Status, id int64) []protocol.LeaseStatus {
 
 // freeSlot reports a running room that takes a new lease for platform now.
 func freeSlot(r protocol.RoomStatus, platform string) bool {
-	if r.State != protocol.RoomRunning || r.Drained || (platform != "" && platform != r.OS && !slices.Contains(r.Tools, platform)) {
+	if r.State != protocol.RoomRunning || r.Drained || (platform != "" && !roomHas(r, platform)) {
 		return false
 	}
 	return slices.ContainsFunc(r.Slots, func(s protocol.SlotStatus) bool { return s.State == protocol.SlotFree })
+}
+
+// roomHas reports whether a room's inventory has a tool.
+func roomHas(r protocol.RoomStatus, tool string) bool {
+	return slices.ContainsFunc(r.Tools, func(t protocol.InventoryTool) bool { return t.Name == tool })
 }
 
 // machineFree reports whether a machine can take a lease for platform now:

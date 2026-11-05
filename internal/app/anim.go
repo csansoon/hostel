@@ -74,7 +74,7 @@ func (m *model) moving() bool {
 		return m.queued("")
 	case *platformPage:
 		pl, _ := p.platform(m)
-		return m.queued(p.name) || slices.ContainsFunc(pl.Machines, m.starting)
+		return m.queued(p.name) || slices.ContainsFunc(pl.Machines, func(tm protocol.ToolMachine) bool { return m.starting(tm.Key) })
 	case *rooms, *roomAdmin:
 		return m.starting("")
 	case *machinePage:
@@ -90,7 +90,7 @@ func (m *model) moving() bool {
 // queued reports a queued lease for platform ("" for any).
 func (m *model) queued(platform string) bool {
 	return slices.ContainsFunc(m.st.Leases, func(l protocol.LeaseStatus) bool {
-		return l.State == protocol.LeaseQueued && (platform == "" || l.Platform == platform)
+		return l.State == protocol.LeaseQueued && (platform == "" || asks(l, platform))
 	})
 }
 

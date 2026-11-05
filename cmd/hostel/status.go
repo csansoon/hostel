@@ -29,8 +29,9 @@ func apiClient() (*client.Client, error) {
 	return client.New(g)
 }
 
-// statusCmd is "hostel status [room | platform]" (aliases ls, rooms): the
-// overview, the details of a room, or the queue of a platform.
+// statusCmd is "hostel status [room | tool]" (aliases ls, rooms): the
+// overview, the details of a room, or the waiting leases that asked for a
+// tool.
 func statusCmd(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel status", stderr)
 	fs.Bool("plain", false, "print plain text (the only output; people use the app: \"hostel\")")
@@ -39,7 +40,7 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(rest) > 1 {
-		fmt.Fprintln(stderr, "hostel status: too many arguments; usage: hostel status [room | platform]")
+		fmt.Fprintln(stderr, "hostel status: too many arguments; usage: hostel status [room | tool]")
 		return 2
 	}
 	c, err := apiClient()
@@ -96,6 +97,9 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 		you = fmt.Sprintf("%s (%s)", st.User, st.Role)
 	}
 	fmt.Fprintf(w, "%s · %s (%d in use) · %d waiting · you: %s\n\n", st.ServerID, plural(len(st.Rooms), "room"), inUse, waiting, you)
+	if st.Warning != "" {
+		fmt.Fprintf(w, "Warning: %s\n\n", st.Warning)
+	}
 
 	tw := newTable(w)
 	fmt.Fprintln(tw, "ROOM\tTOOLS\tSTATE\tUSER\tTASK\tTIME\tLEASE")
@@ -105,17 +109,17 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 		leases := roomLeases(st, r.ID)
 		state := roomState(r, len(leases))
 		if len(leases) == 0 {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t\t\t\t\n", r.Name, strings.Join(r.Tools, ", "), state)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t\t\t\t\n", r.Name, inventoryText(r.Tools), state)
 		}
 		for i, l := range leases {
-			name, platforms := r.Name, strings.Join(r.Tools, ", ")
+			name, tools := r.Name, inventoryText(r.Tools)
 			if i > 0 {
-				name, platforms, state = "", "", ""
+				name, tools, state = "", "", ""
 			}
 			if l.State != protocol.LeaseReady && state != "" {
 				state += " (" + l.State + ")"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", name, platforms, state, l.User, l.Task, leaseAge(l, now), l.ID)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", name, tools, state, l.User, l.Task, leaseAge(l, now), l.ID)
 		}
 	}
 	for _, m := range st.Machines {
@@ -126,38 +130,66 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 		if m.Kind != "static" {
 			note = fmt.Sprintf("(on demand, up to %d)", m.MaxRooms)
 		}
-		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(append([]string{m.OS}, m.Tools...), ", "), note)
+		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(m.Tools, ", "), note)
 	}
 	tw.flush()
 
-	if queues := queuesOf(st); len(queues) > 0 {
+	if q := waitingLine(st, ""); len(q) > 0 {
 		fmt.Fprintln(w)
-		tw = newTable(w)
-		fmt.Fprintln(tw, "QUEUE\tWAITING\tEST.\tNEXT")
-		for _, q := range queues {
-			next := q.leases[0]
-			fmt.Fprintf(tw, "%s\t%d\t%s\t%s · %s (%s, %s) · lease %s\n", q.platform, len(q.leases), estimate(next),
-				next.User, next.Task, next.Priority, shortDur(now.Sub(next.CreatedAt)), next.ID)
-		}
-		tw.flush()
+		printWaiting(w, q, now)
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Details: hostel status <room> (its leases, jobs, events) or hostel status <platform> (its queue).")
-	fmt.Fprintln(w, "To get a room: hostel acquire <platform> --task \"...\" (\"hostel platforms\" lists the platforms).")
+	fmt.Fprintln(w, "Details: hostel status <room> (its leases, jobs, events) or hostel status <tool> (the leases that wait for it).")
+	fmt.Fprintln(w, "To get a room: hostel acquire [<tool>...] --task \"...\" (\"hostel tools\" lists the tools).")
 }
 
-// printQueue prints the queue of a platform.
-func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time) error {
-	var q []protocol.LeaseStatus
-	for _, qu := range queuesOf(st) {
-		if qu.platform == platform {
-			q = qu.leases
-		}
+// printWaiting prints waiting leases in the order of the waiting line.
+func printWaiting(w io.Writer, q []protocol.LeaseStatus, now time.Time) {
+	tw := newTable(w)
+	fmt.Fprintln(tw, "#\tUSER\tTASK\tTOOLS\tPRIORITY\tWAITING\tEST.\tLEASE\tREASON")
+	for _, l := range q {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", position(l), l.User, l.Task, toolsText(l.Tools), l.Priority,
+			shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID, l.Reason)
 	}
+	tw.flush()
+}
+
+func toolsText(tools []string) string {
+	if len(tools) == 0 {
+		return "(any)"
+	}
+	return strings.Join(tools, " ")
+}
+
+// inventoryText is a room's inventory in a few words: each tool with its
+// options.
+func inventoryText(tools []protocol.InventoryTool) string {
+	var out []string
+	for _, t := range tools {
+		s := t.Name
+		if len(t.Options) > 0 {
+			s += " " + strings.Join(t.Options, "/")
+		}
+		if t.State != "ready" {
+			s += " (" + t.State + ")"
+		}
+		out = append(out, s)
+	}
+	return strings.Join(out, ", ")
+}
+
+// asks reports whether a lease asked for a tool.
+func asks(l protocol.LeaseStatus, tool string) bool {
+	return slices.ContainsFunc(l.Tools, func(t string) bool { name, _, _ := strings.Cut(t, ":"); return name == tool })
+}
+
+// printQueue prints the waiting leases that asked for a tool.
+func printQueue(w io.Writer, st protocol.Status, tool string, now time.Time) error {
+	q := waitingLine(st, tool)
 	used, free := 0, 0
 	known := false
 	for _, r := range st.Rooms {
-		if r.OS != platform && !slices.Contains(r.Tools, platform) {
+		if !slices.ContainsFunc(r.Tools, func(t protocol.InventoryTool) bool { return t.Name == tool }) {
 			continue
 		}
 		known = true
@@ -168,22 +200,18 @@ func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time)
 		}
 	}
 	for _, m := range st.Machines {
-		known = known || m.OS == platform || slices.Contains(m.Tools, platform)
+		known = known || slices.ContainsFunc(m.Tools, func(t string) bool { name, _, _ := strings.Cut(t, ":"); return name == tool })
 	}
 	if !known && len(q) == 0 {
-		return fmt.Errorf("no room or platform %q; \"hostel status\" lists the rooms and the queues", platform)
+		return fmt.Errorf("no room or tool %q; \"hostel status\" lists the rooms and the waiting line", tool)
 	}
-	fmt.Fprintf(w, "%s · %d in use, %d free · %d waiting\n", platform, used, free, len(q))
+	fmt.Fprintf(w, "%s · %d rooms in use, %d free · %d waiting\n", tool, used, free, len(q))
 	if len(q) == 0 {
 		return nil
 	}
 	fmt.Fprintln(w)
-	tw := newTable(w)
-	fmt.Fprintln(tw, "#\tUSER\tTASK\tPRIORITY\tWAITING\tEST.\tLEASE\tREASON")
-	for _, l := range q {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", position(l), l.User, l.Task, l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID, l.Reason)
-	}
-	return tw.flush()
+	printWaiting(w, q, now)
+	return nil
 }
 
 // printRoomDetails prints the details of a room.
@@ -220,7 +248,7 @@ func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time) {
 		}
 		fmt.Fprintln(w, strings.Join(parts, " · "))
 	}
-	line := "Tools " + strings.Join(r.Tools, ", ")
+	line := "Tools " + inventoryText(r.Tools)
 	fmt.Fprintf(w, "%s · %s\n", line, plural(len(r.Slots), "slot"))
 	if r.Reason != "" {
 		fmt.Fprintf(w, "Reason: %s\n", r.Reason)
@@ -266,12 +294,12 @@ func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time) {
 	if len(d.Queue) > 0 {
 		fmt.Fprintln(w)
 		for i, l := range d.Queue {
-			label := "QUEUE"
+			label := "WAITING"
 			if i > 0 {
 				label = ""
 			}
 			fmt.Fprintf(w, "%-8s %s. %s · %s · %s · %s · waiting %s · %s · lease %s\n", label, position(l), l.User, l.Task,
-				l.Platform, l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID)
+				toolsText(l.Tools), l.Priority, shortDur(now.Sub(l.CreatedAt)), estimate(l), l.ID)
 		}
 	}
 
@@ -291,29 +319,16 @@ func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time) {
 	}
 }
 
-type queue struct {
-	platform string
-	leases   []protocol.LeaseStatus
-}
-
-// queuesOf groups the queued leases by platform, each in queue order.
-func queuesOf(st protocol.Status) []queue {
-	var out []queue
+// waitingLine returns the waiting leases (that asked for tool, if not "")
+// in the order of the one waiting line.
+func waitingLine(st protocol.Status, tool string) []protocol.LeaseStatus {
+	var out []protocol.LeaseStatus
 	for _, l := range st.Leases {
-		if l.State != protocol.LeaseQueued {
-			continue
+		if l.State == protocol.LeaseQueued && (tool == "" || asks(l, tool)) {
+			out = append(out, l)
 		}
-		i := slices.IndexFunc(out, func(q queue) bool { return q.platform == l.Platform })
-		if i < 0 {
-			out = append(out, queue{platform: l.Platform})
-			i = len(out) - 1
-		}
-		out[i].leases = append(out[i].leases, l)
 	}
-	for _, q := range out {
-		slices.SortStableFunc(q.leases, byPosition)
-	}
-	slices.SortFunc(out, func(a, b queue) int { return strings.Compare(a.platform, b.platform) })
+	slices.SortStableFunc(out, byPosition)
 	return out
 }
 

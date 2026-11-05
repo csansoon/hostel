@@ -3,6 +3,7 @@ package guest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,31 +21,26 @@ import (
 // before a typical agent tool timeout.
 const screenshotTimeout = 90 * time.Second
 
-// Screenshot is "hostel screenshot [--device d] [-o file.png]".
+// Screenshot is "hostel screenshot [--tool <tool[:option]>] [-o file.png]".
 func Screenshot(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel screenshot", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
-	device := fs.String("device", "", "device of the lease (default: the first)")
-	out := fs.String("o", "", "output file (default: screenshot-<platform>-<device>-<time>.png)")
+	toolFlag := fs.String("tool", "", "screen tool of the lease, with an option: <tool[:option]> (needed only when the lease has several screens)")
+	out := fs.String("o", "", "output file (default: screenshot-<tool>-<option>-<time>.png)")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
-	devices := l.leaseDevices()
-	if *device != "" && !slices.Contains(devices, *device) {
-		return l.fail(stderr, fmt.Errorf("device %q is not in this lease (devices: %s)", *device, strings.Join(devices, ", ")))
-	}
-	name := *device
-	if name == "" && len(devices) > 0 {
-		name = devices[0]
+	tool, option, err := screenOf(l.st.Started, *toolFlag)
+	if err != nil {
+		return l.fail(stderr, err)
 	}
 	if *out == "" {
-		label := l.st.Platform
-		if name != "" {
-			label += "-" + name
+		label := tool
+		if option != "" {
+			label += "-" + option
 		}
 		*out = fmt.Sprintf("screenshot-%s-%s.png", label, time.Now().Format("20060102-150405"))
 	}
@@ -67,18 +63,18 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 		read = "$f = [IO.File]::OpenRead(" + p + "); $o = [Console]::OpenStandardOutput(); $f.CopyTo($o); $o.Flush(); $f.Close(); Remove-Item -LiteralPath " + p
 	}
 	scriptArgs := []string{remote}
-	if *device != "" {
-		scriptArgs = append(scriptArgs, *device)
+	if option != "" {
+		scriptArgs = append(scriptArgs, option)
 	}
 	var resp protocol.RunScriptResponse
-	err = conn.Helper(ctx, []string{"run-script", l.st.Platform, config.StepScreenshot},
+	err = conn.Helper(ctx, []string{"run-script", tool, config.StepScreenshot},
 		protocol.RunScriptRequest{Args: scriptArgs, TimeoutSeconds: int(screenshotTimeout.Seconds())}, &resp)
 	if err != nil {
 		return l.fail(stderr, err)
 	}
 	switch {
 	case resp.Missing:
-		return l.fail(stderr, fmt.Errorf("platform %s has no screenshot script for %s", l.st.Platform, l.st.Access.RoomOS))
+		return l.fail(stderr, fmt.Errorf("the tool %s has no screenshot script for %s", tool, l.st.Access.RoomOS))
 	case resp.TimedOut || resp.ExitCode != 0:
 		return l.fail(stderr, fmt.Errorf("the screenshot script failed (exit code %d): %s", resp.ExitCode, strings.TrimSpace(resp.OutputTail)))
 	}
@@ -97,11 +93,41 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// leaseDevices reads the lease's devices from the server.
-func (l *lease) leaseDevices() []string {
-	var pl protocol.Lease
-	if err := l.api.Do(context.Background(), "GET", "/v1/leases/"+l.st.LeaseID, nil, &pl); err != nil {
-		return nil
+// screenOf selects the screen of a screenshot: the --tool value, or the only
+// screen of the lease.
+func screenOf(started []protocol.StartedTool, flag string) (string, string, error) {
+	var names []string
+	for _, st := range started {
+		for _, o := range st.Options {
+			names = append(names, st.Name+":"+o)
+		}
+		if len(st.Options) == 0 {
+			names = append(names, st.Name)
+		}
 	}
-	return pl.Devices
+	if len(started) == 0 {
+		return "", "", errors.New("the lease has no screen tool; acquire one with a screen tool (\"hostel tools\" lists them) for screenshots")
+	}
+	if flag == "" {
+		if len(names) > 1 {
+			return "", "", fmt.Errorf("the lease has several screens; select one with --tool (%s)", strings.Join(names, ", "))
+		}
+		return started[0].Name, strings.Join(started[0].Options, ""), nil
+	}
+	e, err := config.ParseToolEntry(flag)
+	if err != nil {
+		return "", "", err
+	}
+	i := slices.IndexFunc(started, func(st protocol.StartedTool) bool { return st.Name == e.Name })
+	switch {
+	case i < 0:
+		return "", "", fmt.Errorf("the lease has no screen tool %s; screens: %s", e.Name, strings.Join(names, ", "))
+	case e.Option != "" && !slices.Contains(started[i].Options, e.Option):
+		return "", "", fmt.Errorf("%s is not a screen of the lease; screens: %s", flag, strings.Join(names, ", "))
+	case e.Option == "" && len(started[i].Options) > 1:
+		return "", "", fmt.Errorf("%s has several screens in the lease; select one with --tool (%s)", e.Name, strings.Join(names, ", "))
+	case e.Option == "":
+		return e.Name, strings.Join(started[i].Options, ""), nil
+	}
+	return e.Name, e.Option, nil
 }

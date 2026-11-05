@@ -91,7 +91,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		// alone), so they are calculated only for the answer.
 		for i, l := range leases {
 			if l.State == protocol.LeaseQueued {
-				st.Leases[i].EstimatedWaitSeconds = s.leaseWait(ctx, l)
+				st.Leases[i].EstimatedWaitSeconds, _ = s.leaseWait(ctx, l)
 			}
 		}
 		writeJSON(w, http.StatusOK, st)
@@ -103,7 +103,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // order of the status leases.
 func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Status, []store.Lease, error) {
 	lc := s.live.Load()
-	out := protocol.Status{ServerID: lc.cfg.ServerID, Machines: []protocol.MachineStatus{}, Rooms: []protocol.RoomStatus{}, Leases: []protocol.LeaseStatus{}}
+	out := protocol.Status{ServerID: lc.cfg.ServerID, Machines: []protocol.MachineStatus{}, Rooms: []protocol.RoomStatus{}, Leases: []protocol.LeaseStatus{},
+		Warning: lc.warning}
 	if tok.UserID != 0 {
 		out.User, out.Role = tok.Name, tok.Role
 	}
@@ -127,7 +128,7 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 		return out, nil, err
 	}
 	for _, room := range rooms {
-		out.Rooms = append(out.Rooms, roomStatus(room, slots, rts))
+		out.Rooms = append(out.Rooms, roomStatus(lc.cfg, room, slots, rts))
 	}
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
@@ -151,18 +152,20 @@ func machineStatus(m *config.Machine) protocol.MachineStatus {
 		MaxRooms: *m.MaxRooms, Connect: m.Connect}
 }
 
-func roomStatus(room store.Room, slots []store.Slot, rts []store.RoomTool) protocol.RoomStatus {
+func roomStatus(cfg *config.Server, room store.Room, slots []store.Slot, rts []store.RoomTool) protocol.RoomStatus {
 	rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
 		OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
-		Slots: []protocol.SlotStatus{}, Tools: []string{}, Deadline: room.ProviderDeadline}
+		Slots: []protocol.SlotStatus{}, Tools: []protocol.InventoryTool{}, Deadline: room.ProviderDeadline}
 	for _, sl := range slots {
 		if sl.RoomID == room.ID {
 			rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
 		}
 	}
 	for _, rt := range rts {
-		if rt.RoomID == room.ID && rt.State == store.ToolReady {
-			rs.Tools = append(rs.Tools, rt.Tool)
+		if rt.RoomID == room.ID {
+			t := cfg.Tools[rt.Tool]
+			rs.Tools = append(rs.Tools, protocol.InventoryTool{Name: rt.Tool, Options: nonNil(splitOptions(rt.Option)), State: rt.State,
+				Env: nonNil(rt.Env), Screen: t != nil && t.Screen})
 		}
 	}
 	if room.State == protocol.RoomBroken && room.BrokenReason == reasonUnreachable {
@@ -179,7 +182,7 @@ func roomStatus(room store.Room, slots []store.Slot, rts []store.RoomTool) proto
 
 func leaseStatus(l store.Lease, users map[int64]string) protocol.LeaseStatus {
 	return protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
-		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
+		Tools: nonNil(l.Tools), Started: nonNilStarted(l.Started), Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
 		Repo: l.Repo, Branch: l.Branch, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
 		ReadyAt: l.ReadyAt, ExpiresAt: l.ExpiresAt}
 }

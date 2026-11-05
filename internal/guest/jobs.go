@@ -187,7 +187,6 @@ func reportJob(res jobResult, asJSON bool, stdout, stderr io.Writer) int {
 // argument runs with sh -c; several arguments run without a shell.
 func Run(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel run", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	detach := fs.Bool("detach", false, "start the job and print its ID")
 	wait := fs.Duration("wait", 100*time.Second, "time to stream the output before returning")
 	asJSON := fs.Bool("json", false, "print the result as JSON on stdout (the job output goes to stderr)")
@@ -199,7 +198,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel: usage: hostel run [--detach] [--wait 100s] -- <command>")
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -245,7 +244,6 @@ func (l *lease) saveOffset(id string, res jobResult) error {
 // Attach is "hostel attach <job> [--wait 100s] [--json]".
 func Attach(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel attach", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	wait := fs.Duration("wait", 100*time.Second, "time to stream the output before returning")
 	asJSON := fs.Bool("json", false, "print the result as JSON on stdout (the job output goes to stderr)")
 	pos, err := cli.Parse(fs, args)
@@ -253,7 +251,7 @@ func Attach(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel: usage: hostel attach <job> [--wait 100s]")
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -274,11 +272,10 @@ func Attach(args []string, stdout, stderr io.Writer) int {
 // Jobs is "hostel jobs".
 func Jobs(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel jobs", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -310,13 +307,12 @@ func Jobs(args []string, stdout, stderr io.Writer) int {
 // Stop is "hostel stop <job>".
 func Stop(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel stop", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 1 {
 		fmt.Fprintln(stderr, "hostel: usage: hostel stop <job>")
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}

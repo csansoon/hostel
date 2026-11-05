@@ -51,10 +51,11 @@ func (s *Server) expire(ctx context.Context, leases []store.Lease) error {
 	return nil
 }
 
-// medianDuration returns the median of the last 50 lease durations of a
-// platform, or the fallback when there are none.
-func (s *Server) medianDuration(ctx context.Context, platform string, fallback time.Duration) time.Duration {
-	ds, err := s.store.RecentDurations(ctx, platform, 50)
+// medianDuration returns the median of the last 50 lease durations on the
+// machines (or, with a tool, of the leases that asked for it), or the
+// fallback when there are none.
+func (s *Server) medianDuration(ctx context.Context, machines []string, tool string, fallback time.Duration) time.Duration {
+	ds, err := s.store.RecentDurations(ctx, machines, tool, 50)
 	if err != nil || len(ds) == 0 {
 		return fallback
 	}
@@ -62,14 +63,14 @@ func (s *Server) medianDuration(ctx context.Context, platform string, fallback t
 	return ds[len(ds)/2]
 }
 
-// estimatedWait is position × median lease duration ÷ slots on candidate
-// machines (design, section 5). It is an estimate.
-func (s *Server) estimatedWait(ctx context.Context, platform string, position, slots int) time.Duration {
+// estimatedWait is position × the median lease duration on the candidate
+// machines ÷ their slots (design, section 5). It is an estimate.
+func (s *Server) estimatedWait(ctx context.Context, machines []string, position, slots int) time.Duration {
 	if position <= 0 {
 		return 0
 	}
 	if slots <= 0 {
 		slots = 1
 	}
-	return time.Duration(position) * s.medianDuration(ctx, platform, 15*time.Minute) / time.Duration(slots)
+	return time.Duration(position) * s.medianDuration(ctx, machines, "", 15*time.Minute) / time.Duration(slots)
 }

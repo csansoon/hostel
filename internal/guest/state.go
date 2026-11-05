@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,20 +71,24 @@ func (r *Repo) RepoConfig() (*config.Repo, error) {
 
 func (r *Repo) stateRoot() string { return filepath.Join(r.GitDir, "hostel") }
 
-// State is the local state of one lease: $(git rev-parse --git-dir)/hostel/<platform>/.
+// State is the local state of the worktree's lease (one lease for each
+// worktree): $(git rev-parse --git-dir)/hostel/lease/.
 type State struct {
 	Dir string `json:"-"`
 
-	LeaseID  string `json:"lease_id"`
-	Platform string `json:"platform"`
+	LeaseID string `json:"lease_id"`
+	// Tools is the request.
+	Tools []string `json:"tools"`
 	// Root is the repository root; the port process reads .env there.
-	Root     string   `json:"root"`
-	Task     string   `json:"task"`
-	Priority string   `json:"priority"`
-	Devices  []string `json:"devices"`
-	Require  []string `json:"require"`
-	Fresh    bool     `json:"fresh"`
-	Final    bool     `json:"final"`
+	Root     string `json:"root"`
+	Task     string `json:"task"`
+	Priority string `json:"priority"`
+	Fresh    bool   `json:"fresh"`
+	Final    bool   `json:"final"`
+	// Machine ("<provider>/<machine>") and Started, the screen tools that
+	// started for the lease, come from the server when the lease is ready.
+	Machine string                 `json:"machine,omitempty"`
+	Started []protocol.StartedTool `json:"started,omitempty"`
 	// Step is the last acquire step that finished.
 	Step   string           `json:"step"`
 	Access *protocol.Access `json:"access,omitempty"`
@@ -108,9 +113,20 @@ const (
 func (s *State) path() string    { return filepath.Join(s.Dir, "lease.json") }
 func (s *State) KeyPath() string { return filepath.Join(s.Dir, "id_ed25519") }
 
-// LoadState reads the state of a platform; ok is false if there is none.
-func (r *Repo) LoadState(platform string) (*State, bool, error) {
-	return loadStateDir(filepath.Join(r.stateRoot(), platform))
+// LoadState reads the state of the worktree's lease; ok is false if there is
+// none.
+func (r *Repo) LoadState() (*State, bool, error) {
+	return loadStateDir(filepath.Join(r.stateRoot(), "lease"))
+}
+
+// leaseTools are the tools of the lease for hostel.toml: the requested ones
+// and the screen tools that started.
+func (s *State) leaseTools() []string {
+	out := slices.Clone(s.Tools)
+	for _, st := range s.Started {
+		out = append(out, st.Name)
+	}
+	return out
 }
 
 // Save writes the state with a temporary file and a rename.
@@ -160,47 +176,17 @@ func (s *State) signer() (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(data)
 }
 
-// SelectState returns the state of the lease that a command uses: the one of
-// --platform, or the only active lease of the worktree.
-func (r *Repo) SelectState(platform string) (*State, error) {
-	if platform != "" {
-		s, ok, err := r.LoadState(platform)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || s.Final {
-			return nil, fmt.Errorf("no active %s lease in this worktree; run \"hostel acquire %s --task ...\"", platform, platform)
-		}
-		return s, nil
-	}
-	des, err := os.ReadDir(r.stateRoot())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+// ActiveState returns the state of the worktree's lease, if it has not
+// ended.
+func (r *Repo) ActiveState() (*State, error) {
+	s, ok, err := r.LoadState()
+	if err != nil {
 		return nil, err
 	}
-	var active []*State
-	for _, de := range des {
-		if !de.IsDir() {
-			continue
-		}
-		s, ok, err := r.LoadState(de.Name())
-		if err != nil {
-			return nil, err
-		}
-		if ok && !s.Final {
-			active = append(active, s)
-		}
+	if !ok || s.Final {
+		return nil, errors.New("no active lease in this worktree; run \"hostel acquire [<tool>...] --task ...\"")
 	}
-	switch len(active) {
-	case 0:
-		return nil, errors.New("no active lease in this worktree; run \"hostel acquire <platform> --task ...\"")
-	case 1:
-		return active[0], nil
-	}
-	var names []string
-	for _, s := range active {
-		names = append(names, s.Platform)
-	}
-	return nil, fmt.Errorf("this worktree has several leases (%s); select one with --platform", strings.Join(names, ", "))
+	return s, nil
 }
 
 // currentBranch is the git branch of the worktree for the status (empty when

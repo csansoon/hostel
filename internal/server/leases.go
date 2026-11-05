@@ -1,12 +1,12 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,23 +78,8 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	// swap: the checks of the lease and its insert see one configuration.
 	s.schedMu.Lock()
 	defer s.schedMu.Unlock()
-	t := s.config().Tools[req.Platform]
-	if t == nil && !config.IsOSName(req.Platform) {
-		writeError(w, http.StatusUnprocessableEntity, protocol.CodeUnknownPlatform,
-			fmt.Sprintf("unknown tool %q; run \"hostel platforms\" for the list", req.Platform))
-		return
-	}
-	if len(req.RequiredLabels) > 0 {
-		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine,
-			"labels are gone since M10e: ask for tools instead (for example macos-desktop or windows-desktop); run \"hostel update\"")
-		return
-	}
-	options, code, msg := []string{}, "", ""
-	if t != nil {
-		options, code, msg = checkOptions(t, req.Devices)
-	} else if len(req.Devices) > 0 {
-		code, msg = protocol.CodeUnknownDevice, fmt.Sprintf("%s is an OS; it has no options", req.Platform)
-	}
+	cfg := s.config()
+	tools, code, msg := checkLeaseTools(cfg, req.Tools)
 	if code != "" {
 		writeError(w, http.StatusUnprocessableEntity, code, msg)
 		return
@@ -120,15 +105,20 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", msg)
 		return
 	}
-	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Platform: req.Platform, Devices: options, Task: req.Task,
-		Priority: priority, RequiredLabels: []string{}, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
+	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Tools: tools, Task: req.Task,
+		Priority: priority, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
 		GuestHost: req.GuestHost, Repo: req.Repo, Worktree: req.Worktree, Branch: req.Branch}
 	if l.Tunnels == nil {
 		l.Tunnels = []protocol.TunnelRequest{}
 	}
-	sreq, _ := s.leaseRequest(l)
-	if len(scheduler.Candidates(s.schedMachines(), sreq)) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine, noMachineMessage(sreq))
+	view, err := s.loadToolView(r.Context())
+	if err != nil {
+		s.internalError(w, "read rooms", err)
+		return
+	}
+	machines := view.schedMachines()
+	if sreq := leaseRequest(cfg, l); len(scheduler.Candidates(machines, sreq)) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine, noMachineMessage(machines, sreq))
 		return
 	}
 	now := time.Now()
@@ -143,33 +133,6 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.apiLease(r, stored))
-}
-
-// checkOptions checks the options that a lease asks for of a tool, and gives
-// the first option of a screen tool when the lease names none.
-func checkOptions(t *config.Tool, options []string) ([]string, string, string) {
-	if len(t.Options) == 0 {
-		if len(options) > 0 {
-			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("the tool %s has no options", t.Name)
-		}
-		return []string{}, "", ""
-	}
-	if len(options) == 0 {
-		return []string{t.Options[0]}, "", ""
-	}
-	var out []string
-	for _, o := range options {
-		if !slices.Contains(t.Options, o) {
-			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("the tool %s has no option %q; options: %s", t.Name, o, strings.Join(t.Options, ", "))
-		}
-		if !slices.Contains(out, o) {
-			out = append(out, o)
-		}
-	}
-	if len(out) > t.MaxOptions {
-		return nil, protocol.CodeTooManyDevices, fmt.Sprintf("the tool %s allows at most %d options in one lease", t.Name, t.MaxOptions)
-	}
-	return out, "", ""
 }
 
 func checkTunnels(tunnels []protocol.TunnelRequest) string {
@@ -194,17 +157,6 @@ func checkTunnels(tunnels []protocol.TunnelRequest) string {
 		}
 	}
 	return ""
-}
-
-func noMachineMessage(r scheduler.Request) string {
-	msg := "no machine has " + r.Platform
-	if r.PoolTunnels > 0 {
-		msg += fmt.Sprintf(" and %d tunnel ports", r.PoolTunnels)
-	}
-	if r.Fresh {
-		msg += " on an on-demand machine (--fresh)"
-	}
-	return msg + "; run \"hostel platforms\" to see what exists"
 }
 
 // leaseFor reads a lease and checks that the token may use it.
@@ -329,11 +281,11 @@ func endState(l store.Lease) string {
 // the lease is ready.
 func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	out := protocol.Lease{ID: l.ID, State: l.State, Revision: l.Revision, Position: l.Position, Reason: l.Reason,
-		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority),
+		Tools: nonNil(l.Tools), Started: nonNilStarted(l.Started), Task: l.Task, Priority: protocol.PriorityName(l.Priority),
 		Provider: l.Provider, Machine: l.Machine, CreatedAt: l.CreatedAt, EndReason: l.EndReason,
 		PollTimeoutMS: s.config().PollTimeout.D().Milliseconds(), IdleTimeoutMS: s.config().IdleTimeout.D().Milliseconds()}
 	if l.State == protocol.LeaseQueued {
-		out.EstimatedWaitSeconds = s.leaseWait(r.Context(), l)
+		out.EstimatedWaitSeconds, out.WaitingBehind = s.leaseWait(r.Context(), l)
 	}
 	if l.State != protocol.LeaseReady {
 		return out
@@ -365,5 +317,23 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 		ExpiresAt:          l.ExpiresAt,
 		IdleExpiresAt:      l.LastActivityAt.Add(s.config().IdleTimeout.D()),
 	}
+	out.Access.Hardware, out.Access.Tools = s.roomFacts(r.Context(), room)
 	return out
+}
+
+func nonNilStarted(v []protocol.StartedTool) []protocol.StartedTool {
+	if v == nil {
+		return []protocol.StartedTool{}
+	}
+	return v
+}
+
+// roomFacts returns the hardware and the inventory of a room.
+func (s *Server) roomFacts(ctx context.Context, room store.Room) (*protocol.Hardware, []protocol.InventoryTool) {
+	rts, err := s.store.RoomTools(ctx)
+	if err != nil {
+		return nil, []protocol.InventoryTool{}
+	}
+	rs := roomStatus(s.config(), room, nil, rts)
+	return rs.Hardware, rs.Tools
 }

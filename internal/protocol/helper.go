@@ -38,6 +38,14 @@ type RunScriptRequest struct {
 	TimeoutSeconds int               `json:"timeout_seconds"`
 }
 
+// MiseInstallResponse is the output of "hostel room mise-install": the
+// result of the install, and the version of each machine-level mise tool
+// (tool name as in the configuration → versions, comma-separated).
+type MiseInstallResponse struct {
+	RunScriptResponse
+	Versions map[string]string `json:"versions,omitempty"`
+}
+
 // MiseInstallRequest is the input of "hostel room mise-install".
 type MiseInstallRequest struct {
 	TimeoutSeconds int  `json:"timeout_seconds"`
@@ -54,6 +62,8 @@ type RunScriptResponse struct {
 	// Missing is true when the tool has no script for this step and OS.
 	Missing  bool `json:"missing,omitempty"`
 	TimedOut bool `json:"timed_out,omitempty"`
+	// Facts are the names that a start script wrote to tool.env.
+	Facts []string `json:"facts,omitempty"`
 }
 
 // HelperError is the output of a helper command that fails.
@@ -61,13 +71,22 @@ type HelperError struct {
 	Error string `json:"error"`
 }
 
+// StartedTool is a screen tool that started for a lease: its options, and
+// the names of the facts that its start script wrote to tool.env.
+type StartedTool struct {
+	Name    string   `json:"name"`
+	Options []string `json:"options"`
+	Facts   []string `json:"facts,omitempty"`
+}
+
 // BeginRequest is the input of "hostel room begin".
 type BeginRequest struct {
 	LeaseID string `json:"lease_id"`
-	// Tool is the screen tool that starts for the lease (empty: none), and
-	// Options are its options.
-	Tool    string   `json:"tool"`
-	Options []string `json:"options"`
+	// Tools are the lease's tools with their options (HOSTEL_TOOLS).
+	Tools []string `json:"tools"`
+	// Started are the screen tools that start for the lease, in the order of
+	// their start.
+	Started []StartedTool `json:"started"`
 	// Exclusive: the lease holds the whole room (for example the desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
 }
@@ -75,12 +94,12 @@ type BeginRequest struct {
 // CleanupRequest is the input of "hostel room cleanup". It comes from the
 // database, so a repeated cleanup does not need lease.json.
 type CleanupRequest struct {
-	LeaseID string `json:"lease_id"`
-	// Tool is the screen tool that started for the lease (empty: none), and
-	// Options are its options.
-	Tool    string   `json:"tool"`
-	Options []string `json:"options"`
-	Ports   []int    `json:"ports"`
+	LeaseID string   `json:"lease_id"`
+	Tools   []string `json:"tools"`
+	// Started are the screen tools that started for the lease; their stop
+	// scripts run in reverse order.
+	Started []StartedTool `json:"started"`
+	Ports   []int         `json:"ports"`
 	// Exclusive: the lease held the whole room (its scripts may reset the
 	// desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
@@ -93,6 +112,16 @@ type CleanupRequest struct {
 // CleanupResponse lists the result of each cleanup step.
 type CleanupResponse struct {
 	Steps []CleanupStep `json:"steps"`
+	// Checks has the result of each check script (the inventory).
+	Checks []ToolCheck `json:"checks,omitempty"`
+}
+
+// ToolCheck is the result of a tool's check script: the option that its last
+// line reports, or the error.
+type ToolCheck struct {
+	Tool   string `json:"tool"`
+	Option string `json:"option,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 type CleanupStep struct {

@@ -796,6 +796,10 @@ func checkOldKeys(file string, data []byte, doc string) error {
 	return errors.Join(errs...)
 }
 
+// OldForm reports the keys of the configuration before M10e in a
+// configuration document, or nil.
+func OldForm(data []byte) error { return checkOldKeys("", data, "the configuration") }
+
 // isMachineOrProvider reports whether a key path is providers.<p> or
 // providers.<p>.machines.<m>.
 func isMachineOrProvider(path []string) bool {

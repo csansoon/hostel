@@ -67,6 +67,18 @@ func (h *helper) script(tool, step, slot string, args []string, reqEnv map[strin
 	if err != nil {
 		return resp, err
 	}
+	// Each start script writes its own facts to tool.env; the helper keeps
+	// the facts of the screen tools that started before it.
+	var earlier map[string]string
+	toolEnv := filepath.Join(dir, "tool.env")
+	if step == config.StepStart {
+		if earlier, err = readEnvFile(toolEnv); err != nil {
+			return resp, err
+		}
+		if err := os.Remove(toolEnv); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return resp, err
+		}
+	}
 	if timeout <= 0 {
 		timeout = 3 * time.Minute
 	}
@@ -101,7 +113,35 @@ func (h *helper) script(tool, step, slot string, args []string, reqEnv map[strin
 	case err != nil:
 		return resp, fmt.Errorf("run %s: %w", script, err)
 	}
+	if step == config.StepStart {
+		facts, err := readEnvFile(toolEnv)
+		if err != nil {
+			return resp, err
+		}
+		resp.Facts = sortedNames(facts)
+		mergeEnv(earlier, facts)
+		if err := writeEnvFile(toolEnv, earlier); err != nil {
+			return resp, err
+		}
+	}
 	return resp, nil
+}
+
+func sortedNames(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func writeEnvFile(path string, env map[string]string) error {
+	var b strings.Builder
+	for _, k := range sortedNames(env) {
+		b.WriteString(k + "=" + env[k] + "\n")
+	}
+	return writeFileAtomic(path, []byte(b.String()), 0o644)
 }
 
 // lastLine returns the last line of out that is not empty, without spaces at
@@ -113,7 +153,8 @@ func lastLine(out string) string {
 
 // scriptEnv builds the environment of a tool script: the room user's
 // environment, room-env.json (machine env, MISE_*, slot env), the tool
-// variables, the request env from the server, the paths, and tool.env for
+// variables, the request env from the server, the paths, the env and path of
+// the machine's software tools and of the tool itself, and tool.env for
 // screenshot and stop.
 func (h *helper) scriptEnv(tool, slot, step string, reqEnv map[string]string) ([]string, error) {
 	env := envMap(os.Environ())
@@ -134,10 +175,12 @@ func (h *helper) scriptEnv(tool, slot, step string, reqEnv map[string]string) ([
 		// a script that the server runs.
 		if l, err := h.readLease(slot); err == nil {
 			env["HOSTEL_LEASE_ID"] = l.LeaseID
-			env["HOSTEL_TOOLS"] = toolsEnv(l.Tool, l.Options)
+			env["HOSTEL_TOOLS"] = strings.Join(l.Tools, ",")
 			env["HOSTEL_EXCLUSIVE"] = exclusiveEnv(l.Exclusive)
-			if l.Tool == tool {
-				env["HOSTEL_TOOL_OPTIONS"] = strings.Join(l.Options, ",")
+			for _, st := range l.Started {
+				if st.Name == tool {
+					env["HOSTEL_TOOL_OPTIONS"] = strings.Join(st.Options, ",")
+				}
 			}
 		}
 	}
@@ -145,6 +188,9 @@ func (h *helper) scriptEnv(tool, slot, step string, reqEnv map[string]string) ([
 	// The machine-level mise tools are on the PATH of scripts.
 	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
 	mergeEnv(env, h.miseEnv(h.root, env, io.Discard))
+	if err := h.addToolEnv(env, map[string]bool{tool: true}); err != nil {
+		return nil, err
+	}
 	cache := filepath.Join(h.root, "cache")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return nil, err
@@ -165,6 +211,49 @@ func (h *helper) scriptEnv(tool, slot, step string, reqEnv map[string]string) ([
 	return envList(env), nil
 }
 
+// addToolEnv adds the env and path of the tools in hostel/tools (design,
+// section 8): of each software tool, and of the screen tools in screens.
+// {cache} is HOSTEL_CACHE_DIR, {home} the room user's home directory. The
+// tools are in name order; each tool's path entries go first on PATH in
+// their order.
+func (h *helper) addToolEnv(env map[string]string, screens map[string]bool) error {
+	des, err := os.ReadDir(h.toolsDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	home := filepath.Dir(h.root)
+	expand := func(v string) string {
+		v = strings.ReplaceAll(v, "{cache}", filepath.Join(h.root, "cache"))
+		return filepath.FromSlash(strings.ReplaceAll(v, "{home}", home))
+	}
+	var paths []string
+	for _, de := range des {
+		if !de.IsDir() || !config.ValidName(de.Name()) {
+			continue
+		}
+		t, err := h.toolInfo(de.Name())
+		if err != nil {
+			return fmt.Errorf("tool %s: %w", de.Name(), err)
+		}
+		if t.Screen && !screens[t.Name] {
+			continue
+		}
+		for _, k := range sortedNames(t.Env) {
+			env[envKey(k)] = expand(t.Env[k])
+		}
+		for _, p := range t.Path {
+			paths = append(paths, expand(p))
+		}
+	}
+	if len(paths) > 0 {
+		env[envKey("PATH")] = strings.Join(append(paths, env[envKey("PATH")]), string(os.PathListSeparator))
+	}
+	return nil
+}
+
 func (h *helper) readRoomEnv() (protocol.RoomEnv, error) {
 	var re protocol.RoomEnv
 	data, err := os.ReadFile(h.roomEnvPath())
@@ -178,22 +267,6 @@ func (h *helper) readRoomEnv() (protocol.RoomEnv, error) {
 		return re, fmt.Errorf("read room-env.json: %w", err)
 	}
 	return re, nil
-}
-
-// toolsEnv is HOSTEL_TOOLS: the lease's tools with their options, as
-// comma-separated "name" or "name:option" entries.
-func toolsEnv(tool string, options []string) string {
-	if tool == "" {
-		return ""
-	}
-	if len(options) == 0 {
-		return tool
-	}
-	entries := make([]string, len(options))
-	for i, o := range options {
-		entries[i] = tool + ":" + o
-	}
-	return strings.Join(entries, ",")
 }
 
 // exclusiveEnv is HOSTEL_EXCLUSIVE: "1" for a lease that holds the whole room
@@ -282,8 +355,8 @@ func (t *tailBuffer) String() string { return string(t.b) }
 // miseInstall installs the machine-level tools of hostel/mise/config.toml and,
 // with agent_device, agent-device and its Node (server only): mise-install, with
 // a MiseInstallRequest on stdin.
-func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error) {
-	var resp protocol.RunScriptResponse
+func (h *helper) miseInstall(stdin io.Reader) (protocol.MiseInstallResponse, error) {
+	var resp protocol.MiseInstallResponse
 	var req protocol.MiseInstallRequest
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
@@ -332,7 +405,44 @@ func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error
 			return resp, err
 		}
 	}
+	if resp.Versions, err = h.miseVersions(ctx, env); err != nil {
+		return resp, err
+	}
 	return resp, h.writeAgentDevice(req.AgentDevice, node)
+}
+
+// miseVersions returns the installed versions of the machine-level mise
+// tools: tool name as in the configuration → versions, comma-separated.
+func (h *helper) miseVersions(ctx context.Context, env []string) (map[string]string, error) {
+	cmd := exec.CommandContext(ctx, h.misePath(), "ls", "--current", "--json")
+	cmd.Dir, cmd.Env = h.root, env
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("list the mise tools: %v: %s", err, strings.TrimSpace(errb.String()))
+	}
+	var list map[string][]struct {
+		Version   string `json:"version"`
+		Installed bool   `json:"installed"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &list); err != nil {
+		return nil, fmt.Errorf("list the mise tools: %w", err)
+	}
+	versions := map[string]string{}
+	for name, entries := range list {
+		// The configuration names the JDK "jdk"; mise names it "java".
+		if name == "java" {
+			name = "jdk"
+		}
+		var vs []string
+		for _, e := range entries {
+			if e.Installed && e.Version != "" {
+				vs = append(vs, e.Version)
+			}
+		}
+		versions[name] = strings.Join(vs, ",")
+	}
+	return versions, nil
 }
 
 // writeAgentDevice writes hostel/bin/agent-device, which runs the pinned

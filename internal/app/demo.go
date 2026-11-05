@@ -88,16 +88,16 @@ func newDemoServer() *demoServer {
 	}
 	d.rooms = []protocol.RoomStatus{
 		{ID: 1, Name: "home-macbook", Provider: "home", Machine: "macbook", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Tools: []string{"ios", "android", "macos"}, Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
+			Tools: inventory("ios", "android", "macos"), Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}, {Name: "slot-2", State: protocol.SlotFree}}},
 		{ID: 2, Name: "home-win", Provider: "home", Machine: "win", OS: "windows", Arch: "amd64", State: protocol.RoomRunning,
-			Tools: []string{"windows"}, Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
+			Tools: inventory("windows"), Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
 		{ID: 3, Name: "office-mini", Provider: "office", Machine: "mini", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Tools: []string{"ios", "macos"}, Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
+			Tools: inventory("ios", "macos"), Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
 		{ID: 4, Name: "lab-linux", Provider: "lab", Machine: "linux", OS: "linux", Arch: "amd64", State: protocol.RoomBroken,
-			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Tools: []string{"linux", "android"},
+			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Tools: inventory("linux", "android"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotBroken}}},
 	}
 	d.nextID = 10
@@ -115,10 +115,19 @@ func newDemoServer() *demoServer {
 	return d
 }
 
+// inventory is a room inventory with these tools.
+func inventory(tools ...string) []protocol.InventoryTool {
+	var out []protocol.InventoryTool
+	for _, t := range tools {
+		out = append(out, protocol.InventoryTool{Name: t, State: "ready"})
+	}
+	return out
+}
+
 func (d *demoServer) newLease(user, platform, task, prio string, created time.Time) *protocol.LeaseStatus {
 	d.nextID++
 	repo := "github.com/example/app"
-	return &protocol.LeaseStatus{ID: "lease-" + strconv.Itoa(d.nextID), Platform: platform, Task: task, Priority: prio,
+	return &protocol.LeaseStatus{ID: "lease-" + strconv.Itoa(d.nextID), Tools: []string{platform}, Task: task, Priority: prio,
 		User: user, Guest: user + "-laptop", Repo: repo, Branch: strings.ReplaceAll(task, " ", "-"), CreatedAt: created}
 }
 
@@ -244,7 +253,7 @@ func (d *demoServer) schedule(now time.Time) bool {
 		placed := false
 		for ri := range d.rooms {
 			r := &d.rooms[ri]
-			if !freeSlot(*r, l.Platform) {
+			if !freeSlot(*r, l.Tools[0]) {
 				continue
 			}
 			for si := range r.Slots {
@@ -260,11 +269,11 @@ func (d *demoServer) schedule(now time.Time) bool {
 		}
 		if !placed {
 			ns := d.machines[4]
-			if slices.Contains(ns.Tools, l.Platform) && len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
+			if slices.Contains(ns.Tools, l.Tools[0]) && len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
 				d.nextID++
 				name := "ns-linux-" + strconv.Itoa(d.nextID)
 				d.rooms = append(d.rooms, protocol.RoomStatus{ID: int64(d.nextID), Name: name, Provider: "ns", Machine: "linux", OS: "linux", Arch: "amd64",
-					State: protocol.RoomProvisioning, Tools: ns.Tools, Deadline: now.Add(2 * time.Hour),
+					State: protocol.RoomProvisioning, Tools: inventory(ns.Tools...), Deadline: now.Add(2 * time.Hour),
 					Hardware: &protocol.Hardware{CPU: "AMD EPYC", Cores: 8, MemoryBytes: 16 << 30, OSVersion: "Ubuntu 24.04"},
 					Slots:    []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotLeased, LeaseID: l.ID}}})
 				d.readyAt[name] = now.Add(8 * time.Second)
@@ -300,12 +309,13 @@ func (d *demoServer) ordered() []protocol.LeaseStatus {
 func (d *demoServer) positions(now time.Time) {
 	n := map[string]int{}
 	for _, q := range d.ordered() {
-		n[q.Platform]++
+		tool := q.Tools[0]
+		n[tool]++
 		for i := range d.leases {
 			if d.leases[i].ID == q.ID {
-				d.leases[i].Position = n[q.Platform]
-				d.leases[i].EstimatedWaitSeconds = d.wait(q.Platform, now) + (n[q.Platform]-1)*300
-				d.leases[i].Reason = "every room for " + q.Platform + " is in use"
+				d.leases[i].Position = n[tool]
+				d.leases[i].EstimatedWaitSeconds = d.wait(tool, now) + (n[tool]-1)*300
+				d.leases[i].Reason = "every room for " + tool + " is in use"
 			}
 		}
 	}
@@ -315,7 +325,7 @@ func (d *demoServer) positions(now time.Time) {
 func (d *demoServer) wait(platform string, now time.Time) int {
 	best := -1
 	for _, l := range d.leases {
-		if l.State == protocol.LeaseQueued || !slices.Contains(d.room(l.RoomID).Tools, platform) {
+		if l.State == protocol.LeaseQueued || !roomHas(*d.room(l.RoomID), platform) {
 			continue
 		}
 		s := int(d.endAt[l.ID].Sub(now).Seconds()) + 120
@@ -331,15 +341,15 @@ func (d *demoServer) status() protocol.Status {
 		Machines: slices.Clone(d.machines), Rooms: slices.Clone(d.rooms), Leases: slices.Clone(d.leases)}
 }
 
-func (d *demoServer) platforms() []protocol.Platform {
+func (d *demoServer) platforms() []protocol.Tool {
 	st := d.status()
-	var out []protocol.Platform
+	var out []protocol.Tool
 	for _, p := range demoPlatforms {
-		pl := protocol.Platform{Name: p.name, Kind: "device", Description: p.desc, Devices: p.devices, MaxDevices: len(p.devices),
+		pl := protocol.Tool{Name: p.name, Screen: len(p.devices) > 0, Description: p.desc, Options: p.devices, MaxOptions: len(p.devices),
 			TypicalLeaseSeconds: int(p.typical.Seconds())}
 		for _, ms := range d.machines {
 			if slices.Contains(ms.Tools, p.name) {
-				pl.Machines = append(pl.Machines, ms.Key)
+				pl.Machines = append(pl.Machines, protocol.ToolMachine{Key: ms.Key, OS: ms.OS, Online: true})
 			}
 		}
 		for _, r := range d.rooms {
@@ -347,8 +357,8 @@ func (d *demoServer) platforms() []protocol.Platform {
 				pl.FreeSlots++
 			}
 		}
-		pl.Queue = len(queued(st, p.name))
-		if pl.Queue > 0 {
+		pl.Waiting = len(queued(st, p.name))
+		if pl.Waiting > 0 {
 			pl.EstimatedWaitSeconds = d.wait(p.name, time.Now())
 		}
 		out = append(out, pl)
@@ -392,8 +402,8 @@ func (d *demoServer) Do(ctx context.Context, method, path string, in, out any) e
 	switch {
 	case method == "GET" && route == "/v1/status":
 		v = d.status()
-	case method == "GET" && route == "/v1/platforms":
-		v = d.platforms()
+	case method == "GET" && route == "/v1/tools":
+		v = protocol.Tools{Tools: d.platforms()}
 	case method == "GET" && route == "/v1/info":
 		v = protocol.Info{Version: "v0.2.0"}
 	case method == "GET" && route == "/v1/me":
