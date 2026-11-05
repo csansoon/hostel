@@ -253,6 +253,12 @@ during network I/O: read the state, do the I/O, then write the result with a
 compare-and-set. Each worker step is idempotent, so a worker can repeat it after a
 restart.
 
+`leases.started` holds the screen tools that started, each with its options
+and the names of its `tool.env` facts; the server adds each one after its
+`start` succeeded. "Waiting behind N" is not a column: the server keeps the
+result of the last scheduler pass in memory (a change of it also changes the
+position, so the revision rule below holds).
+
 **Revision.** A change of a lease's state, reason, or queue position increments
 `revision`. The scheduler stores `position` in the lease row and writes it only when
 it changes. The estimated wait is computed at each response and does not change the
@@ -859,7 +865,9 @@ Contract:
   `HOSTEL_LEASE_ID`, not `HOSTEL_LEASE`: screen processes that `start` starts are
   therefore not stopped by cleanup step 1, and `stop` can shut them down cleanly.
 - **Tool facts.** `start` writes them to `tool.env`. Each tool documents its
-  variable names in its `GUIDE.md`.
+  variable names in its `GUIDE.md`. A `start` script may replace the file: the
+  helper keeps the facts of the screen tools that started before it and
+  reports the names that the script wrote (`run-script` output `facts`).
 - Before the `install` scripts, the server runs `mise install` for the machine's
   mise tools (helper `mise-install`, at each room provisioning), so scripts can
   use them: the helper adds `hostel/bin` and the output of `mise env --json` (in
@@ -1337,10 +1345,11 @@ a connection, commands that need the server exit with 78 and print how to connec
 
 The command is resumable. Each step records its result in the local state.
 
-1. If the state has a lease that is not final, continue it. If `--task`,
-   `--priority`, or the tools differ, print a warning and continue the existing
-   lease (release it first to change them). If the stored lease is final, start a
-   new one.
+1. If the state has a lease that is not final, continue it. If tools on the
+   command line differ from the lease's tools, fail at once (one lease per
+   worktree, "Local state" above). If `--task`, `--priority`, or `--fresh`
+   differ, print a warning and continue the existing lease (release it first
+   to change them). If the stored lease is final, start a new one.
 2. Read `hostel.toml`. The tools are the arguments, else `tools` of
    `hostel.toml`, else none (any machine). Generate an ed25519 key pair for the
    lease.
@@ -2113,7 +2122,13 @@ Privilege escalation to root on a room stays out of scope.
   (`FAKE_CAN_STOP`), and access through a proxy command (`FAKE_PROXY`). A lock
   file for each name makes `provision` idempotent when a killed server's call
   still runs.
-- The test tools in `test/tools/`: `fake-sdk` (software; `check` prints a
+- The harness gives a test server the test tools at its first start: it
+  starts the server with the local keys of `server.toml`, pushes the tools
+  (`hostel config tools push`), and then applies the providers and machines
+  (`hostel config apply`). A test that checks the import of `server.toml`
+  uses no test tools.
+- The test tools in `test/tools/`: `fake-desktop` (a screen tool with
+  `whole_machine = true`), `fake-sdk` (software; `check` prints a
   version) and `fake-screen` (a screen tool with `needs = ["fake-sdk"]` and the
   options `option-a`, `option-b`, `option-c`, `max_options = 2`; its scripts
   simulate a screen: they write

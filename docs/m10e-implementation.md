@@ -377,30 +377,38 @@ later milestone:
 - **The owner's own server** needs a new configuration at the update (section
   8).
 
-## 13. State after phase 2
+## 13. State after phases 3 and 4
 
-Phase 2 built the tool definitions, the configuration, the checks, the tool
-revisions, the inventory table (`room_tools`), and `hostel config tools`. Rooms
-install and check the defined tools of their machine and write the inventory.
-Until phases 3 to 6, these parts keep a temporary form:
+Phases 3 and 4 built the lease model with tools (migration 011:
+`leases.tools`, `leases.started`), the start of each screen tool and its
+needs in the order of needs (stop in reverse order, only for what started),
+the `env` and `path` of `tool.toml` in scripts and leases, the inventory
+(also mise tool versions, updates at cleanup, removal of tools that a machine
+no longer lists), candidates by tools and options, one waiting line with
+"waiting behind N", `GET /v1/tools`, `POST /v1/leases` with `tools` (R4: HTTP
+422, exit code 69), the lease facts, the warning for a stored configuration of
+the old form, and the minimum guest version v0.3.0 (the M10e release must be
+v0.3.0 or later). The guest has the minimum of phase 5: `acquire
+[<tool[:option]>...]` (one lease per worktree, `hostel.toml` `tools` as the
+default), the lease facts at ready, `hostel info`, `hostel tools [name]
+[--json]`, `screenshot --tool`, and `hostel status` by the waiting line. The E2E
+tests use the test tools `fake-sdk`, `fake-screen`, and `fake-desktop`
+(`whole_machine`, instead of the label `desktop`).
 
-- **A lease names one tool or an OS.** `leases.platform` and `devices` (and the
-  API fields `platform`, `devices`) hold one defined tool and its options, or an
-  OS for no tool (`server/schedule.go` `leaseRequest`, `server/leaseworker.go`
-  `leaseTool`, `startTool`). `required_labels` gets HTTP 422.
-  `GET /v1/platforms` lists each defined tool and each OS (kinds `tool`,
-  `screen`, `os`). Phase 4: `tools` in the lease, `GET /v1/tools`.
-- **Scheduler.** `Request.Platform` and `PlatformOS`; one queue for each
-  "platform" in `Order` and in `store.MoveLease`; no option filter against the
-  inventory. Phase 4.
-- **Rooms.** Only the requested screen tool starts (not its needs); the helper
-  requests have `tool` and `options`, not `tools` and `started`; the `env` and
-  `path` of `tool.toml` do not reach scripts and leases yet; the cleanup check
-  does not update the inventory; the mise tool versions are not in the
-  inventory; tools that a machine no longer lists stay in `hostel/tools/`.
-  Phase 3.
-- **Guest and app.** `acquire <platform> --device`; `hostel.toml` `tools` give
-  only the default options; the agent guide (`guest/info.go`) is the old text;
-  the app's demo data uses the old names. Phases 5 and 6.
-- **E2E tests** still use the old platform names; phase 4 moves them to the
-  test tools `fake-sdk` and `fake-screen`.
+What remains:
+
+- **Phase 5 (guest).** The agent guide (`internal/guest/info.go`) is the old
+  text (platforms, `--device`, `--require`); it must come from the `GUIDE.md`
+  files. The skills and the README. The last line of `hostel tools` names the
+  repository's mise tools in general words only (the server does not know the
+  repository). `install.sh --server` still copies the platform scripts, and a
+  `server.toml` with `platforms_dir` (written by it before M10e) stops the
+  server at start: make the key a warning, or tell the owner to delete it.
+- **Phase 6 (app).** The Lobby shows the tools of `GET /v1/tools` in the
+  simplest way (the tool page still says "Devices" for the options); the
+  machine page shows the configured tools, not the inventory; the demo data
+  uses the old names (ios, android, macos, windows, linux) as tool names.
+- **Estimated wait.** It is (waiting behind + 1) × the median lease time on the
+  candidate machines ÷ their slots, without the creation time of a new room.
+- **Smoke tests** (real machines) are moved to the tools (`macos-desktop`,
+  `windows-desktop`, a lease without tools) but did not run.

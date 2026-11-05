@@ -67,7 +67,7 @@ func TestSmokeNamespaceDesktop(t *testing.T) {
 	e, s, prefix := namespaceDevboxSmoke(t, `warm_running = "10m"`, `
 [providers.ns.machines.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
-labels = ["desktop"]
+tools = ["macos-desktop"]
 max_lifetime = "3h"
 `, true)
 	e.newRepo(map[string]string{"main.swift": smokeMacApp})
@@ -75,7 +75,7 @@ max_lifetime = "3h"
 	acquire := func() string {
 		start := time.Now()
 		for {
-			r := e.hostel("acquire", "macos", "--require", "desktop", "--task", "desktop smoke test", "--wait", "1m")
+			r := e.hostel("acquire", "macos-desktop", "--task", "desktop smoke test", "--wait", "1m")
 			if r.code == 0 {
 				t.Logf("lease ready after %s", time.Since(start).Round(time.Second))
 				for _, room := range s.status().Rooms {
