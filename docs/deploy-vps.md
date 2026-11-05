@@ -48,7 +48,7 @@ sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 ```
 
 `/opt/hostel/bin/hostel` is the server binary, `/opt/hostel/helpers` gets the
-binaries for all rooms, and `/opt/hostel/platforms` the platform scripts. The
+binaries for all rooms, and `/opt/hostel/tools` the tool scripts. The
 service's user (`exedev`) owns `/opt/hostel`, so that an admin can update the
 server from the app (Front desk › Update the server) or with `hostel server
 update --remote`; the server then starts again by itself. On the VM,
@@ -92,10 +92,11 @@ helper_dir = "/opt/hostel/helpers"
 - `helper_dir` has the binaries for the rooms (`hostel-*`, `mise-*`); the server
   also serves them to machines that join (section 6).
 
-Since M9, the providers, machines, settings, and platforms are in the server's
+Since M9, the providers, machines, and settings are in the server's
 database: an admin changes them from their own computer (section 4.1) with
 `hostel config edit`, `hostel config rooms`, `hostel config providers`,
-`hostel config settings`, and `hostel config platforms`. A server from before
+`hostel config settings`, and `hostel config tools` (since M10e; the default
+tools come with the binary). A server from before
 M9 imports them from `server.toml` at its first start (a copy stays in
 `server.toml.pre-m9`). After that import, each room provisions once more (the
 platform scripts get the same file modes on all servers).
