@@ -420,17 +420,21 @@ func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64,
 	return s.store.SetRoomTool(ctx, row)
 }
 
-// noMachineOption explains a check of a screen tool that reports options,
-// but none of the options that the machine lists: no lease can start the
-// tool on the room. It returns "" for any other check.
+// noMachineOption explains a check of a screen tool that reports none of the
+// options that the machine lists (also when it reports nothing): no lease can
+// start the tool on the room. It returns "" for any other check.
 func noMachineOption(cfg *config.Server, m *config.Machine, t *config.Tool, reported string) string {
 	listed := configuredHaves(cfg, m)[t.Name].Options
 	got := splitOptions(reported)
-	if !t.Screen || len(listed) == 0 || len(got) == 0 || slices.ContainsFunc(got, func(o string) bool { return slices.Contains(listed, o) }) {
+	if !t.Screen || len(listed) == 0 || slices.ContainsFunc(got, func(o string) bool { return slices.Contains(listed, o) }) {
 		return ""
 	}
+	what := "no option"
+	if len(got) > 0 {
+		what = strings.Join(got, ", ")
+	}
 	return fmt.Sprintf("%s check reported %s, none of the options of the machine (%s); repair the room to run install again",
-		t.Name, strings.Join(got, ", "), strings.Join(listed, ", "))
+		t.Name, what, strings.Join(listed, ", "))
 }
 
 // installTool runs the install script of a tool and then its check script,

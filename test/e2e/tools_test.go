@@ -553,8 +553,9 @@ func TestToolMachineOptions(t *testing.T) {
 	e.init()
 	a := e.startStaticRoom("a")
 	b := e.startStaticRoom("b")
+	c := e.startStaticRoom("c")
 	e.useTools("fake-sdk", "fake-screen")
-	e.writeTool("fake-screen", map[string]string{"check.linux.sh": "#!/bin/sh\necho \"${FAKE_CHECK_OPTIONS:-$HOSTEL_TOOL_ALL_OPTIONS}\"\n"})
+	e.writeTool("fake-screen", map[string]string{"check.linux.sh": "#!/bin/sh\n[ -z \"$FAKE_CHECK_EMPTY\" ] || exit 0\necho \"${FAKE_CHECK_OPTIONS:-$HOSTEL_TOOL_ALL_OPTIONS}\"\n"})
 	e.writeConfig(serverHeader() + `
 [providers.home]
 kind = "static"
@@ -569,6 +570,12 @@ address = "` + b.address() + `"
 os = "linux"
 tools = ["fake-screen:option-b"]
 env = { FAKE_CHECK_OPTIONS = "option-c" }
+
+[providers.home.machines.c]
+address = "` + c.address() + `"
+os = "linux"
+tools = ["fake-screen:option-b"]
+env = { FAKE_CHECK_EMPTY = "1" }
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	room := s.waitRoom("home/a", protocol.RoomRunning, roomReady)
@@ -581,6 +588,11 @@ env = { FAKE_CHECK_OPTIONS = "option-c" }
 	room = s.waitRoom("home/b", protocol.RoomBroken, roomReady)
 	if !strings.Contains(room.Reason, "fake-screen check reported option-c, none of the options of the machine (option-b)") {
 		t.Fatalf("home/b: %s", room.Reason)
+	}
+	// A check that reports nothing confirms no option either.
+	room = s.waitRoom("home/c", protocol.RoomBroken, roomReady)
+	if !strings.Contains(room.Reason, "fake-screen check reported no option, none of the options of the machine (option-b)") {
+		t.Fatalf("home/c: %s", room.Reason)
 	}
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
