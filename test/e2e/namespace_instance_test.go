@@ -229,8 +229,7 @@ func TestNamespaceInstanceLogin(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.useFakeNsc(map[string]string{"FAKE_LOGGED_OUT": "1"})
-	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + instanceMachine)
-	e.useTools("fake-sdk", "fake-screen")
+	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + strings.Replace(instanceMachine, "tools = [\"fake-screen\"]\n", "", 1))
 	r := e.hostel("server", "run")
 	if r.code != 1 || !strings.Contains(r.stderr, `providers.ns: the nsc CLI is not ready (install it and run "nsc login" as the server user)`) ||
 		!strings.Contains(r.stderr, "You are not logged in") {

@@ -239,8 +239,7 @@ func TestNamespaceLogin(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.useFakeDevbox(map[string]string{"FAKE_LOGGED_OUT": "1"})
-	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + devboxMachine)
-	e.useTools("fake-sdk", "fake-screen")
+	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + strings.Replace(devboxMachine, "tools = [\"fake-screen\"]\n", "", 1))
 	r := e.hostel("server", "run")
 	if r.code != 1 || !strings.Contains(r.stderr, `providers.ns: the devbox CLI is not ready (install it and run "devbox login" as the server user)`) ||
 		!strings.Contains(r.stderr, "not logged in; run devbox login") {

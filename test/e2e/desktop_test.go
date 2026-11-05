@@ -69,7 +69,7 @@ func TestDesktop(t *testing.T) {
 	f.waitSlotFree()
 	// A lease that does not hold the whole room must not use the desktop.
 	f.acquire()
-	if r := f.e.hostel("run", "--", "desktop true"); r.code != 127 || !strings.Contains(r.stdout, "needs a desktop lease") {
+	if r := f.e.hostel("run", "--", "desktop true"); r.code != 127 || !strings.Contains(r.stdout, "the desktop needs a lease with") {
 		t.Fatalf("desktop in a lease without the desktop: %s, want a refusal", r)
 	}
 	f.e.mustHostel("release")
