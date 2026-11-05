@@ -111,9 +111,9 @@ func (p *guestList) body(m *model) string {
 		b.WriteString("\n")
 	}
 	for i, u := range p.users {
-		role := mutedStyle.Render(u.Role)
+		role := mutedStyle.Render(clean(u.Role))
 		if u.Role == protocol.RoleAdmin {
-			role = fg(colBlue).Render(u.Role)
+			role = fg(colBlue).Render(clean(u.Role))
 		}
 		name := clean(u.Name)
 		if u.Name == m.st.User {

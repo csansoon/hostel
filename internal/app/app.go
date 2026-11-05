@@ -201,7 +201,7 @@ func (m *model) Init() tea.Cmd {
 	if m.c == nil {
 		return m.checkLatest()
 	}
-	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest(), nextCar())
+	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest(), m.startCars())
 }
 
 func (m *model) top() page { return m.pages[len(m.pages)-1] }

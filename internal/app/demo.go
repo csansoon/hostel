@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -23,7 +24,7 @@ import (
 // change the guest configuration.
 func RunDemo(version string, stdout io.Writer) error {
 	m := &model{version: version, demo: true}
-	m.guest, m.c = &config.Guest{Server: "demo.hostel.dev"}, newDemoServer()
+	m.guest, m.c = &config.Guest{Server: "demo.hostel.example"}, newDemoServer()
 	m.gen = 1
 	m.pages = []page{newMainMenu()}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
@@ -378,6 +379,11 @@ func (d *demoServer) Do(ctx context.Context, method, path string, in, out any) e
 			}
 		}
 	}
+	// Changes to people and repairs are not part of the demo world: say so
+	// instead of a success that changes nothing.
+	if method == "PATCH" || method == "DELETE" || strings.HasSuffix(route, "/repair") {
+		return errors.New("not available in the demo")
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var v any
@@ -407,8 +413,8 @@ func (d *demoServer) Do(ctx context.Context, method, path string, in, out any) e
 	case method == "POST" && route == "/v1/invites":
 		v = protocol.InviteResponse{Code: "hostel1-demo-not-a-real-code", ExpiresAt: now.Add(24 * time.Hour)}
 	case method == "POST" && route == "/v1/machines/invites":
-		v = protocol.MachineInviteResponse{Machine: "home/new", Code: "demo", Unix: "curl -fsSL https://demo.hostel.dev/v1/install.sh | sh -s -- demo",
-			Windows: "irm https://demo.hostel.dev/v1/install.ps1 | iex", ExpiresAt: now.Add(time.Hour)}
+		v = protocol.MachineInviteResponse{Machine: "home/new", Code: "demo", Unix: "curl -fsSL https://demo.hostel.example/v1/install.sh | sh -s -- demo",
+			Windows: "irm https://demo.hostel.example/v1/install.ps1 | iex", ExpiresAt: now.Add(time.Hour)}
 	case method == "POST" && parts[0] == "leases" && len(parts) == 3:
 		d.leaseAction(parts[1], parts[2], in)
 		d.positions(now)

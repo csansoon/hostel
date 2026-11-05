@@ -63,6 +63,8 @@ func (c car) gone(now time.Time) bool {
 }
 
 type street struct {
+	// on: the car timer runs (one chain, also after check out and in).
+	on   bool
 	cars []car
 	// lit are the windows of the neighbours that are lit (decoration).
 	lit []bool
@@ -70,6 +72,15 @@ type street struct {
 
 // carMsg brings the next car.
 type carMsg struct{}
+
+// startCars starts the car timer once.
+func (m *model) startCars() tea.Cmd {
+	if m.street.on {
+		return nil
+	}
+	m.street.on = true
+	return nextCar()
+}
 
 func nextCar() tea.Cmd {
 	d := time.Duration(rand.Int64N(int64(carMaxGap)))

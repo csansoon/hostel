@@ -44,9 +44,15 @@ func (e *env) startApp(home string, env ...string) *ptyApp {
 // startAppSized starts the app on a screen of cols columns.
 func (e *env) startAppSized(cols int, home string, env ...string) *ptyApp {
 	e.t.Helper()
+	return e.startAppArgs(cols, home, nil, env...)
+}
+
+// startAppArgs starts "hostel <args>" in the pseudo-terminal.
+func (e *env) startAppArgs(cols int, home string, args []string, env ...string) *ptyApp {
+	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	e.t.Cleanup(cancel)
-	cmd := exec.CommandContext(ctx, e.guestBin())
+	cmd := exec.CommandContext(ctx, e.guestBin(), args...)
 	cmd.Env = append([]string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir(), "TERM=xterm-256color"}, env...)
 	// The app reads the latest release in the background: only from the
 	// test's release source.
@@ -225,6 +231,29 @@ func TestAppCheckIn(t *testing.T) {
 	}
 	a.waitFor(time.Minute, `The server refused this computer's connection`, `▌ ⚿  Check in`)
 	a.quit()
+}
+
+// TestAppDemo: "hostel --demo" shows the app with made-up data and no
+// server: the main menu with its numbers, the Lobby, and a platform page. It
+// does not create a guest configuration, and Check out does nothing.
+func TestAppDemo(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	home := t.TempDir()
+	a := e.startAppArgs(appCols, home, []string{"--demo"})
+	a.waitFor(30*time.Second, `demo\.hostel\.example`, `▌ ⌂  Lobby\s+\S \d+ waiting`, `▦  Rooms\s+● \d+ vacant\s+◉ \d+ occupied`, `HOSTEL`)
+	a.in("\r")
+	a.waitFor(10*time.Second, `▌ ios\s+[●◉○]`, `android`, `windows`)
+	a.in("\r")
+	a.waitFor(10*time.Second, `MACHINES`, `WAITING LINE`, `DEVICES`, `iphone-17-pro`)
+	a.in("3")
+	a.waitFor(10*time.Second, `THIS SERVER`, `⏻  Check out`)
+	a.in("\x1b[B\x1b[B\x1b[B\r")
+	a.waitFor(10*time.Second, `Demo: check out does nothing here\.`)
+	a.quit()
+	if _, err := os.Stat(filepath.Join(home, ".config", "hostel")); !os.IsNotExist(err) {
+		t.Fatalf("the demo made a guest configuration directory: %v", err)
+	}
 }
 
 // TestAppLobby (M10b): the Lobby lists the platforms with their free

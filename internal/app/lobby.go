@@ -297,7 +297,11 @@ func (p *platformPage) canEnd(m *model, l protocol.LeaseStatus) bool {
 func (p *platformPage) keys(m *model) []binding {
 	ks := []binding{{"↑↓", "move"}, {"tab", "next section"}}
 	if p.onMachines {
-		return append(ks, binding{"enter", "open the machine"})
+		pl, _ := p.platform(m)
+		if ms, _ := p.selectedMachine(m, pl); len(ms) > 0 {
+			ks = append(ks, binding{"enter", "open the machine"})
+		}
+		return ks
 	}
 	q, sel := p.selected(m)
 	if sel >= 0 && p.canEnd(m, q[sel]) {

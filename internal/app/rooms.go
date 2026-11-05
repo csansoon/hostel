@@ -69,7 +69,7 @@ func (p *rooms) body(m *model) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	for gi, n := range names {
-		title := n
+		title := clean(n)
 		if groups[n][0].Kind != "static" {
 			title += " · on demand"
 		}
@@ -264,7 +264,7 @@ func (p *machinePage) body(m *model) string {
 	for _, r := range rms {
 		title := "Now"
 		if ms.Kind != "static" {
-			title = "Room " + r.Name + " · " + r.State
+			title = clean("Room " + r.Name + " · " + r.State)
 		}
 		b.WriteString(section(title, w, true) + p.roomInfo(r))
 	}

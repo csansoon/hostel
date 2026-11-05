@@ -15,7 +15,8 @@ import (
 // HOSTEL_NO_ANIMATION=1 turns the motion off.
 const (
 	glowTime = 1200 * time.Millisecond
-	frameGap = 100 * time.Millisecond
+	// frameGap is the step of the turning glyphs (spin).
+	frameGap = 150 * time.Millisecond
 	// carFrame is the frame gap while a car drives: smoother.
 	carFrame = 50 * time.Millisecond
 )
