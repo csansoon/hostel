@@ -10,12 +10,14 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// The motion of the app: a changed state glows for a moment, and states that
-// wait turn. Pages do not move (owner decision, 2026-11-05).
+// The motion of the app: a changed state glows for a moment, states that
+// wait turn, and cars pass on the main menu's street. Pages do not move (owner decision, 2026-11-05).
 // HOSTEL_NO_ANIMATION=1 turns the motion off.
 const (
 	glowTime = 1200 * time.Millisecond
 	frameGap = 100 * time.Millisecond
+	// carFrame is the frame gap while a car drives: smoother.
+	carFrame = 50 * time.Millisecond
 )
 
 type animState struct {
@@ -36,17 +38,25 @@ func (m *model) frame() tea.Cmd {
 		return nil
 	}
 	m.anim.ticking = true
-	return tea.Tick(frameGap, func(time.Time) tea.Msg { return frameMsg{} })
+	d := frameGap
+	if len(m.street.cars) > 0 {
+		d = carFrame
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg { return frameMsg{} })
 }
 
 func (m *model) onFrame() tea.Cmd {
 	m.anim.ticking = false
+	m.street.dropCars(time.Now())
 	return m.frame()
 }
 
 // moving reports a glow, or a state that turns (a lease that gets ready or
 // waits, a room that starts).
 func (m *model) moving() bool {
+	if len(m.street.cars) > 0 {
+		return true
+	}
 	for _, t := range m.anim.glow {
 		if time.Since(t) < glowTime {
 			return true

@@ -113,8 +113,9 @@ type model struct {
 	// keep is the text to print after quit (codes and commands to copy).
 	keep []string
 	// help shows all keys.
-	help bool
-	anim animState
+	help   bool
+	anim   animState
+	street street
 }
 
 // binding is a key and what it does, for the footer and the key list.
@@ -200,7 +201,7 @@ func (m *model) Init() tea.Cmd {
 	if m.c == nil {
 		return m.checkLatest()
 	}
-	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest())
+	return tea.Batch(m.pollStatus(""), m.readInfo(), m.checkLatest(), nextCar())
 }
 
 func (m *model) top() page { return m.pages[len(m.pages)-1] }
@@ -261,6 +262,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 	case frameMsg:
 		return m, m.onFrame()
+	case carMsg:
+		return m, m.onCar()
 	case statusMsg:
 		if msg.gen != m.gen {
 			return m, nil
