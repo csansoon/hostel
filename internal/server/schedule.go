@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
 	"slices"
 	"sort"
 	"time"
@@ -15,30 +14,27 @@ import (
 	"github.com/csansoon/hostel/internal/store"
 )
 
-// platformFiles returns the files of a platform directory that a room with
-// this OS gets. An OS platform without scripts for this OS gets nothing.
-func platformFiles(p *config.Platform, osName string) []string {
-	if p.Dir == "" || (p.Kind == config.KindOS && len(p.Scripts[osName]) == 0) {
+// toolFiles returns the files of a tool directory that a room with this OS
+// gets: tool.toml and the scripts for the OS (design, section 8).
+func toolFiles(t *config.Tool, osName string) []string {
+	if t.Dir == "" || !t.AvailableOn(osName) {
 		return nil
 	}
-	var files []string
-	if fileExists(p.Dir + "/platform.toml") {
-		files = append(files, "platform.toml")
-	}
-	for _, f := range p.Scripts[osName] {
+	files := []string{config.ToolFile}
+	for _, f := range t.Scripts[osName] {
 		files = append(files, f)
 	}
 	sort.Strings(files)
 	return files
 }
 
-// platformUploads hashes each platform directory for each OS.
-func platformUploads(cfg *config.Server) (map[string]map[string]roomops.Platform, error) {
-	out := map[string]map[string]roomops.Platform{}
-	for name, p := range cfg.Platforms {
-		out[name] = map[string]roomops.Platform{}
+// toolUploads hashes each tool directory for each OS.
+func toolUploads(cfg *config.Server) (map[string]map[string]roomops.Tool, error) {
+	out := map[string]map[string]roomops.Tool{}
+	for name, t := range cfg.Tools {
+		out[name] = map[string]roomops.Tool{}
 		for _, osName := range config.OSNames {
-			up, err := roomops.PlatformUpload(p.Dir, platformFiles(p, osName), osName)
+			up, err := roomops.ToolUpload(t.Dir, toolFiles(t, osName), osName)
 			if err != nil {
 				return nil, err
 			}
@@ -46,6 +42,40 @@ func platformUploads(cfg *config.Server) (map[string]map[string]roomops.Platform
 		}
 	}
 	return out, nil
+}
+
+// leaseRequest is what a lease asks the scheduler for. Until leases have a
+// list of tools (M10e phase 4), a lease's platform names one defined tool, or
+// an OS for no tool. ok is false when the tool is not in the configuration.
+func (s *Server) leaseRequest(l store.Lease) (req scheduler.Request, ok bool) {
+	t := s.config().Tools[l.Platform]
+	osOnly := t == nil && config.IsOSName(l.Platform)
+	if t == nil && !osOnly {
+		return req, false
+	}
+	return scheduler.Request{Platform: l.Platform, PlatformOS: osOnly, PoolTunnels: poolTunnels(l.Tunnels),
+		Fresh: l.Fresh, Exclusive: t != nil && t.WholeMachine}, true
+}
+
+// roomReady returns what a room is ready for: each tool of its machine whose
+// defined tools (the tool and its needs) the room has installed and checked
+// with the current files, and the room's OS.
+func roomReady(lc *liveConfig, rts []store.RoomTool, r store.Room, m *config.Machine) map[string]bool {
+	have := map[string]bool{}
+	for _, rt := range rts {
+		if rt.RoomID == r.ID && rt.State == store.ToolReady && rt.ScriptsSHA256 == lc.uploads[rt.Tool][m.OS].Hash {
+			have[rt.Tool] = true
+		}
+	}
+	ready := map[string]bool{m.OS: true}
+	for _, mt := range m.ToolList {
+		ok := true
+		for _, n := range lc.cfg.ToolClosure(mt.Name) {
+			ok = ok && have[n]
+		}
+		ready[mt.Name] = ok
+	}
+	return ready
 }
 
 func (s *Server) schedMachines() []scheduler.Machine {
@@ -59,9 +89,9 @@ func (s *Server) schedMachines() []scheduler.Machine {
 			}
 		}
 		out = append(out, scheduler.Machine{
-			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), OS: m.OS, Platforms: m.Platforms,
+			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), OS: m.OS, Tools: toolNames(m),
 			CanResume: lc.providers[m.Provider].Capabilities(m.Name).CanStop,
-			Labels:    m.Labels, PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
+			PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
 			MaxLease: m.MaxLease.D(), MaxLifetime: m.MaxLifetime.D(),
 		})
 	}
@@ -102,14 +132,13 @@ func (s *Server) schedule(ctx context.Context) error {
 		if l.State != protocol.LeaseQueued {
 			continue
 		}
-		p := s.config().Platforms[l.Platform]
-		if p == nil {
-			continue // removed while the lease was queued; it waits for the platform
+		req, ok := s.leaseRequest(l)
+		if !ok {
+			continue // removed while the lease was queued; it waits for the tool
 		}
 		byID[l.ID] = l
 		queued = append(queued, scheduler.Lease{ID: l.ID, Priority: l.Priority, ManualPosition: l.ManualPosition, CreatedAt: l.CreatedAt,
-			Request: scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS, Labels: l.RequiredLabels,
-				PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh, Exclusive: exclusive(p, l.RequiredLabels)}})
+			Request: req})
 	}
 	if len(queued) == 0 {
 		return nil
@@ -122,7 +151,7 @@ func (s *Server) schedule(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rps, err := s.store.RoomPlatforms(ctx)
+	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
 		return err
 	}
@@ -138,12 +167,8 @@ func (s *Server) schedule(ctx context.Context) error {
 		// A room whose machine settings changed gets no new lease; it
 		// provisions again when it is free (refreshRooms).
 		stale := r.ConfigSHA256 != "" && r.ConfigSHA256 != machineHash(lc, m)
-		sr := scheduler.Room{ID: r.ID, Machine: m.Key(), State: r.State, Drained: r.Drained || stale, CreatedAt: r.CreatedAt, Ready: map[string]bool{}}
-		for _, rp := range rps {
-			if rp.RoomID == r.ID && rp.ScriptsSHA256 == s.platformUploads()[rp.Platform][m.OS].Hash {
-				sr.Ready[rp.Platform] = true
-			}
-		}
+		sr := scheduler.Room{ID: r.ID, Machine: m.Key(), State: r.State, Drained: r.Drained || stale, CreatedAt: r.CreatedAt,
+			Ready: roomReady(lc, rts, r, m)}
 		for _, sl := range slots {
 			if sl.RoomID == r.ID {
 				sr.Slots = append(sr.Slots, scheduler.Slot{Name: sl.Name, State: sl.State, PoolPorts: len(slotConfig(m, sl.Name).Ports)})
@@ -226,6 +251,17 @@ func (s *Server) schedule(ctx context.Context) error {
 	return nil
 }
 
+// toolNames returns the names of the machine's tools.
+func toolNames(m *config.Machine) []string {
+	var out []string
+	for _, t := range m.ToolList {
+		if !slices.Contains(out, t.Name) {
+			out = append(out, t.Name)
+		}
+	}
+	return out
+}
+
 func slotConfig(m *config.Machine, name string) config.Slot {
 	for _, sl := range m.Slots {
 		if sl.Name == name {
@@ -266,20 +302,14 @@ func tunnelPorts(tunnels []protocol.TunnelRequest, pool []int) (map[string]int, 
 	return out, nil
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
 // brokenReason tells a waiting guest why: if every room of its candidate
 // machines is broken, the reason names the room's broken reason (R7).
 func (s *Server) brokenReason(l store.Lease, rooms []store.Room, fallback string) string {
-	p := s.config().Platforms[l.Platform]
-	if p == nil {
-		return fmt.Sprintf("the platform %s was removed from the server", l.Platform)
+	req, ok := s.leaseRequest(l)
+	if !ok {
+		return fmt.Sprintf("the tool %s was removed from the server", l.Platform)
 	}
-	cands := scheduler.Candidates(s.schedMachines(), scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS,
-		Labels: l.RequiredLabels, PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh})
+	cands := scheduler.Candidates(s.schedMachines(), req)
 	reason := ""
 	for _, r := range rooms {
 		if !slices.Contains(cands, r.Provider+"/"+r.Machine) {

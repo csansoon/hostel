@@ -212,7 +212,7 @@ func interactiveShell(env []string) (string, []string) {
 	return ps, []string{ps, "-NoLogo", "-NoProfile"}
 }
 
-// scriptCommand returns the program and arguments that run a .ps1 platform
+// scriptCommand returns the program and arguments that run a .ps1 tool
 // script.
 func scriptCommand(script string, args, env []string) (string, []string) {
 	ps := powerShell(env)

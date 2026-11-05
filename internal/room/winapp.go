@@ -35,7 +35,7 @@ func (h *helper) writeDesktopCommand() error {
 // Windows apps with UI Automation) and writes hostel/bin/winapp.cmd, which
 // runs it in the desktop session: UI Automation does not work from SSH.
 func (h *helper) installWinApp(ctx context.Context) error {
-	dir := filepath.Join(h.root, "tools", "winapp-"+config.WinAppVersion)
+	dir := filepath.Join(h.root, "winapp-"+config.WinAppVersion)
 	exe := filepath.Join(dir, "winapp.exe")
 	if _, err := os.Stat(exe); err != nil {
 		if err := downloadWinApp(ctx, dir); err != nil {

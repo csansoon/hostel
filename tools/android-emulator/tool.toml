@@ -1,0 +1,8 @@
+description = "Android emulator: one clean emulator for each lease"
+needs = ["android-sdk"]
+screen = true
+options = ["pixel-9", "pixel-tablet"]
+max_options = 2
+# A first install downloads the system image (about 4 GB) and boots each
+# golden AVD once.
+script_timeouts = { install = "30m", start = "5m" }

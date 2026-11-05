@@ -18,9 +18,9 @@ import (
 
 const roomsUsage = `hostel: usage:
   hostel config rooms                                the machines and their rooms
-  hostel config rooms add <name> [--platform p] [--label l] [--provider p]
+  hostel config rooms add <name> [--tool t] [--provider p]
                                                      a code for "hostel machine join" on the new machine
-  hostel config rooms set <machine> <key>=<value> ...  for example labels=xcode-26.5,desktop
+  hostel config rooms set <machine> <key>=<value> ...  for example tools=xcode,ios-simulator,jdk:21
   hostel config rooms remove <machine>
   hostel config rooms drain|undrain <machine|room>     no new leases on the room / new leases again
   hostel config rooms repair <machine|room> [--accept-host-key]
@@ -35,9 +35,8 @@ func roomsCmd(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel config rooms "+sub, stderr)
 	accept := fs.Bool("accept-host-key", false, "with repair: accept a changed host key of the room")
 	provider := fs.String("provider", "", "with add: the static provider (default home)")
-	var platforms, labels cli.StringList
-	fs.Var(&platforms, "platform", "with add: a device platform of the machine (more than once for several)")
-	fs.Var(&labels, "label", "with add: a label of the machine (more than once for several)")
+	var tools cli.StringList
+	fs.Var(&tools, "tool", "with add: a tool of the machine, name or name:option (more than once for several)")
 	pos, err := cli.Parse(fs, args)
 	if err != nil {
 		return 2
@@ -46,7 +45,7 @@ func roomsCmd(args []string, stdout, stderr io.Writer) int {
 	case sub == "" && len(pos) == 0:
 		return roomsList(stdout, stderr)
 	case sub == "add" && len(pos) == 1:
-		return roomsAdd(protocol.MachineInviteRequest{Name: pos[0], Provider: *provider, Platforms: platforms, Labels: labels}, stdout, stderr)
+		return roomsAdd(protocol.MachineInviteRequest{Name: pos[0], Provider: *provider, Tools: tools}, stdout, stderr)
 	case sub == "set" && len(pos) >= 2:
 		return roomsSet(pos[0], pos[1:], stdout, stderr)
 	case sub == "remove" && len(pos) == 1:
@@ -88,7 +87,7 @@ func roomsList(stdout, stderr io.Writer) int {
 		return 1
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "MACHINE\tKIND\tOS\tPLATFORMS\tLABELS\tROOMS")
+	fmt.Fprintln(tw, "MACHINE\tKIND\tOS\tTOOLS\tROOMS")
 	for _, p := range providers {
 		for _, m := range p.Machines {
 			var rooms []string
@@ -105,8 +104,8 @@ func roomsList(stdout, stderr io.Writer) int {
 			if osName == "" {
 				osName = "-"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", m.Key(), p.Kind, osName, orDash(strings.Join(m.Platforms, ",")),
-				orDash(strings.Join(m.Labels, ",")), orDash(strings.Join(rooms, "; ")))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", m.Key(), p.Kind, osName, orDash(strings.Join(m.Tools, ",")),
+				orDash(strings.Join(rooms, "; ")))
 		}
 	}
 	tw.Flush()
@@ -144,7 +143,7 @@ func findMachine(doc []byte, name string) (config.DocMachine, error) {
 }
 
 // listKeys are machine keys whose value a user writes as a comma list.
-var listKeys = map[string]bool{"platforms": true, "labels": true}
+var listKeys = map[string]bool{"tools": true}
 
 func roomsSet(name string, sets []string, stdout, stderr io.Writer) int {
 	return changeConfig(stdout, stderr, func(doc []byte) ([]byte, error) {
@@ -156,7 +155,7 @@ func roomsSet(name string, sets []string, stdout, stderr io.Writer) int {
 			k, v, ok := strings.Cut(a, "=")
 			k, v = strings.TrimSpace(k), strings.TrimSpace(v)
 			if !ok || k == "" {
-				return nil, fmt.Errorf("%q is not <key>=<value>, for example labels=xcode-26.5,desktop", a)
+				return nil, fmt.Errorf("%q is not <key>=<value>, for example tools=xcode,ios-simulator", a)
 			}
 			value := tomlValue(v)
 			if listKeys[k] {

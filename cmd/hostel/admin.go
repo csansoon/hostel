@@ -214,23 +214,30 @@ func adminConfigCheck(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "# %s: ok. Effective configuration with all defaults:\n", file)
 	stdout.Write(out)
-	for _, name := range config.PlatformNames(cfg.Platforms) {
-		p := cfg.Platforms[name]
-		out, err := toml.Marshal(p)
+	for _, m := range cfg.Machines() {
+		var added []string
+		for _, t := range m.ToolList {
+			if t.Need {
+				added = append(added, t.Name)
+			}
+		}
+		if len(added) > 0 {
+			fmt.Fprintf(stdout, "# %s: the needs of its tools add %s\n", m.Key(), strings.Join(added, ", "))
+		}
+	}
+	for _, name := range config.ToolNames(cfg.Tools) {
+		t := cfg.Tools[name]
+		out, err := toml.Marshal(t)
 		if err != nil {
 			fmt.Fprintln(stderr, "hostel: print the configuration:", err)
 			return 1
 		}
-		dir := p.Dir
-		if dir == "" {
-			dir = "(no directory)"
-		}
-		fmt.Fprintf(stdout, "\n# platform %s (%s): %s\n", name, p.Kind, dir)
+		fmt.Fprintf(stdout, "\n# tool %s (default of this release)\n", name)
 		stdout.Write(out)
 		for _, osName := range config.OSNames {
-			for _, step := range []string{config.StepProvision, config.StepPrepare, config.StepScreenshot, config.StepReset, config.StepHealth} {
-				if s := p.Script(osName, step); s != "" {
-					fmt.Fprintf(stdout, "# script %s %s: %s (timeout %s)\n", osName, step, s, p.ScriptTimeout(step))
+			for _, step := range []string{config.StepInstall, config.StepCheck, config.StepStart, config.StepScreenshot, config.StepStop} {
+				if s := t.Script(osName, step); s != "" {
+					fmt.Fprintf(stdout, "# script %s %s: %s (timeout %s)\n", osName, step, s, t.ScriptTimeout(step))
 				}
 			}
 		}

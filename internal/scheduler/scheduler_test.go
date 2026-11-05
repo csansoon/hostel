@@ -13,14 +13,14 @@ import (
 
 var t0 = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 
-func static(key string, labels ...string) Machine {
-	return Machine{Key: key, Provider: "home", OS: "linux", Platforms: []string{"dev"}, Labels: labels,
+func static(key string, tools ...string) Machine {
+	return Machine{Key: key, Provider: "home", OS: "linux", Tools: append([]string{"dev"}, tools...),
 		PoolPorts: 10, Slots: []string{"a"}, MaxRooms: 1, MaxLease: 2 * time.Hour}
 }
 
 func onDemand(key, provider string, maxRooms int) Machine {
 	return Machine{Key: key, Provider: provider, OnDemand: true, CanResume: true, OS: "linux",
-		Platforms: []string{"dev"}, PoolPorts: 10, Slots: []string{"a"}, MaxRooms: maxRooms, MaxLease: 2 * time.Hour}
+		Tools: []string{"dev"}, PoolPorts: 10, Slots: []string{"a"}, MaxRooms: maxRooms, MaxLease: 2 * time.Hour}
 }
 
 func running(id int64, machine string, ready bool, slotState string) Room {
@@ -152,7 +152,7 @@ func TestLifetime(t *testing.T) {
 
 func TestBlockedMachines(t *testing.T) {
 	machines := []Machine{static("home/m1"), static("home/m2")}
-	machines[1].Platforms = []string{"other"}
+	machines[1].Tools = []string{"other"}
 	rooms := []Room{running(1, "home/m1", true, protocol.SlotLeased), running(2, "home/m2", true, protocol.SlotFree)}
 	first := lease("first", 1, 3*time.Minute)
 	second := lease("second", 1, 2*time.Minute)
@@ -175,7 +175,7 @@ func TestBlockedMachineKeepsLaterLeaseOff(t *testing.T) {
 	// "dev" can use m1 or m2; "solo" only m2. Both rooms are busy, so nothing
 	// is assigned. When m2 is free, the lease that comes first in the order gets it.
 	m1, m2 := static("home/m1"), static("home/m2")
-	m2.Platforms = []string{"dev", "solo"}
+	m2.Tools = []string{"dev", "solo"}
 	rooms := []Room{running(1, "home/m1", true, protocol.SlotLeased), running(2, "home/m2", true, protocol.SlotLeased)}
 	dev := lease("dev", 1, 2*time.Minute)
 	solo := lease("solo", 2, time.Minute)
@@ -214,13 +214,13 @@ func TestCandidates(t *testing.T) {
 		req  Request
 		want []string
 	}{
-		{"device platform", Request{Platform: "dev"}, []string{"home/a", "home/b", "p/c"}},
-		{"labels", Request{Platform: "dev", Labels: []string{"xcode"}}, []string{"home/a", "home/b"}},
-		{"two labels", Request{Platform: "dev", Labels: []string{"xcode", "desktop"}}, []string{"home/a"}},
-		{"os platform", Request{Platform: "macos", PlatformOS: true}, []string{"p/c"}},
+		{"tool", Request{Platform: "dev"}, []string{"home/a", "home/b", "p/c"}},
+		{"tool of two machines", Request{Platform: "xcode"}, []string{"home/a", "home/b"}},
+		{"tool of one machine", Request{Platform: "desktop"}, []string{"home/a"}},
+		{"os", Request{Platform: "macos", PlatformOS: true}, []string{"p/c"}},
 		{"pool ports", Request{Platform: "dev", PoolTunnels: 2}, []string{"home/a", "p/c"}},
 		{"fresh", Request{Platform: "dev", Fresh: true}, []string{"p/c"}},
-		{"unknown label", Request{Platform: "dev", Labels: []string{"kvm"}}, nil},
+		{"unknown tool", Request{Platform: "kvm"}, nil},
 	}
 	for _, c := range cases {
 		if got := Candidates(machines, c.req); !reflect.DeepEqual(got, c.want) {
@@ -398,7 +398,7 @@ func TestEvictionNeedsAllLimits(t *testing.T) {
 	// limit. An idle room of p/b frees the provider limit only, so nothing is
 	// evicted; an idle room of p/a frees both.
 	a, b := onDemand("p/a", "p", 1), onDemand("p/b", "p", 1)
-	a.Platforms = []string{"only-a"}
+	a.Tools = []string{"only-a"}
 	providers := []Provider{{Name: "p", MaxRooms: 2}}
 	busyA := running(1, "p/a", true, protocol.SlotLeased)
 	idleB := running(2, "p/b", true, protocol.SlotFree)
@@ -438,7 +438,7 @@ func TestEvictedRoomIsNotUsed(t *testing.T) {
 
 func TestPositionsArePerPlatform(t *testing.T) {
 	m := static("home/m")
-	m.Platforms = []string{"dev", "other"}
+	m.Tools = []string{"dev", "other"}
 	rooms := []Room{running(1, "home/m", true, protocol.SlotLeased)}
 	a, b, c := lease("a", 1, 3*time.Minute), lease("b", 1, 2*time.Minute), lease("c", 1, time.Minute)
 	b.Platform = "other"

@@ -91,10 +91,10 @@ func machineList(m *model, w int, sel string) string {
 	return b.String()
 }
 
-// machinePlatforms are the OS and the platforms of a machine.
+// machinePlatforms are the OS and the tools of a machine.
 func machinePlatforms(ms protocol.MachineStatus) []string {
 	out := []string{ms.OS}
-	for _, p := range ms.Platforms {
+	for _, p := range ms.Tools {
 		if !slices.Contains(out, p) {
 			out = append(out, p)
 		}
@@ -249,9 +249,6 @@ func (p *machinePage) body(m *model) string {
 		platforms = append(platforms, fg(colBlue).Render(clean(n)))
 	}
 	about := line(field("Runs", strings.Join(platforms, "   ")))
-	if len(ms.Labels) > 0 {
-		about += line(field("Labels", clean(strings.Join(ms.Labels, ", "))))
-	}
 	if ms.ConnectVersion != "" {
 		v := clean(ms.ConnectVersion)
 		if m.outOfDate(ms) {

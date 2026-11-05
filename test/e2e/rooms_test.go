@@ -133,8 +133,8 @@ func TestStaticRoom(t *testing.T) {
 	if r.OS != "linux" || r.Arch != dockerArch {
 		t.Fatalf("room = %+v, want linux/%s", r, dockerArch)
 	}
-	if !slices.Contains(r.Platforms, "fakedevice") || !slices.Contains(r.Platforms, "linux") {
-		t.Fatalf("room platforms = %v, want fakedevice and linux", r.Platforms)
+	if !slices.Contains(r.Tools, "fakedevice") || !slices.Contains(r.Tools, "linux") {
+		t.Fatalf("room platforms = %v, want fakedevice and linux", r.Tools)
 	}
 	if len(r.Slots) != 1 || r.Slots[0].Name != "a" || r.Slots[0].State != protocol.SlotFree {
 		t.Fatalf("room slots = %+v, want one free slot a", r.Slots)

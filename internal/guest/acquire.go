@@ -196,13 +196,15 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 	if err != nil {
 		return ExitError, err
 	}
-	rp := rc.Platforms[platform]
-	if rp == nil {
-		rp = &config.RepoPlatform{}
-	}
+	// Until acquire takes a list of tools (M10e phase 5), the options of the
+	// tool come from --device, or from the tools of hostel.toml.
 	reqDevices := []string(devices)
 	if len(reqDevices) == 0 {
-		reqDevices = rp.Devices
+		for _, raw := range rc.Tools {
+			if e, err := config.ParseToolEntry(raw); err == nil && e.Name == platform && e.Option != "" {
+				reqDevices = append(reqDevices, e.Option)
+			}
+		}
 	}
 	var tunnels []protocol.TunnelRequest
 	for _, name := range rc.TunnelNames() {
@@ -210,7 +212,7 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 	}
 	host, _ := os.Hostname()
 	req := protocol.CreateLeaseRequest{Platform: platform, Devices: reqDevices, Task: task, Priority: priority,
-		RequiredLabels: append(slices.Clone(rp.Requires), require...), Tunnels: tunnels, Fresh: fresh, PublicKey: pub,
+		RequiredLabels: require, Tunnels: tunnels, Fresh: fresh, PublicKey: pub,
 		GuestHost: host, Repo: filepath.Base(repo.Root), Worktree: repo.Root, Branch: currentBranch(repo.Root)}
 	var l protocol.Lease
 	if err := api.Do(ctx, "POST", "/v1/leases", req, &l); err != nil {
@@ -351,13 +353,11 @@ func describe(l protocol.Lease) string {
 	return s
 }
 
-// leaseEnv computes lease.env: the repository platform env with the tunnel
-// ports, and HOSTEL_TUNNEL_<NAME>_PORT for each tunnel.
+// leaseEnv computes lease.env: the repository env for the lease's tool with
+// the tunnel ports, and HOSTEL_TUNNEL_<NAME>_PORT for each tunnel.
 func leaseEnv(platform string, rc *config.Repo, ports map[string]int) map[string]string {
-	env := map[string]string{}
-	if rp := rc.Platforms[platform]; rp != nil {
-		env = config.ExpandEnv(rp.Env, ports)
-	}
+	_, repoEnv := rc.LeaseSetup([]string{platform})
+	env := config.ExpandEnv(repoEnv, ports)
 	for name, port := range ports {
 		env["HOSTEL_TUNNEL_"+strings.ToUpper(strings.ReplaceAll(name, "-", "_"))+"_PORT"] = fmt.Sprint(port)
 	}
@@ -378,7 +378,7 @@ var miseFiles = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.lo
 	".nvmrc", ".python-version", ".config/mise.toml", ".config/mise/config.toml", "mise/config.toml", ".mise/config.toml"}
 
 // setupCommand returns the setup job: "mise install" (unless mise = false) and,
-// with full, the repository setup commands of the platform. The first failure
+// with full, the repository setup commands for the lease's tool. The first failure
 // stops the job.
 func setupCommand(rc *config.Repo, platform, roomOS string, full bool) string {
 	if roomOS == config.OSWindows {
@@ -390,8 +390,9 @@ func setupCommand(rc *config.Repo, platform, roomOS string, full bool) string {
 		// have the tools that this "mise install" adds.
 		parts = append(parts, `mise install`, `PATH="$(mise bin-paths | tr '\n' ':')$PATH"`)
 	}
-	if rp := rc.Platforms[platform]; full && rp != nil {
-		for _, c := range rp.Setup {
+	if full {
+		setup, _ := rc.LeaseSetup([]string{platform})
+		for _, c := range setup {
 			parts = append(parts, "("+c+")")
 		}
 	}
@@ -406,8 +407,9 @@ func setupCommandPS(rc *config.Repo, platform string, full bool) string {
 	if rc.MiseEnabled() {
 		parts = append(parts, "mise install"+stop, `$env:PATH = ((mise bin-paths) -join ';') + ';' + $env:PATH`)
 	}
-	if rp := rc.Platforms[platform]; full && rp != nil {
-		for _, c := range rp.Setup {
+	if full {
+		setup, _ := rc.LeaseSetup([]string{platform})
+		for _, c := range setup {
 			parts = append(parts, c+stop)
 		}
 	}

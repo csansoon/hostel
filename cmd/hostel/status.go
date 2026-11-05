@@ -98,17 +98,17 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 	fmt.Fprintf(w, "%s · %s (%d in use) · %d waiting · you: %s\n\n", st.ServerID, plural(len(st.Rooms), "room"), inUse, waiting, you)
 
 	tw := newTable(w)
-	fmt.Fprintln(tw, "ROOM\tPLATFORMS\tSTATE\tUSER\tTASK\tTIME\tLEASE")
+	fmt.Fprintln(tw, "ROOM\tTOOLS\tSTATE\tUSER\tTASK\tTIME\tLEASE")
 	withRooms := map[string]bool{}
 	for _, r := range st.Rooms {
 		withRooms[r.Provider+"/"+r.Machine] = true
 		leases := roomLeases(st, r.ID)
 		state := roomState(r, len(leases))
 		if len(leases) == 0 {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t\t\t\t\n", r.Name, strings.Join(r.Platforms, ", "), state)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t\t\t\t\n", r.Name, strings.Join(r.Tools, ", "), state)
 		}
 		for i, l := range leases {
-			name, platforms := r.Name, strings.Join(r.Platforms, ", ")
+			name, platforms := r.Name, strings.Join(r.Tools, ", ")
 			if i > 0 {
 				name, platforms, state = "", "", ""
 			}
@@ -126,7 +126,7 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 		if m.Kind != "static" {
 			note = fmt.Sprintf("(on demand, up to %d)", m.MaxRooms)
 		}
-		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(append([]string{m.OS}, m.Platforms...), ", "), note)
+		fmt.Fprintf(tw, "%s\t%s\tnone\t%s\t\t\t\n", m.Key, strings.Join(append([]string{m.OS}, m.Tools...), ", "), note)
 	}
 	tw.flush()
 
@@ -157,7 +157,7 @@ func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time)
 	used, free := 0, 0
 	known := false
 	for _, r := range st.Rooms {
-		if !slices.Contains(r.Platforms, platform) {
+		if r.OS != platform && !slices.Contains(r.Tools, platform) {
 			continue
 		}
 		known = true
@@ -168,7 +168,7 @@ func printQueue(w io.Writer, st protocol.Status, platform string, now time.Time)
 		}
 	}
 	for _, m := range st.Machines {
-		known = known || m.OS == platform || slices.Contains(m.Platforms, platform)
+		known = known || m.OS == platform || slices.Contains(m.Tools, platform)
 	}
 	if !known && len(q) == 0 {
 		return fmt.Errorf("no room or platform %q; \"hostel status\" lists the rooms and the queues", platform)
@@ -220,10 +220,7 @@ func printRoomDetails(w io.Writer, d protocol.RoomDetails, now time.Time) {
 		}
 		fmt.Fprintln(w, strings.Join(parts, " · "))
 	}
-	line := "Platforms " + strings.Join(r.Platforms, ", ")
-	if d.Machine != nil && len(d.Machine.Labels) > 0 {
-		line += " · labels " + strings.Join(d.Machine.Labels, ", ")
-	}
+	line := "Tools " + strings.Join(r.Tools, ", ")
 	fmt.Fprintf(w, "%s · %s\n", line, plural(len(r.Slots), "slot"))
 	if r.Reason != "" {
 		fmt.Fprintf(w, "Reason: %s\n", r.Reason)
@@ -466,13 +463,11 @@ func cleanRoom(r *protocol.RoomStatus) {
 }
 
 // cleanMachine cleans the text from the configuration (an admin can write
-// any string in a label).
+// any string in a tool entry).
 func cleanMachine(m *protocol.MachineStatus) {
 	m.Key, m.Kind, m.OS = clean(m.Key), clean(m.Kind), clean(m.OS)
-	for _, list := range [][]string{m.Platforms, m.Labels} {
-		for i := range list {
-			list[i] = clean(list[i])
-		}
+	for i := range m.Tools {
+		m.Tools[i] = clean(m.Tools[i])
 	}
 }
 

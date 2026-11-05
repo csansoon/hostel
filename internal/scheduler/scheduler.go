@@ -14,13 +14,12 @@ import (
 // lifetimeMargin is the extra room lifetime that a lease needs after max_lease.
 const lifetimeMargin = 5 * time.Minute
 
-// Request is what a lease asks for.
+// Request is what a lease asks for. Until leases have a list of tools (M10e
+// phase 4), a lease names one tool, or an OS for no tool.
 type Request struct {
 	Platform string
-	// PlatformOS is true for an OS platform (linux, macos, windows).
+	// PlatformOS is true when Platform is an OS (linux, macos, windows).
 	PlatformOS bool
-	// Labels are all required labels: platform, repository, and --require.
-	Labels []string
 	// PoolTunnels is the number of tunnels without a fixed room port.
 	PoolTunnels int
 	Fresh       bool
@@ -35,8 +34,7 @@ type Machine struct {
 	OnDemand  bool
 	CanResume bool
 	OS        string
-	Platforms []string // device platforms
-	Labels    []string
+	Tools     []string // the names of the machine's tools
 	// PoolPorts is the smallest number of pool ports of its slots.
 	PoolPorts int
 	// Slots are the slot names of a new room.
@@ -66,7 +64,8 @@ type Room struct {
 	State     string
 	Drained   bool
 	CreatedAt time.Time
-	// Ready lists the platforms with an up-to-date room_platforms row.
+	// Ready lists the tools that the room has installed and checked with
+	// the current scripts, with their needs; and the room's OS.
 	Ready map[string]bool
 	Slots []Slot
 }
@@ -102,10 +101,10 @@ type Input struct {
 type Action string
 
 const (
-	// UseRoom: a free slot in a running room that is ready for the platform.
+	// UseRoom: a free slot in a running room that is ready for the lease.
 	UseRoom Action = "use"
-	// ProvisionRoom: a free slot in a running room; the platform provision
-	// script runs first.
+	// ProvisionRoom: a free slot in a running room; the install scripts of
+	// the lease's tool run first.
 	ProvisionRoom Action = "provision"
 	// ResumeRoom: a stopped room.
 	ResumeRoom Action = "resume"
@@ -201,13 +200,8 @@ func (m *Machine) Serves(r Request) bool {
 		if m.OS != r.Platform {
 			return false
 		}
-	} else if !slices.Contains(m.Platforms, r.Platform) {
+	} else if !slices.Contains(m.Tools, r.Platform) {
 		return false
-	}
-	for _, l := range r.Labels {
-		if !slices.Contains(m.Labels, l) {
-			return false
-		}
 	}
 	return m.PoolPorts >= r.PoolTunnels && (!r.Fresh || m.OnDemand)
 }

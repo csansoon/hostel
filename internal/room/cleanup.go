@@ -23,19 +23,16 @@ import (
 // stopWait is the time between SIGTERM and SIGKILL in cleanup.
 const stopWait = 10 * time.Second
 
-// platformInfo reads the devices and the script timeouts of an installed
-// platform directory. An OS platform can have no platform.toml.
-func (h *helper) platformInfo(name string) (config.Platform, error) {
-	p := config.Platform{Name: name}
-	data, err := os.ReadFile(filepath.Join(h.platformDir(name), "platform.toml"))
-	if errors.Is(err, os.ErrNotExist) {
-		return p, nil
-	}
+// toolInfo reads the options and the script timeouts of an installed tool
+// directory.
+func (h *helper) toolInfo(name string) (config.Tool, error) {
+	t := config.Tool{Name: name}
+	data, err := os.ReadFile(filepath.Join(h.toolDir(name), config.ToolFile))
 	if err != nil {
-		return p, err
+		return t, err
 	}
-	err = toml.NewDecoder(bytes.NewReader(data)).Decode(&p)
-	return p, err
+	err = toml.NewDecoder(bytes.NewReader(data)).Decode(&t)
+	return t, err
 }
 
 // cleanup deletes everything a lease left (design, section 17). Each step runs
@@ -50,8 +47,8 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
 	}
-	if !config.ValidName(req.Platform) || req.LeaseID == "" {
-		return resp, errors.New("cleanup needs lease_id and platform")
+	if (req.Tool != "" && !config.ValidName(req.Tool)) || req.LeaseID == "" {
+		return resp, errors.New("cleanup needs lease_id and a valid tool name")
 	}
 	step := func(name string, fn func() error) {
 		st := protocol.CleanupStep{Name: name}
@@ -69,7 +66,7 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		return os.WriteFile(h.leaseEndedFile(slot), nil, 0o644)
 	})
 	step("stop processes", func() error { return h.stopLeaseProcesses(slot, req.LeaseID) })
-	step("reset", func() error { return h.resetSlot(slot, req) })
+	step("stop screen tool", func() error { return h.stopTool(slot, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
 	step("check", func() error { return h.checkClean(slot, req.LeaseID, req.Ports) })
 	step("delete slot", func() error {
@@ -84,7 +81,7 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		}
 		return os.RemoveAll(h.slotDir(slot))
 	})
-	step("health", func() error { return h.health(req.Health) })
+	step("check tools", func() error { return h.check(req.Check) })
 	return resp, nil
 }
 
@@ -131,23 +128,27 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 	return nil
 }
 
-func (h *helper) resetSlot(slot string, req protocol.CleanupRequest) error {
-	// A repeated cleanup after "delete slot" finds no slot directory; reset
+// stopTool runs the stop script of the screen tool that started for the
+// lease.
+func (h *helper) stopTool(slot string, req protocol.CleanupRequest) error {
+	if req.Tool == "" {
+		return nil
+	}
+	// A repeated cleanup after "delete slot" finds no slot directory; stop
 	// then runs in an empty one and must do nothing.
 	if err := os.MkdirAll(h.slotDir(slot), 0o755); err != nil {
 		return err
 	}
-	p, err := h.platformInfo(req.Platform)
+	t, err := h.toolInfo(req.Tool)
 	if err != nil {
 		return err
 	}
-	resp, err := h.script(req.Platform, config.StepReset, slot, nil, map[string]string{
-		"HOSTEL_PLATFORM":         req.Platform,
-		"HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
-		"HOSTEL_LEASE_ID":         req.LeaseID,
-		"HOSTEL_DEVICES":          strings.Join(req.Devices, ","),
-		"HOSTEL_EXCLUSIVE":        exclusiveEnv(req.Exclusive),
-	}, p.ScriptTimeout(config.StepReset))
+	resp, err := h.script(req.Tool, config.StepStop, slot, nil, map[string]string{
+		"HOSTEL_LEASE_ID":     req.LeaseID,
+		"HOSTEL_TOOL_OPTIONS": strings.Join(req.Options, ","),
+		"HOSTEL_TOOLS":        toolsEnv(req.Tool, req.Options),
+		"HOSTEL_EXCLUSIVE":    exclusiveEnv(req.Exclusive),
+	}, t.ScriptTimeout(config.StepStop))
 	if err != nil {
 		return err
 	}
@@ -223,22 +224,20 @@ func (h *helper) checkClean(slot, leaseID string, ports []int) error {
 	}
 }
 
-// health runs the health script of each platform in names.
-func (h *helper) health(names []string) error {
+// check runs the check script of each tool in names.
+func (h *helper) check(names []string) error {
 	var failed []string
 	for _, name := range names {
 		if !config.ValidName(name) {
-			failed = append(failed, fmt.Sprintf("invalid platform name %q", name))
+			failed = append(failed, fmt.Sprintf("invalid tool name %q", name))
 			continue
 		}
-		p, err := h.platformInfo(name)
+		t, err := h.toolInfo(name)
 		if err != nil {
 			failed = append(failed, name+": "+err.Error())
 			continue
 		}
-		resp, err := h.script(name, config.StepHealth, "", nil, map[string]string{
-			"HOSTEL_PLATFORM": name, "HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
-		}, p.ScriptTimeout(config.StepHealth))
+		resp, err := h.script(name, config.StepCheck, "", nil, nil, t.ScriptTimeout(config.StepCheck))
 		if err == nil {
 			err = scriptError(resp)
 		}

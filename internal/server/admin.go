@@ -46,7 +46,7 @@ func (s *Server) handleRoomDrain(drained bool) http.HandlerFunc {
 }
 
 // handleRoomRepair runs the cleanup of the broken and dirty slots of a broken
-// static room again, then its health scripts; the room is running if all pass
+// static room again, then its check scripts; the room is running if all pass
 // (design, section 6).
 func (s *Server) handleRoomRepair(w http.ResponseWriter, r *http.Request) {
 	room, ok := s.roomFor(w, r)

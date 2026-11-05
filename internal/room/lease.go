@@ -132,7 +132,7 @@ func (h *helper) readLease(slot string) (protocol.BeginRequest, error) {
 	return l, json.Unmarshal(data, &l)
 }
 
-// setEnv writes lease.env: the repository platform env and the tunnel ports
+// setEnv writes lease.env: the repository env and the tunnel ports
 // that the guest computed.
 func (h *helper) setEnv(args []string, stdin io.Reader) (struct{}, error) {
 	slot, _, err := slotFlag("set-env", args)
@@ -179,8 +179,8 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	env["PATH"] = filepath.Join(h.root, "bin") + string(os.PathListSeparator) + env["PATH"]
 	// 3. mise env in work/: tool paths and the repository's mise [env].
 	mergeEnv(env, h.miseEnv(h.workDir(slot), env, warn))
-	// 4. device.env from prepare. 5. lease.env from the guest.
-	for _, f := range []string{"device.env", "lease.env"} {
+	// 4. tool.env from start. 5. lease.env from the guest.
+	for _, f := range []string{"tool.env", "lease.env"} {
 		m, err := readEnvFile(filepath.Join(h.slotDir(slot), f))
 		if err != nil {
 			return nil, err
@@ -189,8 +189,7 @@ func (h *helper) leaseEnv(slot string, warn io.Writer) ([]string, error) {
 	}
 	// 6. The lease variables.
 	env["HOSTEL_LEASE"] = lease.LeaseID
-	env["HOSTEL_PLATFORM"] = lease.Platform
-	env["HOSTEL_DEVICES"] = strings.Join(lease.Devices, ",")
+	env["HOSTEL_TOOLS"] = toolsEnv(lease.Tool, lease.Options)
 	env["HOSTEL_SLOT"] = slot
 	env["HOSTEL_WORK_DIR"] = h.workDir(slot)
 	env["HOSTEL_CACHE_DIR"] = filepath.Join(h.root, "cache")

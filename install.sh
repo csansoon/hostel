@@ -8,9 +8,10 @@
 #
 # Without --server, it installs the hostel binary for this machine into DIR
 # (default ~/.local/bin): for guests and for "hostel machine connect". With
-# --server, it also puts the binaries for all rooms into DIR/helpers and the
-# platform scripts into DIR/platforms (helper_dir and platforms_dir of
-# server.toml). It verifies each file against SHA256SUMS of the release.
+# --server, it also puts the binaries for all rooms into DIR/helpers
+# (helper_dir of server.toml) and a copy of the default tool definitions into
+# DIR/tools (the server uses the ones in its binary; the copy is to read and to
+# start own tools from). It verifies each file against SHA256SUMS of the release.
 #
 # It downloads with curl (5 minutes for each file, 2 retries).
 # HOSTEL_INSTALL_URL replaces the download URL of the release (a mirror).
@@ -86,13 +87,13 @@ esac
 
 if [ -n "$server" ]; then
 	mkdir -p "$server/helpers"
-	awk '$2 ~ /^(hostel|mise)-/ && $2 != "hostel-platforms.tar.gz" {print $2}' "$tmp/SHA256SUMS" > "$tmp/helpers"
+	awk '$2 ~ /^(hostel|mise)-/ && $2 != "hostel-tools.tar.gz" {print $2}' "$tmp/SHA256SUMS" > "$tmp/helpers"
 	while read -r f; do
 		get "$f"
 		install -m 755 "$tmp/$f" "$server/helpers/$f"
 	done < "$tmp/helpers"
-	get hostel-platforms.tar.gz
-	rm -rf "$server/platforms"
-	tar -xzf "$tmp/hostel-platforms.tar.gz" -C "$server"
-	echo "installed $server/helpers and $server/platforms"
+	get hostel-tools.tar.gz
+	rm -rf "$server/tools"
+	tar -xzf "$tmp/hostel-tools.tar.gz" -C "$server"
+	echo "installed $server/helpers and $server/tools"
 fi

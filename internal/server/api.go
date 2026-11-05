@@ -122,12 +122,12 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 	if err != nil {
 		return out, nil, err
 	}
-	rps, err := s.store.RoomPlatforms(ctx)
+	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
 		return out, nil, err
 	}
 	for _, room := range rooms {
-		out.Rooms = append(out.Rooms, roomStatus(room, slots, rps))
+		out.Rooms = append(out.Rooms, roomStatus(room, slots, rts))
 	}
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
@@ -147,22 +147,22 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 }
 
 func machineStatus(m *config.Machine) protocol.MachineStatus {
-	return protocol.MachineStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Platforms: append([]string{}, m.Platforms...),
-		Labels: append([]string{}, m.Labels...), MaxRooms: *m.MaxRooms, Connect: m.Connect}
+	return protocol.MachineStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Tools: append([]string{}, m.Tools...),
+		MaxRooms: *m.MaxRooms, Connect: m.Connect}
 }
 
-func roomStatus(room store.Room, slots []store.Slot, rps []store.RoomPlatform) protocol.RoomStatus {
+func roomStatus(room store.Room, slots []store.Slot, rts []store.RoomTool) protocol.RoomStatus {
 	rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
 		OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
-		Slots: []protocol.SlotStatus{}, Platforms: []string{}, Deadline: room.ProviderDeadline}
+		Slots: []protocol.SlotStatus{}, Tools: []string{}, Deadline: room.ProviderDeadline}
 	for _, sl := range slots {
 		if sl.RoomID == room.ID {
 			rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
 		}
 	}
-	for _, rp := range rps {
-		if rp.RoomID == room.ID {
-			rs.Platforms = append(rs.Platforms, rp.Platform)
+	for _, rt := range rts {
+		if rt.RoomID == room.ID && rt.State == store.ToolReady {
+			rs.Tools = append(rs.Tools, rt.Tool)
 		}
 	}
 	if room.State == protocol.RoomBroken && room.BrokenReason == reasonUnreachable {

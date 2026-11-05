@@ -1,0 +1,5 @@
+description = "iOS Simulator: new, clean simulators for each lease"
+needs = ["xcode"]
+screen = true
+options = ["iphone-17-pro", "ipad-pro-13"]
+max_options = 2

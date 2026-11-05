@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -127,21 +128,21 @@ func (s *Server) connectAs(ctx context.Context, r store.Room, user string) (*roo
 
 func (s *Server) maxProvisionTimeout() time.Duration {
 	var d time.Duration
-	for _, p := range s.config().Platforms {
-		d += p.ScriptTimeout(config.StepProvision)
+	for _, t := range s.config().Tools {
+		d += t.ScriptTimeout(config.StepInstall) + t.ScriptTimeout(config.StepCheck)
 	}
 	return d
 }
 
 // doProvision probes a room and uploads what it needs; then it cleans dirty
-// slots, runs the provision scripts that are not up to date (static rooms
-// only), and the health scripts.
+// slots, installs the mise tools, runs the install and check scripts of the
+// defined tools that are not up to date (on-demand rooms: software tools
+// only), and the check scripts of the installed tools.
 func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machine) error {
 	// One configuration for the whole step: the scripts that run and the
 	// hashes that the room records are of one version (the next provisioning
 	// follows a newer configuration).
 	lc := s.live.Load()
-	platforms := lc.cfg.Platforms
 	conn, err := s.connect(ctx, r)
 	if err != nil {
 		return err
@@ -151,7 +152,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if err != nil {
 		return err
 	}
-	// The helper and mise follow the probe. Platform scripts follow the
+	// The helper and mise follow the probe. Tool scripts follow the
 	// machine's os: an external machine can declare another OS (the E2E tests
 	// run .macos.sh scripts in Linux containers this way).
 	if m.Kind == config.ProviderStatic && room.OS != m.OS {
@@ -179,7 +180,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 	if err := s.cleanDirtySlots(ctx, room, r.ID); err != nil {
 		return err
 	}
-	// Machine-level tools, before the platform scripts, so the scripts can use
+	// Machine-level mise tools, before the tool scripts, so the scripts can use
 	// them. A failure is a room provisioning failure. It also runs without
 	// tools and without agent-device, because it removes an agent-device
 	// command that an earlier configuration installed.
@@ -192,25 +193,21 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 		s.store.AddEvent(ctx, time.Now(), "", r.ID, "mise", fmt.Sprintf("mise install exited with code %d\n%s", resp.ExitCode, resp.OutputTail))
 		return fmt.Errorf("machine-level tools: mise install failed (exit code %d); see the events", resp.ExitCode)
 	}
-	ready, err := s.readyPlatforms(ctx, r.ID)
+	ready, err := s.installedTools(ctx, r.ID)
 	if err != nil {
 		return err
 	}
-	for _, name := range s.roomPlatformNames(m) {
-		p := upload.Platforms[name]
-		if have, ok := ready[name]; ok && have == p.Hash {
+	for _, t := range lc.cfg.DefinedTools(m) {
+		up := upload.Tools[t.Name]
+		if ready[t.Name] == up.Hash {
 			continue
 		}
-		// On-demand rooms run a platform provision script when a lease for the
-		// platform first uses the room (design, section 7).
-		pl := platforms[name]
-		if pl == nil || (m.OnDemand() && pl.Kind == config.KindDevice) {
+		// On-demand rooms install a screen tool when a lease for it first
+		// uses the room (design, section 7).
+		if m.OnDemand() && t.Screen {
 			continue
 		}
-		if err := s.runProvision(ctx, room, r.ID, m.OS, pl, p); err != nil {
-			return err
-		}
-		if err := s.store.SetRoomPlatform(ctx, r.ID, name, p.Hash, time.Now()); err != nil {
+		if err := s.installTool(ctx, room, r.ID, m.OS, t, up); err != nil {
 			return err
 		}
 	}
@@ -228,7 +225,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Room, m *config.Machin
 			s.log.Warn("save room hardware", "room", r.Name, "err", err)
 		}
 	}
-	return s.runHealth(ctx, room, r.ID)
+	return s.runChecks(ctx, room, r.ID)
 }
 
 // provisionSlotUsers prepares the slots that have their own OS user: each has
@@ -307,111 +304,139 @@ func (s *Server) slotHome(ctx context.Context, r store.Room, slot string) (strin
 	return home, err
 }
 
-// healthPlatforms returns the platforms of a room that have a health script
-// and that the room is ready for. An on-demand room is ready for a device
-// platform only after the first lease of the platform ran its provision script
-// (design, section 7), and a health script can need the result (for example the
-// ios golden simulators).
-func (s *Server) healthPlatforms(ctx context.Context, roomID int64) ([]string, error) {
+// checkTools returns the defined tools of a room that have a check script and
+// that the room has installed with the current files. An on-demand room
+// installs a screen tool only when the first lease for it uses the room
+// (design, section 7), and a check script can need the result of install (for
+// example the ios-simulator golden simulators).
+func (s *Server) checkTools(ctx context.Context, roomID int64) ([]string, *config.Machine, error) {
 	r, err := s.store.Room(ctx, roomID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	m, err := s.machineOf(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ready, err := s.readyPlatforms(ctx, roomID)
+	installed, err := s.installedTools(ctx, roomID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []string
-	for _, name := range s.roomPlatformNames(m) {
-		up := s.platformUploads()[name][m.OS]
-		if pl := s.config().Platforms[name]; pl != nil && up.Hash != "" && pl.Script(m.OS, config.StepHealth) != "" && ready[name] == up.Hash {
-			out = append(out, name)
+	for _, t := range s.config().DefinedTools(m) {
+		up := s.toolUploads()[t.Name][m.OS]
+		if up.Hash != "" && t.Script(m.OS, config.StepCheck) != "" && installed[t.Name] == up.Hash {
+			out = append(out, t.Name)
 		}
 	}
-	return out, nil
+	return out, m, nil
 }
 
-// runHealth runs the health scripts of healthPlatforms.
-func (s *Server) runHealth(ctx context.Context, room *roomops.Room, roomID int64) error {
-	names, err := s.healthPlatforms(ctx, roomID)
+// runChecks runs the check scripts of checkTools and records the option that
+// each one reports.
+func (s *Server) runChecks(ctx context.Context, room *roomops.Room, roomID int64) error {
+	names, m, err := s.checkTools(ctx, roomID)
 	if err != nil {
 		return err
 	}
 	for _, name := range names {
-		p := s.config().Platforms[name]
-		if p == nil {
+		t := s.config().Tools[name]
+		if t == nil {
 			continue
 		}
-		timeout := p.ScriptTimeout(config.StepHealth)
-		resp, err := room.RunScript(ctx, name, config.StepHealth, "", protocol.RunScriptRequest{
-			Env: platformEnv(p), TimeoutSeconds: int(timeout / time.Second)})
+		if err := s.runCheck(ctx, room, roomID, m.OS, t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runCheck runs the check script of a tool and writes its inventory row with
+// the option that the last line of the output reports. A tool without a check
+// script has no option. osName is the machine's OS, which selects the scripts.
+func (s *Server) runCheck(ctx context.Context, room *roomops.Room, roomID int64, osName string, t *config.Tool) error {
+	sum := s.toolUploads()[t.Name][osName].Hash
+	row := store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: sum, State: store.ToolReady,
+		Env: sortedKeys(t.Env), CheckedAt: time.Now()}
+	if t.Script(osName, config.StepCheck) != "" {
+		timeout := t.ScriptTimeout(config.StepCheck)
+		resp, err := room.RunScript(ctx, t.Name, config.StepCheck, "", protocol.RunScriptRequest{TimeoutSeconds: int(timeout / time.Second)})
 		if err != nil {
 			return err
 		}
 		if resp.TimedOut || resp.ExitCode != 0 {
 			s.store.AddEvent(ctx, time.Now(), "", roomID, "script",
-				fmt.Sprintf("%s health exited with code %d\n%s", name, resp.ExitCode, resp.OutputTail))
-			return fmt.Errorf("platform %s: health script failed (exit code %d)", name, resp.ExitCode)
+				fmt.Sprintf("%s check exited with code %d\n%s", t.Name, resp.ExitCode, resp.OutputTail))
+			row.State = store.ToolFailed
+			if err := s.store.SetRoomTool(ctx, row); err != nil {
+				return err
+			}
+			return fmt.Errorf("tool %s: check script failed (exit code %d)", t.Name, resp.ExitCode)
+		}
+		row.Option = resp.LastLine
+	}
+	return s.store.SetRoomTool(ctx, row)
+}
+
+// installTool runs the install script of a tool and then its check script,
+// which records the tool in the room's inventory.
+func (s *Server) installTool(ctx context.Context, room *roomops.Room, roomID int64, osName string, t *config.Tool, up roomops.Tool) error {
+	if t.Script(osName, config.StepInstall) != "" {
+		if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: up.Hash,
+			State: store.ToolInstalling, Env: sortedKeys(t.Env), CheckedAt: time.Now()}); err != nil {
+			return err
+		}
+		timeout := t.ScriptTimeout(config.StepInstall)
+		sctx, cancel := context.WithTimeout(ctx, timeout+time.Minute)
+		defer cancel()
+		resp, err := room.RunScript(sctx, t.Name, config.StepInstall, "", protocol.RunScriptRequest{TimeoutSeconds: int(timeout / time.Second)})
+		if err != nil {
+			return err
+		}
+		s.store.AddEvent(ctx, time.Now(), "", roomID, "script",
+			fmt.Sprintf("%s install exited with code %d\n%s", t.Name, resp.ExitCode, resp.OutputTail))
+		if resp.TimedOut || resp.ExitCode != 0 {
+			if err := s.store.SetRoomTool(ctx, store.RoomTool{RoomID: roomID, Tool: t.Name, ScriptsSHA256: up.Hash,
+				State: store.ToolFailed, Env: sortedKeys(t.Env), CheckedAt: time.Now()}); err != nil {
+				return err
+			}
+			if resp.TimedOut {
+				return fmt.Errorf("tool %s: install script timed out after %s", t.Name, timeout)
+			}
+			return fmt.Errorf("tool %s: install script exited with code %d", t.Name, resp.ExitCode)
 		}
 	}
-	return nil
+	return s.runCheck(ctx, room, roomID, osName, t)
 }
 
-func (s *Server) runProvision(ctx context.Context, room *roomops.Room, roomID int64, osName string, p *config.Platform, up roomops.Platform) error {
-	if up.Hash == "" || p.Script(osName, config.StepProvision) == "" {
-		return nil
-	}
-	timeout := p.ScriptTimeout(config.StepProvision)
-	sctx, cancel := context.WithTimeout(ctx, timeout+time.Minute)
-	defer cancel()
-	resp, err := room.RunScript(sctx, p.Name, config.StepProvision, "", protocol.RunScriptRequest{
-		Env:            platformEnv(p),
-		TimeoutSeconds: int(timeout / time.Second),
-	})
-	if err != nil {
-		return err
-	}
-	s.store.AddEvent(ctx, time.Now(), "", roomID, "script",
-		fmt.Sprintf("%s provision exited with code %d\n%s", p.Name, resp.ExitCode, resp.OutputTail))
-	if resp.TimedOut {
-		return fmt.Errorf("platform %s: provision script timed out after %s", p.Name, timeout)
-	}
-	if resp.ExitCode != 0 {
-		return fmt.Errorf("platform %s: provision script exited with code %d", p.Name, resp.ExitCode)
-	}
-	return nil
-}
-
-func platformEnv(p *config.Platform) map[string]string {
-	return map[string]string{"HOSTEL_PLATFORM": p.Name, "HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ",")}
-}
-
-// roomPlatformNames returns the OS platform and the device platforms of a machine.
-func (s *Server) roomPlatformNames(m *config.Machine) []string {
-	return append([]string{m.OS}, m.Platforms...)
-}
-
-func (s *Server) readyPlatforms(ctx context.Context, roomID int64) (map[string]string, error) {
-	rps, err := s.store.RoomPlatforms(ctx)
+// installedTools returns the scripts hash of each tool that the room has
+// installed and checked (state ready).
+func (s *Server) installedTools(ctx context.Context, roomID int64) (map[string]string, error) {
+	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]string{}
-	for _, rp := range rps {
-		if rp.RoomID == roomID {
-			out[rp.Platform] = rp.ScriptsSHA256
+	for _, rt := range rts {
+		if rt.RoomID == roomID && rt.State == store.ToolReady {
+			out[rt.Tool] = rt.ScriptsSHA256
 		}
 	}
 	return out, nil
 }
 
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // roomUpload computes what the room must have: the helper and mise for its OS
 // and architecture, the machine-level mise tools, the room environment, and the
-// platform directories.
+// directories of the machine's defined tools.
 func (s *Server) roomUpload(lc *liveConfig, room *roomops.Room, m *config.Machine) (roomops.Upload, error) {
 	goos, ext := room.OS, ""
 	switch goos {
@@ -423,10 +448,10 @@ func (s *Server) roomUpload(lc *liveConfig, room *roomops.Room, m *config.Machin
 	u := roomops.Upload{
 		HelperFile: filepath.Join(lc.cfg.HelperDir, fmt.Sprintf("hostel-%s-%s%s", goos, room.Arch, ext)),
 		MiseFile:   filepath.Join(lc.cfg.HelperDir, fmt.Sprintf("mise-%s-%s%s", goos, room.Arch, ext)),
-		Platforms:  map[string]roomops.Platform{},
+		Tools:      map[string]roomops.Tool{},
 	}
 	var err error
-	if u.MiseConfig, err = toml.Marshal(map[string]any{"tools": m.Tools}); err != nil {
+	if u.MiseConfig, err = toml.Marshal(map[string]any{"tools": miseConfigTools(m)}); err != nil {
 		return u, err
 	}
 	env := map[string]string{}
@@ -443,10 +468,29 @@ func (s *Server) roomUpload(lc *liveConfig, room *roomops.Room, m *config.Machin
 	if u.RoomEnv, err = json.Marshal(re); err != nil {
 		return u, err
 	}
-	for _, name := range s.roomPlatformNames(m) {
-		u.Platforms[name] = lc.uploads[name][m.OS]
+	for _, t := range lc.cfg.DefinedTools(m) {
+		u.Tools[t.Name] = lc.uploads[t.Name][m.OS]
 	}
 	return u, nil
+}
+
+// miseConfigTools returns the [tools] of hostel/mise/config.toml: each mise
+// tool of the machine with its version, or its versions.
+func miseConfigTools(m *config.Machine) map[string]any {
+	out := map[string]any{}
+	for name, versions := range m.MiseTools() {
+		// mise names the JDK "java"; Hostel's tool name is jdk (design,
+		// section 3).
+		if name == "jdk" {
+			name = "java"
+		}
+		if len(versions) == 1 {
+			out[name] = versions[0]
+		} else {
+			out[name] = versions
+		}
+	}
+	return out
 }
 
 // miseEnv returns the MISE_* variables of all room-side processes (design,

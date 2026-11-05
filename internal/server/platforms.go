@@ -62,10 +62,21 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read leases", err)
 		return
 	}
+	// Until GET /v1/tools (M10e phase 4), each defined tool and each OS is
+	// one entry: what a lease can ask for.
+	cfg := s.config()
+	names := append(config.ToolNames(cfg.Tools), config.OSNames...)
 	out := []protocol.Platform{}
-	for _, name := range config.PlatformNames(s.config().Platforms) {
-		p := s.config().Platforms[name]
-		req := scheduler.Request{Platform: name, PlatformOS: p.Kind == config.KindOS, Labels: p.Requires}
+	for _, name := range names {
+		t := cfg.Tools[name]
+		entry := protocol.Platform{Name: name, Kind: "os", Devices: []string{}}
+		if t != nil {
+			entry.Kind, entry.Description, entry.Devices, entry.MaxDevices = "tool", t.Description, nonNil(t.Options), t.MaxOptions
+			if t.Screen {
+				entry.Kind = "screen"
+			}
+		}
+		req, _ := s.leaseRequest(store.Lease{Platform: name})
 		machines := scheduler.Candidates(s.schedMachines(), req)
 		if len(machines) == 0 {
 			continue
@@ -81,9 +92,9 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 		if free == 0 || queue > 0 {
 			wait = s.estimatedWait(ctx, name, queue+1, total)
 		}
-		out = append(out, protocol.Platform{Name: name, Kind: p.Kind, Description: p.Description, Devices: nonNil(p.Devices),
-			MaxDevices: p.MaxDevices, FreeSlots: free, NewRoom: newRoom, Queue: queue, EstimatedWaitSeconds: int(wait.Seconds()),
-			Machines: machines, TypicalLeaseSeconds: int(s.medianDuration(ctx, name, 0).Seconds())})
+		entry.FreeSlots, entry.NewRoom, entry.Queue, entry.EstimatedWaitSeconds = free, newRoom, queue, int(wait.Seconds())
+		entry.Machines, entry.TypicalLeaseSeconds = machines, int(s.medianDuration(ctx, name, 0).Seconds())
+		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -105,8 +116,7 @@ func (s *Server) leaseWait(ctx context.Context, l store.Lease) int {
 	if err != nil {
 		return 0
 	}
-	p := s.config().Platforms[l.Platform]
-	req := scheduler.Request{Platform: l.Platform, PlatformOS: p.Kind == config.KindOS, Labels: l.RequiredLabels}
+	req, _ := s.leaseRequest(l)
 	_, total, _ := s.capacity(req, rooms, slots)
 	return int(s.estimatedWait(ctx, l.Platform, l.Position, total).Seconds())
 }

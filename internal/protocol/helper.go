@@ -17,7 +17,7 @@ type HelperHashes struct {
 	Mise       string            `json:"mise"`
 	MiseConfig string            `json:"mise_config"`
 	RoomEnv    string            `json:"room_env"`
-	Platforms  map[string]string `json:"platforms"`
+	Tools      map[string]string `json:"tools"`
 }
 
 // RoomEnv is hostel/room-env.json: the provider and machine env, the MISE_*
@@ -26,7 +26,7 @@ type HelperHashes struct {
 type RoomEnv struct {
 	Env   map[string]string            `json:"env"`
 	Slots map[string]map[string]string `json:"slots"`
-	// OS is the machine's configured OS. It selects the platform scripts; it
+	// OS is the machine's configured OS. It selects the tool scripts; it
 	// can differ from the probed OS (external machines).
 	OS string `json:"os"`
 }
@@ -48,7 +48,10 @@ type MiseInstallRequest struct {
 type RunScriptResponse struct {
 	ExitCode   int    `json:"exit_code"`
 	OutputTail string `json:"output_tail"`
-	// Missing is true when the platform has no script for this step and OS.
+	// LastLine is the last line of the output that is not empty: the
+	// version or the options that a check script prints.
+	LastLine string `json:"last_line,omitempty"`
+	// Missing is true when the tool has no script for this step and OS.
 	Missing  bool `json:"missing,omitempty"`
 	TimedOut bool `json:"timed_out,omitempty"`
 }
@@ -60,9 +63,11 @@ type HelperError struct {
 
 // BeginRequest is the input of "hostel room begin".
 type BeginRequest struct {
-	LeaseID  string   `json:"lease_id"`
-	Platform string   `json:"platform"`
-	Devices  []string `json:"devices"`
+	LeaseID string `json:"lease_id"`
+	// Tool is the screen tool that starts for the lease (empty: none), and
+	// Options are its options.
+	Tool    string   `json:"tool"`
+	Options []string `json:"options"`
 	// Exclusive: the lease holds the whole room (for example the desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
 }
@@ -70,17 +75,19 @@ type BeginRequest struct {
 // CleanupRequest is the input of "hostel room cleanup". It comes from the
 // database, so a repeated cleanup does not need lease.json.
 type CleanupRequest struct {
-	LeaseID  string   `json:"lease_id"`
-	Platform string   `json:"platform"`
-	Devices  []string `json:"devices"`
-	Ports    []int    `json:"ports"`
+	LeaseID string `json:"lease_id"`
+	// Tool is the screen tool that started for the lease (empty: none), and
+	// Options are its options.
+	Tool    string   `json:"tool"`
+	Options []string `json:"options"`
+	Ports   []int    `json:"ports"`
 	// Exclusive: the lease held the whole room (its scripts may reset the
 	// desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
-	// Health are the platforms whose health script runs at the end: those that
-	// the room is ready for. An on-demand room has the files of a device
-	// platform before its provision script ran.
-	Health []string `json:"health"`
+	// Check are the tools whose check script runs at the end: those that the
+	// room has installed. An on-demand room has the files of a screen tool
+	// before its install script ran.
+	Check []string `json:"check"`
 }
 
 // CleanupResponse lists the result of each cleanup step.

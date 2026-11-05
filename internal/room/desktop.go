@@ -214,7 +214,7 @@ func (h *helper) desktopServeConn(conn net.Conn, token string, n int, track func
 		return
 	}
 	if !lease.Exclusive {
-		fail(errors.New("the desktop needs a desktop lease: hostel acquire <platform> --require desktop"))
+		fail(errors.New("the desktop needs a lease with windows-desktop: hostel acquire windows-desktop"))
 		return
 	}
 	env := envMap(req.Env)

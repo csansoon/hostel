@@ -24,7 +24,7 @@ import (
 // outputTailSize is the size of the script output tail that goes to the event log.
 const outputTailSize = 4096
 
-// runScript runs a platform script: run-script <platform> <step> [--slot s].
+// runScript runs a tool script: run-script <tool> <step> [--slot s].
 func (h *helper) runScript(args []string, stdin io.Reader) (protocol.RunScriptResponse, error) {
 	var resp protocol.RunScriptResponse
 	fs := cli.NewFlagSet("hostel room run-script", io.Discard)
@@ -34,27 +34,27 @@ func (h *helper) runScript(args []string, stdin io.Reader) (protocol.RunScriptRe
 		return resp, err
 	}
 	if len(pos) != 2 || !config.ValidName(pos[0]) || (*slot != "" && !config.ValidName(*slot)) {
-		return resp, fmt.Errorf("%w: run-script <platform> <step> [--slot <slot>]", cli.ErrUsage)
+		return resp, fmt.Errorf("%w: run-script <tool> <step> [--slot <slot>]", cli.ErrUsage)
 	}
-	platform, step := pos[0], pos[1]
+	tool, step := pos[0], pos[1]
 	var req protocol.RunScriptRequest
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
 	}
 
-	return h.script(platform, step, *slot, req.Args, req.Env, time.Duration(req.TimeoutSeconds)*time.Second)
+	return h.script(tool, step, *slot, req.Args, req.Env, time.Duration(req.TimeoutSeconds)*time.Second)
 }
 
-// script runs a platform script step. A missing script is not an error.
-func (h *helper) script(platform, step, slot string, args []string, reqEnv map[string]string, timeout time.Duration) (protocol.RunScriptResponse, error) {
+// script runs a tool script step. A missing script is not an error.
+func (h *helper) script(tool, step, slot string, args []string, reqEnv map[string]string, timeout time.Duration) (protocol.RunScriptResponse, error) {
 	var resp protocol.RunScriptResponse
-	script := filepath.Join(h.platformDir(platform), step+"."+h.os+config.ScriptExt(h.os))
+	script := filepath.Join(h.toolDir(tool), step+"."+h.os+config.ScriptExt(h.os))
 	if _, err := os.Stat(script); errors.Is(err, os.ErrNotExist) {
 		resp.Missing = true
 		return resp, nil
 	}
 	dir := h.root
-	if step != config.StepProvision && step != config.StepHealth {
+	if step != config.StepInstall && step != config.StepCheck {
 		if slot == "" {
 			return resp, fmt.Errorf("%w: step %s needs --slot", cli.ErrUsage, step)
 		}
@@ -63,7 +63,7 @@ func (h *helper) script(platform, step, slot string, args []string, reqEnv map[s
 			return resp, err
 		}
 	}
-	env, err := h.scriptEnv(slot, step, reqEnv)
+	env, err := h.scriptEnv(tool, slot, step, reqEnv)
 	if err != nil {
 		return resp, err
 	}
@@ -86,6 +86,7 @@ func (h *helper) script(platform, step, slot string, args []string, reqEnv map[s
 		err = cmd.Wait()
 	}
 	resp.OutputTail = out.String()
+	resp.LastLine = lastLine(resp.OutputTail)
 	var exitErr *exec.ExitError
 	switch {
 	case ctx.Err() != nil:
@@ -103,27 +104,40 @@ func (h *helper) script(platform, step, slot string, args []string, reqEnv map[s
 	return resp, nil
 }
 
-// scriptEnv builds the environment of a platform script: the room user's
-// environment, room-env.json (machine env, MISE_*, slot env), the request env
-// from the server, the paths, and device.env for screenshot and reset.
-func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]string, error) {
+// lastLine returns the last line of out that is not empty, without spaces at
+// its ends.
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// scriptEnv builds the environment of a tool script: the room user's
+// environment, room-env.json (machine env, MISE_*, slot env), the tool
+// variables, the request env from the server, the paths, and tool.env for
+// screenshot and stop.
+func (h *helper) scriptEnv(tool, slot, step string, reqEnv map[string]string) ([]string, error) {
 	env := envMap(os.Environ())
 	roomEnv, err := h.readRoomEnv()
 	if err != nil {
 		return nil, err
 	}
 	mergeEnv(env, roomEnv.Env)
+	if tool != "" {
+		env["HOSTEL_TOOL"] = tool
+		if t, err := h.toolInfo(tool); err == nil {
+			env["HOSTEL_TOOL_ALL_OPTIONS"] = strings.Join(t.Options, ",")
+		}
+	}
 	if slot != "" {
 		mergeEnv(env, roomEnv.Slots[slot])
 		// A script that a guest runs (screenshot) gets the same lease values as
 		// a script that the server runs.
 		if l, err := h.readLease(slot); err == nil {
 			env["HOSTEL_LEASE_ID"] = l.LeaseID
-			env["HOSTEL_PLATFORM"] = l.Platform
-			env["HOSTEL_DEVICES"] = strings.Join(l.Devices, ",")
+			env["HOSTEL_TOOLS"] = toolsEnv(l.Tool, l.Options)
 			env["HOSTEL_EXCLUSIVE"] = exclusiveEnv(l.Exclusive)
-			if p, err := h.platformInfo(l.Platform); err == nil {
-				env["HOSTEL_PLATFORM_DEVICES"] = strings.Join(p.Devices, ",")
+			if l.Tool == tool {
+				env["HOSTEL_TOOL_OPTIONS"] = strings.Join(l.Options, ",")
 			}
 		}
 	}
@@ -141,12 +155,12 @@ func (h *helper) scriptEnv(slot, step string, reqEnv map[string]string) ([]strin
 		env["HOSTEL_SLOT_DIR"] = h.slotDir(slot)
 		env["HOSTEL_WORK_DIR"] = filepath.Join(h.slotDir(slot), "work")
 	}
-	if step == config.StepScreenshot || step == config.StepReset {
-		dev, err := readEnvFile(filepath.Join(h.slotDir(slot), "device.env"))
+	if step == config.StepScreenshot || step == config.StepStop {
+		facts, err := readEnvFile(filepath.Join(h.slotDir(slot), "tool.env"))
 		if err != nil {
 			return nil, err
 		}
-		mergeEnv(env, dev)
+		mergeEnv(env, facts)
 	}
 	return envList(env), nil
 }
@@ -164,6 +178,22 @@ func (h *helper) readRoomEnv() (protocol.RoomEnv, error) {
 		return re, fmt.Errorf("read room-env.json: %w", err)
 	}
 	return re, nil
+}
+
+// toolsEnv is HOSTEL_TOOLS: the lease's tools with their options, as
+// comma-separated "name" or "name:option" entries.
+func toolsEnv(tool string, options []string) string {
+	if tool == "" {
+		return ""
+	}
+	if len(options) == 0 {
+		return tool
+	}
+	entries := make([]string, len(options))
+	for i, o := range options {
+		entries[i] = tool + ":" + o
+	}
+	return strings.Join(entries, ",")
 }
 
 // exclusiveEnv is HOSTEL_EXCLUSIVE: "1" for a lease that holds the whole room
@@ -258,7 +288,7 @@ func (h *helper) miseInstall(stdin io.Reader) (protocol.RunScriptResponse, error
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
 	}
-	env, err := h.scriptEnv("", config.StepProvision, nil)
+	env, err := h.scriptEnv("", "", config.StepInstall, nil)
 	if err != nil {
 		return resp, err
 	}

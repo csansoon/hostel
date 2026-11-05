@@ -37,7 +37,7 @@ func Bytes(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Entry is one file of a platform directory.
+// Entry is one file of a tool directory.
 type Entry struct {
 	Path   string // relative, with "/"
 	Mode   fs.FileMode

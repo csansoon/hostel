@@ -2,17 +2,24 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"os"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 )
 
 // Repo is the repository file hostel.toml (design, section 9).
 type Repo struct {
-	Include   []string                 `toml:"include"`
-	Mise      *bool                    `toml:"mise"`
-	Tunnels   map[string]*Tunnel       `toml:"tunnels"`
-	Platforms map[string]*RepoPlatform `toml:"platforms"`
+	// Tools are what "hostel acquire" asks for when no tools are given.
+	Tools   []string             `toml:"tools"`
+	Include []string             `toml:"include"`
+	Mise    *bool                `toml:"mise"`
+	Setup   []string             `toml:"setup"`
+	Env     map[string]string    `toml:"env"`
+	Tunnels map[string]*Tunnel   `toml:"tunnels"`
+	Tool    map[string]*RepoTool `toml:"tool"`
 
 	File string `toml:"-"`
 }
@@ -24,11 +31,11 @@ type Tunnel struct {
 	RoomPort     int    `toml:"room_port"`
 }
 
-type RepoPlatform struct {
-	Devices  []string          `toml:"devices"`
-	Requires []string          `toml:"requires"`
-	Setup    []string          `toml:"setup"`
-	Env      map[string]string `toml:"env"`
+// RepoTool holds what changes when the lease has the tool: its setup runs
+// after the top-level setup, and its env replaces keys of the top-level env.
+type RepoTool struct {
+	Setup []string          `toml:"setup"`
+	Env   map[string]string `toml:"env"`
 }
 
 var placeholderRE = regexp.MustCompile(`\{tunnels\.([^{}]*)\.port\}`)
@@ -49,7 +56,14 @@ func (r *Repo) TunnelNames() []string {
 // LoadRepo reads and validates a repository file.
 func LoadRepo(file string) (*Repo, error) {
 	r := &Repo{}
-	if _, err := decodeFile(file, r); err != nil {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if keys, err := topKeys(data); err == nil && slices.Contains(keys, "platforms") {
+		return nil, fmt.Errorf("%s: platforms: the form before M10e; use the top-level keys tools, setup, and env, and [tool.<name>] for what changes with a tool (docs/design.md, section 9)", file)
+	}
+	if err := decodeData(file, data, r); err != nil {
 		return nil, err
 	}
 	r.File = file
@@ -82,23 +96,54 @@ func LoadRepo(file string) (*Repo, error) {
 			el.add(key+".room_port", "port %d is not between 1024 and 65535", t.RoomPort)
 		}
 	}
-	for pn, p := range r.Platforms {
-		key := "platforms." + pn
-		if !nameRE.MatchString(pn) {
-			el.add(key, "platform name must match %s", nameRE)
+	for i, t := range r.Tools {
+		if _, err := ParseToolEntry(t); err != nil {
+			el.add(fmt.Sprintf("tools[%d]", i), "%v", err)
 		}
-		for k, v := range p.Env {
-			if k == "" {
-				el.add(key+".env", "empty variable name")
-			}
-			for _, m := range placeholderRE.FindAllStringSubmatch(v, -1) {
-				if r.Tunnels[m[1]] == nil {
-					el.add(key+".env."+k, "placeholder %s names an unknown tunnel %q", m[0], m[1])
-				}
-			}
+	}
+	r.checkEnv(el, "env", r.Env)
+	for _, name := range sortedKeys(r.Tool) {
+		key := "tool." + name
+		if !nameRE.MatchString(name) {
+			el.add(key, "tool name must match %s", nameRE)
+		}
+		if t := r.Tool[name]; t != nil {
+			r.checkEnv(el, key+".env", t.Env)
 		}
 	}
 	return r, el.err()
+}
+
+func (r *Repo) checkEnv(el *errList, key string, env map[string]string) {
+	for k, v := range env {
+		if k == "" {
+			el.add(key, "empty variable name")
+		}
+		for _, m := range placeholderRE.FindAllStringSubmatch(v, -1) {
+			if r.Tunnels[m[1]] == nil {
+				el.add(key+"."+k, "placeholder %s names an unknown tunnel %q", m[0], m[1])
+			}
+		}
+	}
+}
+
+// LeaseSetup returns the setup commands and the env for a lease with these
+// tools: the top level, then the [tool.<name>] of each tool of the lease, in
+// the lease's order.
+func (r *Repo) LeaseSetup(tools []string) ([]string, map[string]string) {
+	setup := slices.Clone(r.Setup)
+	env := maps.Clone(r.Env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	for _, raw := range tools {
+		e, _ := ParseToolEntry(raw)
+		if t := r.Tool[e.Name]; t != nil {
+			setup = append(setup, t.Setup...)
+			maps.Copy(env, t.Env)
+		}
+	}
+	return setup, env
 }
 
 // ExpandEnv replaces each {tunnels.<name>.port} placeholder with the room port of

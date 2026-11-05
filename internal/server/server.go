@@ -146,7 +146,7 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	rooms := gateway.NewRoomConns()
 	s := &Server{exe: exe, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
 		rooms: rooms, kick: make(chan struct{}, 1), localData: start.local}
-	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, nil)
+	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, start.tools, start.toolsDir, nil)
 	if err != nil {
 		return err
 	}
@@ -283,11 +283,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /v1/config", s.auth(s.handleGetConfig))
 	mux.HandleFunc("PUT /v1/config", s.auth(s.admin(s.handlePutConfig)))
 	mux.HandleFunc("GET /v1/config/history", s.auth(s.handleConfigHistory))
-	mux.HandleFunc("GET /v1/config/platforms", s.auth(s.handleConfigPlatforms))
-	mux.HandleFunc("GET /v1/config/platforms/{name}", s.auth(s.handleGetPlatformFiles))
-	mux.HandleFunc("PUT /v1/config/platforms/{name}", s.auth(s.admin(s.handlePutPlatform)))
-	mux.HandleFunc("DELETE /v1/config/platforms/{name}", s.auth(s.admin(s.handleRemovePlatform)))
-	mux.HandleFunc("POST /v1/config/platforms/{name}/reset", s.auth(s.admin(s.handleResetPlatform)))
+	mux.HandleFunc("GET /v1/config/tools", s.auth(s.handleConfigTools))
+	mux.HandleFunc("GET /v1/config/tools/{name}", s.auth(s.handleGetToolFiles))
+	mux.HandleFunc("PUT /v1/config/tools/{name}", s.auth(s.admin(s.handlePutTool)))
+	mux.HandleFunc("DELETE /v1/config/tools/{name}", s.auth(s.admin(s.handleRemoveTool)))
+	mux.HandleFunc("POST /v1/config/tools/{name}/reset", s.auth(s.admin(s.handleResetTool)))
 	mux.HandleFunc("POST /v1/server/update", s.auth(s.admin(s.handleServerUpdate)))
 	mux.HandleFunc("GET /v1/server/update", s.auth(s.admin(s.handleServerUpdateState)))
 	mux.HandleFunc("POST /v1/tokens", s.auth(s.admin(s.handleCreateToken)))

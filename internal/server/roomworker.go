@@ -111,7 +111,7 @@ func (s *Server) runRoom(ctx context.Context, id int64) {
 }
 
 // creationDeadline is the provider-side bound of a new room (design, section 7,
-// deadlines): long enough for creation, the platform scripts, a full lease, and
+// deadlines): long enough for creation, the tool scripts, a full lease, and
 // the warm time.
 func (s *Server) creationDeadline(m *config.Machine) time.Time {
 	d := 10 * time.Minute
@@ -119,9 +119,8 @@ func (s *Server) creationDeadline(m *config.Machine) time.Time {
 		d = p.Timeouts.Provision.D()
 	}
 	var scripts time.Duration
-	for _, name := range m.Platforms {
-		p := s.config().Platforms[name]
-		scripts = max(scripts, p.ScriptTimeout(config.StepProvision)+p.ScriptTimeout(config.StepPrepare))
+	for _, t := range s.config().DefinedTools(m) {
+		scripts += t.ScriptTimeout(config.StepInstall) + t.ScriptTimeout(config.StepCheck) + t.ScriptTimeout(config.StepStart)
 	}
 	return time.Now().Add(d + scripts + m.MaxLease.D() + m.WarmRunning.D() + 10*time.Minute)
 }
@@ -246,12 +245,11 @@ func (s *Server) idleRooms(ctx context.Context, rooms []store.Room) (map[int64]b
 	return out, nil
 }
 
-// stepRoomProvisioning probes and uploads, cleans dirty slots, runs the health
-// scripts, and sets the room to running. Static rooms also run the provision
-// script of each platform; on-demand rooms do that when a lease first uses a
-// platform.
+// stepRoomProvisioning probes and uploads, cleans dirty slots, installs and
+// checks the tools, and sets the room to running. On-demand rooms install a
+// screen tool when a lease first uses it.
 func (s *Server) stepRoomProvisioning(ctx context.Context, r store.Room, m *config.Machine) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout+miseInstallTimeout+s.maxProvisionTimeout()+s.healthTimeout())
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout+miseInstallTimeout+s.maxProvisionTimeout()+s.cleanupScriptsTimeout())
 	defer cancel()
 	hash := machineHash(s.live.Load(), m)
 	err := s.doProvision(ctx, r, m)

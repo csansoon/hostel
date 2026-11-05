@@ -11,7 +11,7 @@ import (
 
 func (h *helper) info() (protocol.HelperInfo, error) {
 	out := protocol.HelperInfo{OS: h.os, Arch: runtime.GOARCH, Version: version.Version,
-		Hashes: protocol.HelperHashes{Platforms: map[string]string{}}}
+		Hashes: protocol.HelperHashes{Tools: map[string]string{}}}
 	var err error
 	for _, item := range []struct {
 		dst  *string
@@ -26,7 +26,7 @@ func (h *helper) info() (protocol.HelperInfo, error) {
 			return out, err
 		}
 	}
-	des, err := os.ReadDir(h.platformsDir())
+	des, err := os.ReadDir(h.toolsDir())
 	if err != nil && !os.IsNotExist(err) {
 		return out, err
 	}
@@ -34,11 +34,11 @@ func (h *helper) info() (protocol.HelperInfo, error) {
 		if !de.IsDir() {
 			continue
 		}
-		entries, err := hashes.DirEntries(h.platformDir(de.Name()), nil, runtime.GOOS != "windows")
+		entries, err := hashes.DirEntries(h.toolDir(de.Name()), nil, runtime.GOOS != "windows")
 		if err != nil {
 			return out, err
 		}
-		out.Hashes.Platforms[de.Name()] = hashes.Dir(entries)
+		out.Hashes.Tools[de.Name()] = hashes.Dir(entries)
 	}
 	return out, nil
 }

@@ -195,10 +195,6 @@ func initServer(path string, o initOptions, stdout io.Writer) error {
 	if err := os.MkdirAll(paths.DataDir, 0o700); err != nil {
 		return err
 	}
-	// "hostel admin config check" of a server.toml from before M9 reads it.
-	if err := os.MkdirAll(paths.PlatformsDir, 0o755); err != nil {
-		return err
-	}
 	for _, k := range []struct{ file, comment string }{
 		{server.GatewayHostKeyFile, "hostel-gateway"},
 		{server.ServerKeyFile, "hostel-server"},

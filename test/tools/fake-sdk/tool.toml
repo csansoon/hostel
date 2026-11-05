@@ -1,0 +1,3 @@
+description = "Simulated SDK for the E2E tests"
+env = { FAKE_SDK_HOME = "{cache}/fake-sdk" }
+path = ["{cache}/fake-sdk/bin"]

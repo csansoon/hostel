@@ -51,13 +51,13 @@ type Status struct {
 
 // MachineStatus is a machine of the configuration (M10).
 type MachineStatus struct {
-	Key       string   `json:"key"`
-	Kind      string   `json:"kind"`
-	OS        string   `json:"os"`
-	Platforms []string `json:"platforms"`
-	Labels    []string `json:"labels"`
-	MaxRooms  int      `json:"max_rooms"`
-	Connect   bool     `json:"connect,omitempty"`
+	Key  string `json:"key"`
+	Kind string `json:"kind"`
+	OS   string `json:"os"`
+	// Tools are the machine's tool entries, with the tools that needs add.
+	Tools    []string `json:"tools"`
+	MaxRooms int      `json:"max_rooms"`
+	Connect  bool     `json:"connect,omitempty"`
 	// ConnectVersion is the hostel version of the machine's connect service
 	// while it is connected (M10d; "" before).
 	ConnectVersion string `json:"connect_version,omitempty"`
@@ -137,8 +137,8 @@ type RoomStatus struct {
 	Reason   string       `json:"reason,omitempty"`
 	Drained  bool         `json:"drained,omitempty"`
 	Slots    []SlotStatus `json:"slots"`
-	// Platforms are the platforms that the room is ready for.
-	Platforms []string `json:"platforms"`
+	// Tools are the defined tools that the room has installed and checked.
+	Tools []string `json:"tools"`
 	// Deadline is the provider-side deadline of an on-demand room.
 	Deadline time.Time `json:"deadline,omitzero"`
 	Hardware *Hardware `json:"hardware,omitempty"`
@@ -398,10 +398,10 @@ const (
 // version (HTTP 426).
 const CodeUpdateRequired = "update_required"
 
-// ConfigPlatform is a platform of the server's configuration (M9).
-type ConfigPlatform struct {
+// ConfigTool is a defined tool of the server's configuration (M10e).
+type ConfigTool struct {
 	Name        string `json:"name"`
-	Kind        string `json:"kind"`
+	Screen      bool   `json:"screen,omitempty"`
 	Description string `json:"description,omitempty"`
 	// Source is default, changed (a default with own files), or own.
 	Source    string    `json:"source"`
@@ -411,8 +411,8 @@ type ConfigPlatform struct {
 	Machines  []string  `json:"machines"`
 }
 
-// PlatformFiles are the files of a platform: file name → content.
-type PlatformFiles struct {
+// ToolFiles are the files of a tool: file name → content.
+type ToolFiles struct {
 	Name  string            `json:"name"`
 	Files map[string]string `json:"files"`
 }
@@ -420,10 +420,9 @@ type PlatformFiles struct {
 // MachineInviteRequest makes a machine invite (M9): "hostel machine join" on
 // the machine adds it to the configuration.
 type MachineInviteRequest struct {
-	Name      string   `json:"name"`
-	Provider  string   `json:"provider,omitempty"`
-	Platforms []string `json:"platforms,omitempty"`
-	Labels    []string `json:"labels,omitempty"`
+	Name     string   `json:"name"`
+	Provider string   `json:"provider,omitempty"`
+	Tools    []string `json:"tools,omitempty"`
 }
 
 // MachineInviteResponse has the code and the commands to run on the machine.

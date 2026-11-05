@@ -77,27 +77,27 @@ func newDemoServer() *demoServer {
 	d := &demoServer{changed: make(chan struct{}), rnd: rand.New(rand.NewPCG(7, 11)),
 		readyAt: map[string]time.Time{}, endAt: map[string]time.Time{}, nextArr: now.Add(6 * time.Second)}
 	d.machines = []protocol.MachineStatus{
-		{Key: "home/macbook", Kind: "static", OS: "macos", Platforms: []string{"ios", "android", "macos"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
-		{Key: "home/win", Kind: "static", OS: "windows", Platforms: []string{"windows"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
-		{Key: "office/mini", Kind: "static", OS: "macos", Platforms: []string{"ios", "macos"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.1.0"},
-		{Key: "lab/linux", Kind: "static", OS: "linux", Platforms: []string{"linux", "android"}, MaxRooms: 1},
-		{Key: "ns/linux", Kind: "namespace", OS: "linux", Platforms: []string{"linux", "android"}, MaxRooms: 2},
+		{Key: "home/macbook", Kind: "static", OS: "macos", Tools: []string{"ios", "android", "macos"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
+		{Key: "home/win", Kind: "static", OS: "windows", Tools: []string{"windows"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
+		{Key: "office/mini", Kind: "static", OS: "macos", Tools: []string{"ios", "macos"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.1.0"},
+		{Key: "lab/linux", Kind: "static", OS: "linux", Tools: []string{"linux", "android"}, MaxRooms: 1},
+		{Key: "ns/linux", Kind: "namespace", OS: "linux", Tools: []string{"linux", "android"}, MaxRooms: 2},
 	}
 	hw := func(cpu string, cores int, mem int64, osv string) *protocol.Hardware {
 		return &protocol.Hardware{CPU: cpu, Cores: cores, MemoryBytes: mem << 30, OSVersion: osv}
 	}
 	d.rooms = []protocol.RoomStatus{
 		{ID: 1, Name: "home-macbook", Provider: "home", Machine: "macbook", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Platforms: []string{"ios", "android", "macos"}, Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
+			Tools: []string{"ios", "android", "macos"}, Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}, {Name: "slot-2", State: protocol.SlotFree}}},
 		{ID: 2, Name: "home-win", Provider: "home", Machine: "win", OS: "windows", Arch: "amd64", State: protocol.RoomRunning,
-			Platforms: []string{"windows"}, Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
+			Tools: []string{"windows"}, Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
 		{ID: 3, Name: "office-mini", Provider: "office", Machine: "mini", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Platforms: []string{"ios", "macos"}, Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
+			Tools: []string{"ios", "macos"}, Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
 		{ID: 4, Name: "lab-linux", Provider: "lab", Machine: "linux", OS: "linux", Arch: "amd64", State: protocol.RoomBroken,
-			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Platforms: []string{"linux", "android"},
+			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Tools: []string{"linux", "android"},
 			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotBroken}}},
 	}
 	d.nextID = 10
@@ -260,11 +260,11 @@ func (d *demoServer) schedule(now time.Time) bool {
 		}
 		if !placed {
 			ns := d.machines[4]
-			if slices.Contains(ns.Platforms, l.Platform) && len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
+			if slices.Contains(ns.Tools, l.Platform) && len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
 				d.nextID++
 				name := "ns-linux-" + strconv.Itoa(d.nextID)
 				d.rooms = append(d.rooms, protocol.RoomStatus{ID: int64(d.nextID), Name: name, Provider: "ns", Machine: "linux", OS: "linux", Arch: "amd64",
-					State: protocol.RoomProvisioning, Platforms: ns.Platforms, Deadline: now.Add(2 * time.Hour),
+					State: protocol.RoomProvisioning, Tools: ns.Tools, Deadline: now.Add(2 * time.Hour),
 					Hardware: &protocol.Hardware{CPU: "AMD EPYC", Cores: 8, MemoryBytes: 16 << 30, OSVersion: "Ubuntu 24.04"},
 					Slots:    []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotLeased, LeaseID: l.ID}}})
 				d.readyAt[name] = now.Add(8 * time.Second)
@@ -315,7 +315,7 @@ func (d *demoServer) positions(now time.Time) {
 func (d *demoServer) wait(platform string, now time.Time) int {
 	best := -1
 	for _, l := range d.leases {
-		if l.State == protocol.LeaseQueued || !slices.Contains(d.room(l.RoomID).Platforms, platform) {
+		if l.State == protocol.LeaseQueued || !slices.Contains(d.room(l.RoomID).Tools, platform) {
 			continue
 		}
 		s := int(d.endAt[l.ID].Sub(now).Seconds()) + 120
@@ -338,7 +338,7 @@ func (d *demoServer) platforms() []protocol.Platform {
 		pl := protocol.Platform{Name: p.name, Kind: "device", Description: p.desc, Devices: p.devices, MaxDevices: len(p.devices),
 			TypicalLeaseSeconds: int(p.typical.Seconds())}
 		for _, ms := range d.machines {
-			if slices.Contains(ms.Platforms, p.name) {
+			if slices.Contains(ms.Tools, p.name) {
 				pl.Machines = append(pl.Machines, ms.Key)
 			}
 		}

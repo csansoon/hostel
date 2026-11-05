@@ -18,7 +18,7 @@ const detailsJobsTimeout = 10 * time.Second
 
 // handleRoomDetails is GET /v1/rooms/{name} (M10): the room, its machine, its
 // leases with their jobs (from the room's helper; the server does not store
-// jobs), the queue of its platforms, and its last events.
+// jobs), the waiting leases that it can serve, and its last events.
 func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := r.PathValue("name")
@@ -38,9 +38,9 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read slots", err)
 		return
 	}
-	rps, err := s.store.RoomPlatforms(ctx)
+	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
-		s.internalError(w, "read room platforms", err)
+		s.internalError(w, "read room tools", err)
 		return
 	}
 	leases, err := s.store.ActiveLeases(ctx)
@@ -53,7 +53,7 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read users", err)
 		return
 	}
-	out := protocol.RoomDetails{Room: roomStatus(room, slots, rps), Leases: []protocol.LeaseStatus{},
+	out := protocol.RoomDetails{Room: roomStatus(room, slots, rts), Leases: []protocol.LeaseStatus{},
 		Jobs: map[string][]protocol.JobInfo{}, Queue: []protocol.LeaseStatus{}, Events: []protocol.Event{}}
 	m := s.config().Machine(room.Provider + "/" + room.Machine)
 	if m != nil {
@@ -62,7 +62,7 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	served := []string{}
 	if m != nil {
-		served = append([]string{m.OS}, m.Platforms...)
+		served = append([]string{m.OS}, toolNames(m)...)
 	}
 	var onRoom []store.Lease
 	for _, l := range leases {

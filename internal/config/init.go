@@ -15,24 +15,22 @@ import (
 // Paths has the values that "hostel server init" needs before the configuration
 // is complete (it has no providers yet).
 type Paths struct {
-	DataDir      string
-	PlatformsDir string
-	HelperDir    string
-	Listen       string
-	TLS          string
-	PublicURLs   []string
+	DataDir    string
+	HelperDir  string
+	Listen     string
+	TLS        string
+	PublicURLs []string
 }
 
-// ReadPaths reads data_dir, platforms_dir, and listen from server.toml without
+// ReadPaths reads data_dir, helper_dir, listen, tls, and public_urls from server.toml without
 // the full validation, and applies the defaults.
 func ReadPaths(file string) (Paths, error) {
 	var raw struct {
-		DataDir      string   `toml:"data_dir"`
-		PlatformsDir string   `toml:"platforms_dir"`
-		HelperDir    string   `toml:"helper_dir"`
-		Listen       string   `toml:"listen"`
-		TLS          string   `toml:"tls"`
-		PublicURLs   []string `toml:"public_urls"`
+		DataDir    string   `toml:"data_dir"`
+		HelperDir  string   `toml:"helper_dir"`
+		Listen     string   `toml:"listen"`
+		TLS        string   `toml:"tls"`
+		PublicURLs []string `toml:"public_urls"`
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -47,18 +45,16 @@ func ReadPaths(file string) (Paths, error) {
 	}
 	base := filepath.Dir(file)
 	setStr(&raw.DataDir, filepath.Join(home, ".local", "share", "hostel"))
-	setStr(&raw.PlatformsDir, filepath.Join(home, ".config", "hostel", "platforms"))
 	setStr(&raw.Listen, "127.0.0.1:7410")
 	setStr(&raw.TLS, TLSOff)
 	dataDir := absPath(raw.DataDir, base, home)
 	setStr(&raw.HelperDir, filepath.Join(dataDir, "helpers"))
 	return Paths{
-		DataDir:      dataDir,
-		HelperDir:    absPath(raw.HelperDir, base, home),
-		PlatformsDir: absPath(raw.PlatformsDir, base, home),
-		Listen:       raw.Listen,
-		TLS:          raw.TLS,
-		PublicURLs:   raw.PublicURLs,
+		DataDir:    dataDir,
+		HelperDir:  absPath(raw.HelperDir, base, home),
+		Listen:     raw.Listen,
+		TLS:        raw.TLS,
+		PublicURLs: raw.PublicURLs,
 	}, nil
 }
 
@@ -109,8 +105,8 @@ public_urls = [` + strings.Join(urls, ", ") + `]
 # gateway_listen = "127.0.0.1:7422"  # SSH gateway
 # data_dir = "~/.local/share/hostel"
 
-# The providers, machines, settings, and platforms are in the server's
-# database: an admin changes them from a client with "hostel config edit" and
-# "hostel config platforms" (docs/design.md, sections 8 and 9).
+# The providers, machines, settings, and tools are in the server's database:
+# an admin changes them from a client with "hostel config edit" and
+# "hostel config tools" (docs/design.md, sections 8 and 9).
 `
 }

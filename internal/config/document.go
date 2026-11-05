@@ -24,11 +24,12 @@ func IsDocumentKey(key string) bool { return documentKeys[key] }
 type Document struct {
 	Revision int
 	Data     []byte
-	// PlatformsDir replaces platforms_dir: the server's platforms from the
-	// database, written to disk.
-	PlatformsDir string
-	// legacy: the file has all keys (LoadServerFile); Data is unused.
-	legacy bool
+	// Tools are the server's defined tools (name → file → content); nil:
+	// the default tools.
+	Tools map[string]map[string]string
+	// ToolsDir has the files of Tools on disk (the server uploads them from
+	// there), or "".
+	ToolsDir string
 }
 
 // Name is the document's name in error messages.
@@ -150,5 +151,5 @@ func SplitServerFile(data []byte) (local, doc []byte, err error) {
 // localKeys are the top-level keys of server.toml after M9.
 var localKeys = map[string]bool{
 	"server_id": true, "listen": true, "gateway_listen": true, "gateway_public": true,
-	"tls": true, "public_urls": true, "data_dir": true, "helper_dir": true, "platforms_dir": true,
+	"tls": true, "public_urls": true, "data_dir": true, "helper_dir": true,
 }

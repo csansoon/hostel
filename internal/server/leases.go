@@ -59,11 +59,6 @@ func newLeaseID() string {
 	return hex.EncodeToString(b)
 }
 
-// exclusive reports whether a lease takes all slots of a room (design, section 5).
-func exclusive(p *config.Platform, labels []string) bool {
-	return p.Exclusive || slices.Contains(labels, "desktop")
-}
-
 func poolTunnels(tunnels []protocol.TunnelRequest) int {
 	n := 0
 	for _, t := range tunnels {
@@ -79,17 +74,27 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	// A configuration or platform change takes schedMu for its checks and its
+	// A configuration or tool change takes schedMu for its checks and its
 	// swap: the checks of the lease and its insert see one configuration.
 	s.schedMu.Lock()
 	defer s.schedMu.Unlock()
-	p := s.config().Platforms[req.Platform]
-	if p == nil {
+	t := s.config().Tools[req.Platform]
+	if t == nil && !config.IsOSName(req.Platform) {
 		writeError(w, http.StatusUnprocessableEntity, protocol.CodeUnknownPlatform,
-			fmt.Sprintf("unknown platform %q; run \"hostel platforms\" for the list", req.Platform))
+			fmt.Sprintf("unknown tool %q; run \"hostel platforms\" for the list", req.Platform))
 		return
 	}
-	devices, code, msg := checkDevices(p, req.Devices)
+	if len(req.RequiredLabels) > 0 {
+		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine,
+			"labels are gone since M10e: ask for tools instead (for example macos-desktop or windows-desktop); run \"hostel update\"")
+		return
+	}
+	options, code, msg := []string{}, "", ""
+	if t != nil {
+		options, code, msg = checkOptions(t, req.Devices)
+	} else if len(req.Devices) > 0 {
+		code, msg = protocol.CodeUnknownDevice, fmt.Sprintf("%s is an OS; it has no options", req.Platform)
+	}
 	if code != "" {
 		writeError(w, http.StatusUnprocessableEntity, code, msg)
 		return
@@ -115,20 +120,18 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", msg)
 		return
 	}
-	labels := mergeLabels(p.Requires, req.RequiredLabels)
-	sreq := scheduler.Request{Platform: p.Name, PlatformOS: p.Kind == config.KindOS, Labels: labels,
-		PoolTunnels: poolTunnels(req.Tunnels), Fresh: req.Fresh, Exclusive: exclusive(p, labels)}
+	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Platform: req.Platform, Devices: options, Task: req.Task,
+		Priority: priority, RequiredLabels: []string{}, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
+		GuestHost: req.GuestHost, Repo: req.Repo, Worktree: req.Worktree, Branch: req.Branch}
+	if l.Tunnels == nil {
+		l.Tunnels = []protocol.TunnelRequest{}
+	}
+	sreq, _ := s.leaseRequest(l)
 	if len(scheduler.Candidates(s.schedMachines(), sreq)) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine, noMachineMessage(sreq))
 		return
 	}
 	now := time.Now()
-	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Platform: p.Name, Devices: devices, Task: req.Task,
-		Priority: priority, RequiredLabels: labels, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
-		GuestHost: req.GuestHost, Repo: req.Repo, Worktree: req.Worktree, Branch: req.Branch}
-	if l.Tunnels == nil {
-		l.Tunnels = []protocol.TunnelRequest{}
-	}
 	if err := s.store.InsertLease(r.Context(), l, now); err != nil {
 		s.internalError(w, "create lease", err)
 		return
@@ -142,27 +145,29 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.apiLease(r, stored))
 }
 
-func checkDevices(p *config.Platform, devices []string) ([]string, string, string) {
-	if p.Kind == config.KindOS {
-		if len(devices) > 0 {
-			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("platform %s has no devices", p.Name)
+// checkOptions checks the options that a lease asks for of a tool, and gives
+// the first option of a screen tool when the lease names none.
+func checkOptions(t *config.Tool, options []string) ([]string, string, string) {
+	if len(t.Options) == 0 {
+		if len(options) > 0 {
+			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("the tool %s has no options", t.Name)
 		}
 		return []string{}, "", ""
 	}
-	if len(devices) == 0 {
-		return []string{p.Devices[0]}, "", ""
+	if len(options) == 0 {
+		return []string{t.Options[0]}, "", ""
 	}
 	var out []string
-	for _, d := range devices {
-		if !slices.Contains(p.Devices, d) {
-			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("platform %s has no device %q; devices: %s", p.Name, d, strings.Join(p.Devices, ", "))
+	for _, o := range options {
+		if !slices.Contains(t.Options, o) {
+			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("the tool %s has no option %q; options: %s", t.Name, o, strings.Join(t.Options, ", "))
 		}
-		if !slices.Contains(out, d) {
-			out = append(out, d)
+		if !slices.Contains(out, o) {
+			out = append(out, o)
 		}
 	}
-	if len(out) > p.MaxDevices {
-		return nil, protocol.CodeTooManyDevices, fmt.Sprintf("platform %s allows at most %d devices in one lease", p.Name, p.MaxDevices)
+	if len(out) > t.MaxOptions {
+		return nil, protocol.CodeTooManyDevices, fmt.Sprintf("the tool %s allows at most %d options in one lease", t.Name, t.MaxOptions)
 	}
 	return out, "", ""
 }
@@ -191,23 +196,8 @@ func checkTunnels(tunnels []protocol.TunnelRequest) string {
 	return ""
 }
 
-func mergeLabels(lists ...[]string) []string {
-	out := []string{}
-	for _, l := range lists {
-		for _, v := range l {
-			if !slices.Contains(out, v) {
-				out = append(out, v)
-			}
-		}
-	}
-	return out
-}
-
 func noMachineMessage(r scheduler.Request) string {
-	msg := "no machine can serve platform " + r.Platform
-	if len(r.Labels) > 0 {
-		msg += " with the labels " + strings.Join(r.Labels, ", ")
-	}
+	msg := "no machine has " + r.Platform
 	if r.PoolTunnels > 0 {
 		msg += fmt.Sprintf(" and %d tunnel ports", r.PoolTunnels)
 	}
