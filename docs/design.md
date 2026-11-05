@@ -12,10 +12,10 @@ its vocabulary and requirement IDs (R1, N1, ...). `plan.md` gives the build orde
     │   SSH to the server gateway                  │   external command)
     └──────────────────────────────────────────────┤
                        (data path)                 ▼
-                                                 room (slots, helper, devices)
+                                                 room (slots, helper, tools)  
 ```
 
-- **Control path.** The guest lists platforms, creates a lease, waits, and releases
+- **Control path.** The guest lists tools, creates a lease, waits, and releases
   it. The messages are small JSON documents over HTTP.
 - **Data path.** The guest uses SSH to send files, run commands, and keep a reverse
   tunnel. All guest SSH traffic goes to the **gateway**, an SSH server inside the
@@ -50,7 +50,7 @@ One Go binary, `hostel`, for darwin, linux, and windows on amd64 and arm64.
 
 | Mode | Commands | Runs on |
 |---|---|---|
-| Guest | `hostel connect`, `hostel platforms`, `hostel acquire`, `hostel run`, ... | agent machines (a user's computer) |
+| Guest | `hostel connect`, `hostel tools`, `hostel acquire`, `hostel run`, ... | agent machines (a user's computer) |
 | Config | `hostel config users ...` | any connected computer; changes need an admin (M8; `multiplayer.md`) |
 | Admin | `hostel admin ...` | room tokens, room control; `config check|schema` run locally |
 | Server | `hostel server init`, `hostel server invite`, `hostel server run`, `hostel server update` | the server machine (`update --remote`: an admin's computer) |
@@ -60,16 +60,16 @@ Rooms need no permanent daemon. Exception: a static room behind NAT runs
 `hostel machine connect` (before M9: `hostel room connect`) as a service (launchd, systemd, or a Windows service).
 
 Distribution. A tag `v*` makes a GitHub release (`make release`): the binary for
-each OS and architecture, the pinned `mise` binaries, `hostel-platforms.tar.gz`,
+each OS and architecture, the pinned `mise` binaries, `hostel-tools.tar.gz`,
 `SHA256SUMS`, and (from v0.2.0) `SHA256SUMS.sig`. `install.sh` installs the
 binary for the machine, or with `--server DIR` also the helper binaries and the
-platform scripts; it checks each file against `SHA256SUMS`.
+default tool definitions; it checks each file against `SHA256SUMS`.
 `docs/deploy-vps.md` shows a server on a VPS.
 
 ### Releases and updates (M10d)
 
 - **Signature.** The release workflow signs `"hostel-release <tag>\n" +
-  SHA256SUMS` with Ed25519 (`tools/signrelease`, the repository secret
+  SHA256SUMS` with Ed25519 (`cmd/signrelease`, the repository secret
   `HOSTEL_RELEASE_KEY`); `SHA256SUMS.sig` is the signature in base64. The
   public key is in the binary (`internal/update`). The tag in the signed text
   stops an old release that is served under a new tag. The install scripts
@@ -99,7 +99,7 @@ platform scripts; it checks each file against `SHA256SUMS`.
   temporary files next to it, and only then renames them into place, then the
   server binary (a
   copy of its new helper file, checked with `--version`); it checks first that
-  the server's user can write both directories. The platform defaults are in
+  the server's user can write both directories. The default tool definitions are in
   the binary. `hostel server update` on the server machine does it for the
   binary that the service ran at its last start (`executable` in
   `data_dir/server.json`), not for the binary that runs the command, and prints
@@ -138,7 +138,7 @@ Suggested layout:
 ```
 cmd/hostel/            main: mode dispatch
 internal/protocol/     API and helper request and response types
-internal/config/       server, platform, repository, and guest configuration; defaults; schema
+internal/config/       server, tool, repository, and guest configuration; defaults; schema
 internal/server/       HTTP API, workers
 internal/scheduler/    queue order and slot selection (pure functions)
 internal/store/        SQLite schema, migrations, compare-and-set updates
@@ -149,17 +149,19 @@ internal/guest/        CLI commands, local state, sync client, port process
 internal/room/         helper commands
 internal/syncfs/       manifests, sync plans, safe file writes
 internal/update/       releases: source, signature, versions, updates (M10d)
-tools/signrelease/     signs SHA256SUMS in the release workflow
+cmd/signrelease/       signs SHA256SUMS in the release workflow
+tools/                 the default tool definitions (embedded in the binary; section 8)
 test/e2e/              E2E tests (build tag e2e)
 test/fakeprovider/     external provider for tests; creates Docker rooms
 test/roomimage/        Dockerfile for test rooms
-test/platforms/        platform directories for tests
+test/tools/            tool definitions for tests
 ```
 
 ## 3. Configuration model
 
-The owner configures two things: **providers** (with their **machines**) and
-**platforms**. The guest sees only platforms.
+The owner configures two things: **providers** (with their **machines**) and the
+**tools** of each machine (owner decision, 2026-11-05; `m10e-implementation.md`).
+The guest sees only tools.
 
 ### Providers and machines
 
@@ -170,37 +172,64 @@ The owner configures two things: **providers** (with their **machines**) and
   - In an on-demand provider (`namespace`, `external`), a machine is a template. It
     gives up to its `max_rooms` rooms at the same time. The provider creates them when
     a lease needs one.
-- A machine declares its OS (the `os` key, or from its `spec` for Namespace), the device
-  platforms it serves, its labels, its machine-level mise tools, and its slots.
-- Machine settings inherit from the provider and can override them. For maps
-  (`env`, `tools`), the machine's keys are merged into the provider's keys and
-  replace keys with the same name.
+- A machine declares its OS (the `os` key, or from its `spec` for Namespace), the
+  tools it gives, and its slots.
+- Machine settings inherit from the provider and can override them. For `env`,
+  the machine's keys are merged into the provider's keys and replace keys with the
+  same name. A machine's `tools` list replaces the provider's list.
 - A **room** is one concrete machine at runtime (a static host, or one machine that
   an on-demand provider created).
 
-### Platforms
+### Tools
 
-A platform is what a guest requests. There are two kinds:
+A **tool** is something that a machine gives to a lease:
 
-| Kind | Names | Which machines serve it | Configuration |
-|---|---|---|---|
-| **OS platform** | `linux`, `macos`, `windows` | Every machine with that OS, automatically | None. An optional directory can add scripts and settings (section 8). |
-| **Device platform** | owner-defined, for example `ios`, `android` | Machines that list it in `platforms` | A directory with `platform.toml` and scripts for each OS |
+- **Software:** `android-sdk`, `jdk`, `xcode`, `dotnet`, `node`, `docker`. It is
+  installed on the machine and is always usable in each lease on it, also when
+  the lease did not ask for it.
+- **Screen tools:** `android-emulator`, `ios-simulator`, `macos-desktop`,
+  `windows-desktop`. The agent looks at them and acts on them. Hostel starts a
+  screen tool only for a lease that asks for it, takes screenshots of it, has its
+  driver ready, and cleans it up at the end. A screen tool can take the whole
+  machine (the desktops: there is one screen).
 
-Tools such as Node, Java, or pnpm are not platforms. The repository's mise files
-declare them, and Hostel installs them on any room (section 9, "mise on rooms").
+An **option** is a version of a software tool, or the phone or tablet of an
+emulator or a simulator: `node:22`, `xcode:26`, `android-emulator:pixel-9`. In a
+request, an option is a filter: `node` matches any machine with any `node`,
+`node:22` only a machine whose `node` matches `22`. A version option matches the
+whole version or its first parts (`xcode:26` matches `26.1`; `node:22` matches
+`22.11.0`, not `2.2`). The option of a screen tool matches its name exactly.
+
+There are two kinds of tool:
+
+| Kind | Examples | Definition |
+|---|---|---|
+| **mise tool** | `node:22`, `jdk:21`, `python:3.13`, `go:1.25` | None: any tool that mise can install. The server installs it with mise at room provisioning. The option is the version to install. |
+| **Defined tool** | `android-sdk`, `android-emulator`, `xcode`, `ios-simulator`, `macos-desktop`, `windows-desktop` | A directory with `tool.toml`, scripts for each OS, and `GUIDE.md` (section 8). Hostel comes with these defaults; an admin can change them and add own tools. |
+
+The OS is a property of the machine, not a tool. Agents do not ask for an OS:
+tools work the same way on each OS that has them. Only a desktop tool belongs to
+one OS. A lease shows the OS of its machine (section 10).
+
+Tools of the repository (its `mise.toml`: node, pnpm, Python) are not machine
+tools. They are set up for each lease on any machine (section 9, "mise on
+rooms").
+
+There are no platforms, devices, or labels. The configuration check fails on the
+old keys (`platforms`, `labels`, `requires`) with a message that names the new
+form.
 
 ## 4. Data model
 
-The configuration (section 9) defines providers, machines, and platforms. The
+The configuration (section 9) defines providers, machines, and their tools. The
 database stores runtime state.
 
 | Table | Main columns |
 |---|---|
 | `rooms` | id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key, helper_sha256, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at |
-| `room_platforms` | room_id, platform, scripts_sha256, provisioned_at |
+| `room_tools` | room_id, tool, scripts_sha256, state (`installing`, `ready`, `failed`), option (the version or the options that `check` reported), env (the tool's environment names), checked_at |
 | `slots` | room_id, name, state, lease_id, cleanup_data, home |
-| `leases` | id, token_id, manual_position, began_at, state, revision, position, platform, devices, task, priority, required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
+| `leases` | id, token_id, manual_position, began_at, state, revision, position, tools (the request: `["android-emulator:pixel-9"]`), started (the screen tools that started, with their options), task, priority, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id, slot_name, attempts, reason, created_at, last_poll_at, last_activity_at, ready_at, expires_at, ended_at, end_state, end_reason |
 | `lease_tunnels` | lease_id, name, room_port |
 | `users` | id, name (unique, not case-sensitive), role (`admin` or `member`), created_at, removed_at (M8) |
 | `tokens` | id, name, role (`user` or `room`), machine (for `room` tokens), sha256, created_at, revoked_at, user_id, computer |
@@ -212,8 +241,10 @@ is the final state that a lease in `cleaning` goes to. `leases.tunnels`
 holds the requested tunnels (`[{"name", "room_port"}]`) until the server assigns
 the room ports in `lease_tunnels`. Times are Unix milliseconds.
 
-`room_platforms` records which platforms a room is ready for, and with which
-version of the platform scripts. Jobs are not in the database. They exist only on
+`room_tools` is the **inventory** of a room: each tool of its machine, the version
+of the tool's scripts that installed it, its state, and the real option that
+`check` reported (a version, or the phones and tablets of a screen tool). Jobs are
+not in the database. They exist only on
 rooms (section 15).
 
 **Transactions.** Each state change is a compare-and-set in one short SQLite
@@ -242,8 +273,8 @@ assigned, provisioning, preparing ──► queued (room failure; section 6)
 |---|---|
 | `queued` | Waits for a slot. |
 | `assigned` | A slot is reserved for this lease. |
-| `provisioning` | The room is in creation or resume, or the platform `provision` script runs. |
-| `preparing` | The server checks the helper and scripts, writes the lease data, and runs the platform `prepare` script. |
+| `provisioning` | The room is in creation or resume, or a tool's `install` script runs. |
+| `preparing` | The server checks the helper and scripts, writes the lease data, and runs the `start` script of each requested screen tool. |
 | `ready` | The guest can connect. |
 | `cleaning` | Cleanup runs (section 17). |
 | final: `released`, `expired`, `cancelled`, `failed` | `end_reason` records why: guest release, idle, max duration, poll timeout, room lost, or error text. |
@@ -267,7 +298,7 @@ Rules:
 | State | Meaning |
 |---|---|
 | `creating` | The row exists; the provider call runs. |
-| `provisioning` | The server probes the room, uploads the helper and mise, and installs the machine-level tools. |
+| `provisioning` | The server probes the room, uploads the helper, mise, and the tool directories, installs the mise tools, runs the `install` and `check` scripts, and writes the inventory. |
 | `running` | Usable. Slots have their own states. |
 | `stopping`, `stopped`, `resuming` | Warm stop and resume (providers that can stop). |
 | `destroying`, `destroyed` | Removal. |
@@ -283,7 +314,8 @@ Rules:
 - A failed cleanup sets the slot to `broken` and the room to `broken`.
 - **Dirty slot.** If a lease leaves a slot after `begin` (`began_at` is set) and
   cleanup cannot run now (the room is unreachable), the slot becomes `dirty` and
-  records the lease ID, platform, devices, and ports in `slots.cleanup_data`. The
+  records the lease ID, its started screen tools, and its ports in
+  `slots.cleanup_data`. The
   room runs this cleanup before it takes a new lease: when a probe succeeds again,
   the server runs the cleanup of each dirty slot, then sets the room to `running`.
 - When a lease returns to `queued`, its `began_at`, room, and slot are cleared. A new
@@ -308,36 +340,44 @@ pass at once. A unit test is allowed for the scheduler (see `AGENTS.md`).
 `normal` = 1 (default), `high` = 2; an agent sets a lane only when the user asks
 for it. Order: leases that an admin placed (`manual_position` > 0, in that
 order), then the lane (high first), then the request time. There is no aging: an
-old `low` lease stays behind a new `normal` one. An admin places a queued lease
-first or before another lease of its platform (`POST /v1/leases/{id}/move`): the
+old `low` lease stays behind a new `normal` one. There is one waiting line for
+all leases (owner decision, 2026-11-05), not one for each kind of request. An
+admin places a queued lease first or before another queued lease
+(`POST /v1/leases/{id}/move`): the
 lease and the leases before it get manual positions, so they keep that order
 until they start. An admin can also change a queued lease's lane.
 
 **Candidate machines.** A machine is a candidate for a lease if all of these are
 true:
 
-1. It serves the platform: for an OS platform, the machine has that OS; for a device
-   platform, the machine lists it in `platforms`.
-2. It has all required labels: the platform's `requires`, the repository's
-   `requires`, and `--require`.
-3. Its slots have at least as many pool ports as the lease has tunnels without a
+1. It has every requested tool, and each requested option matches: the room's
+   inventory (`room_tools`) when the room has one, else the machine's configured
+   `tools` (an on-demand machine before its first room, a room before its first
+   install). A requested tool also needs the tools in its `needs`; the
+   configuration gives them to each machine that lists the tool (section 8). A
+   lease with no tools has every machine as a candidate.
+2. Its slots have at least as many pool ports as the lease has tunnels without a
    fixed `room_port`.
-4. For `--fresh`: it is an on-demand machine.
+3. For `--fresh`: it is an on-demand machine.
 
-The server checks the request at `POST /v1/leases`: the platform exists, each
-requested device is in the platform's device list, the number of devices is at most
-`max_devices`, and at least one candidate machine exists. Else the request fails at
-once (R4).
+The server checks the request at `POST /v1/leases`: each tool exists, each option
+of a screen tool is in the tool's `options`, the number of options of one screen
+tool is at most its `max_options`, and at least one configured machine is a
+candidate (online or offline). Else the request fails at once (R4, owner decision
+2026-11-05) with the reason, for example "no machine has xcode and android-sdk
+together; machines with xcode: home/macbook". When all candidates are offline,
+the lease waits, and the answer says so.
 
 **Assignment.** For each queued lease, in order, select the first possible option.
 Inside each option, candidate machines are in configuration order (providers in file
 order, then machines in file order):
 
-1. a `free` slot in a `running`, not drained room that is ready for the platform
-   (`room_platforms` is up to date) and has enough remaining provider lifetime
-   (section 7, deadlines);
+1. a `free` slot in a `running`, not drained room that is ready for the lease
+   (each requested tool and its needs are `ready` in `room_tools`, with the
+   current scripts) and has enough remaining provider lifetime (section 7,
+   deadlines);
 2. a `free` slot in a `running`, not drained room that is not yet ready for the
-   platform (the platform `provision` script runs first);
+   lease (the `install` scripts run first);
 3. a `stopped` room that the provider can resume;
 4. a new room, if the machine and its provider are under their limits;
 5. a new room after **eviction**: if each limit that blocks option 4 is full only
@@ -347,13 +387,19 @@ order, then machines in file order):
 
 `--fresh` allows only options 4 and 5.
 
-**Exclusive leases.** A lease is exclusive if its platform has `exclusive = true`,
-or if it requires the label `desktop` (section 9, "The Mac desktop"). An exclusive
+**Exclusive leases.** A lease is exclusive if one of its tools has
+`whole_machine = true` (the desktops; section 9, "The Mac desktop"). An exclusive
 lease needs a room where all slots are free, and it reserves all of them.
+
+**Options of a screen tool.** A lease that names no option of a requested screen
+tool gets the first option that the room has, in the order of the tool's
+`options`.
 
 If no option is possible, the lease **blocks** its candidate machines. A lease later
 in the order cannot take a slot or a new room from a blocked machine. It can use
-other machines. This prevents starvation and still lets other platforms continue.
+other machines. This prevents starvation and still lets leases that other
+machines can serve continue: a lease that waits for xcode does not block a lease
+for android-sdk on a Linux machine.
 
 **Limits.**
 
@@ -381,9 +427,11 @@ other machines. This prevents starvation and still lets other platforms continue
 - Room rows are never deleted. `rooms.id` uses SQLite `AUTOINCREMENT`, so an ID and
   its provider name are never used twice.
 
-**Estimated wait.** Position in the queue for that platform × median lease duration
-of the platform (from the last 50 leases) ÷ number of slots on candidate machines,
-plus the median creation time when a new room is necessary. Show it as an estimate.
+**Estimated wait.** For each waiting lease: the number of leases before it in the
+order that share one of its candidate machines × the median lease duration on its
+candidate machines (from the last 50 leases) ÷ the number of slots on its
+candidate machines, plus the median creation time when a new room is necessary.
+Show it as an estimate, with "waiting behind N leases".
 
 ## 6. Failures
 
@@ -391,10 +439,10 @@ plus the median creation time when a new room is necessary. Show it as an estima
 |---|---|
 | Provider "limit reached" | Machine full (section 5). The lease returns to `queued`. Not an attempt. |
 | Other provider error at create or resume | Retry with backoff. **3 attempts in total**, then the lease fails with the provider message. |
-| Room provisioning fails (probe, upload, machine-level tools) | The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
+| Room provisioning fails (probe, upload, mise tools) | The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
 | SSH connection to a room fails (dial or handshake), in any step | Not a script failure. A static room becomes `broken` with reason "unreachable"; its slot becomes `dirty` if the lease had called `begin` (section 4, slot states); the room recovers by itself when a later probe succeeds (each reconcile) and its dirty slots are cleaned; the lease returns to `queued` (not an attempt). An on-demand room is destroyed; the lease returns to `queued`, and this **is** an attempt, so a machine with a bad SSH setup cannot create rooms without limit. A lease that was `ready` fails with "room unreachable". |
-| Platform `provision` script fails | The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
-| Platform `prepare` script fails | Run cleanup for the slot. The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
+| A tool's `install` script fails, or its first `check` fails | The tool is `failed` in the room's inventory; the room becomes `broken`. The lease returns to `queued`. This is an attempt. |
+| A screen tool's `start` script fails | Run the `stop` scripts of the screen tools that already started, in reverse order, and cleanup for the slot. The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
 | A lease reaches 3 attempts | The lease fails with the last error message. |
 | Cleanup fails | Slot and room become `broken` (R24). |
 | `mise install` or repository setup fails (guest side) | The lease stays `ready`. `acquire` exits with code 1 and prints the job ID and the end of its output. The agent can fix the code and run `hostel sync --setup`. |
@@ -404,8 +452,8 @@ plus the median creation time when a new room is necessary. Show it as an estima
 Broken on-demand rooms are destroyed. Broken static rooms stay until the owner runs
 `hostel admin room repair <room> [--accept-host-key]`. Repair runs the full cleanup
 (section 17) of each `broken` or `dirty` slot again (this also restores
-`authorized_keys`), then the `health` scripts of the platforms that the room is
-ready for, and sets the room to `running` if all
+`authorized_keys`), then the `check` scripts of the tools that the room has
+installed, and sets the room to `running` if all
 pass. It does this through the probe: a broken slot (with its `cleanup_data`)
 becomes `dirty`, and the room goes to `provisioning`; the probe cleans each dirty
 slot before the room is `running`.
@@ -456,7 +504,7 @@ type RoomAccess struct {
 - The server asks an external provider for the capabilities of each machine at
   start; a failure stops the start with the provider's message.
 - `rooms.os` is the probed OS: it selects the helper and mise binaries. The
-  machine's configured `os` selects the platform scripts; the server writes it to
+  machine's configured `os` selects the tool scripts; the server writes it to
   `room-env.json` (`"os"`), and the helper uses it for script names and
   `HOSTEL_ROOM_OS`. For static machines both must be the same.
 - `Signers` is the server key for `static`, `external`, and Namespace instance
@@ -497,7 +545,7 @@ can mix devbox and instance machines.
   a probe succeeds. A probe result that differs from `os` makes the room `broken`.
 - `namespace`: from `spec` (`platform` for a devbox, the prefix of `machine_type` for
   an instance).
-- `external`: the `os` key is required. Platform matching and script selection use
+- `external`: the `os` key is required. Tool checks and script selection use
   it. The helper binary follows the probe. (The E2E tests use this to run `.macos.sh`
   scripts in a Linux container.)
 
@@ -505,7 +553,8 @@ can mix devbox and instance machines.
 
 - `server_id` must match `^[a-z0-9]{1,20}$` (no hyphen). Room IDs are integers.
 - Lease IDs match `^[a-z0-9]{10,26}$` (for example a lowercase ULID). Provider,
-  machine, platform, and device names match `^[a-z][a-z0-9-]*$`. No name contains
+  machine, and tool names match `^[a-z][a-z0-9-]*$`; an option matches
+  `^[a-z0-9][a-z0-9.-]*$`. No name contains
   `.`, so gateway user names (section 13) parse without ambiguity.
 - Before a provider call, the server inserts the `rooms` row in state `creating`
   with a name it chooses: `hostel-<server_id>-<room id>`. It passes this name to
@@ -538,20 +587,21 @@ can mix devbox and instance machines.
   that is no longer in the configuration becomes `retired`; its active lease
   continues, and the row stays `retired` after that lease ends.
 - Reconcile never destroys a static room.
-- Static rooms are provisioned for all their device platforms at server start, so the
-  first lease is fast. On-demand rooms are provisioned for a platform when a lease
-  for it first uses the room (option 2 in section 5).
-- Configuration changes, including changes in platform directories, need a server
-  restart in version 1. The server reads all configuration at start.
+- Static rooms install all their tools at server start, so the first lease is
+  fast. On-demand rooms install all the tools of their machine when a lease first
+  uses the room (option 2 in section 5); the inventory then lists them all.
+- A change of the configuration or of a tool directory applies at once (M9,
+  `hostel config`): a free room whose tools changed installs again.
 
 ### Deadlines
 
 - Machines that cannot stop (`instance`):
   - At creation and at each assignment, the deadline is at least
-    `now + creation timeout + platform provision timeout + platform prepare timeout
-    + max_lease + warm_running + 10 minutes`. The creation timeout is the provider's
-    timeout for `provision` (external `timeouts.provision`; Namespace default 10
-    minutes). The script timeouts are those of the lease's platform.
+    `now + creation timeout + install timeouts + start timeouts + max_lease +
+    warm_running + 10 minutes`. The creation timeout is the provider's timeout for
+    `provision` (external `timeouts.provision`; Namespace default 10 minutes). The
+    script timeouts are those of the machine's tools (`install`) and of the
+    lease's screen tools (`start`).
   - At `ready`, the server extends it to `ready_at + max_lease + warm_running + 10
     minutes` if that is later.
 - Machines that can stop: the server destroys stopped rooms after
@@ -588,7 +638,7 @@ timeouts = { provision = "5m", default = "1m" }
 [providers.docker.machines.small]
 os = "linux"
 spec = { image = "debian:13", cpus = 2 }
-platforms = ["android"]
+tools = ["android-sdk", "android-emulator", "jdk:21"]
 max_rooms = 2
 ```
 
@@ -622,16 +672,16 @@ structure under `%USERPROFILE%`.
 hostel/
   bin/hostel                 helper binary (hostel.exe on Windows)
   bin/mise                   mise binary (mise.exe on Windows; "mise on rooms" below)
-  mise/config.toml           machine-level tools (MISE_CONFIG_DIR)
+  mise/config.toml           the machine's mise tools (MISE_CONFIG_DIR)
   room-env.json              provider, machine, and slot env and the MISE_* variables (mode 0600)
-  platforms/<platform>/      platform scripts for this room's OS
+  tools/<tool>/              the defined tools of this machine: tool.toml and the scripts for this room's OS
   authorized_keys.base       authorized_keys at the first lease (restored at cleanup)
   cache/                     shared caches; kept between leases (HOSTEL_CACHE_DIR)
   slots/<slot>/
     work/                    the lease's files; a stable path for each slot
     baseline.git/            git directory for the baseline commits
-    lease.json               lease ID, platform, devices
-    device.env               KEY=VALUE lines that prepare writes (for example SIMULATOR_UDID)
+    lease.json               lease ID, requested tools, started screen tools with their options
+    tool.env                 KEY=VALUE lines that the start scripts write (for example SIMULATOR_UDID)
     lease.env                KEY=VALUE lines that the guest sets (section 10)
     manifest.json            files of the last sync
     plans/<plan-id>.json     pending sync plans
@@ -657,12 +707,12 @@ path as a key (for example Xcode DerivedData) are therefore reused.
    `darwin` maps to `macos`.
 2. The server compares SHA-256 hashes (from the helper `info` command) and uploads
    what differs. The hash of a file is the SHA-256 of its bytes. The hash of a
-   platform directory is the SHA-256 of a text with one line `<path> <mode>
+   tool directory is the SHA-256 of a text with one line `<path> <mode>
    <sha256>\n` for each included file, sorted by path. Included files are
-   `platform.toml` and the scripts for the room's OS. Upload candidates: the helper, mise,
-   `hostel/mise/config.toml`, `hostel/room-env.json`, and each platform directory that the room serves
-   (`platform.toml` and the scripts for the room's OS; one hash for each directory,
-   which is also `room_platforms.scripts_sha256`).
+   `tool.toml` and the scripts for the room's OS. Upload candidates: the helper, mise,
+   `hostel/mise/config.toml`, `hostel/room-env.json`, and the directory of each
+   defined tool of the machine (one hash for each directory, which is also
+   `room_tools.scripts_sha256`).
 3. The server repeats step 2 at each `preparing`, so that a guest cannot leave a
    changed helper or script for the next lease.
 4. Transfer. The helper itself goes first, with `sh -c 'cat > tmp && chmod 755 tmp
@@ -672,8 +722,8 @@ path as a key (for example Xcode DerivedData) are therefore reused.
    replace a running executable, but it can rename it: the old file moves aside
    and a later install deletes it. All other items go through the helper `install`
    command, which writes a temporary file, checks the SHA-256, and renames it. mise
-   goes compressed with gzip (151 MB → about 52 MB for Linux). An OS platform without
-   scripts for the room's OS has an empty upload, which removes old scripts.
+   goes compressed with gzip (151 MB → about 52 MB for Linux). A tool that the
+   machine no longer lists is removed from `hostel/tools/`.
 
 ### Helper commands
 
@@ -683,14 +733,14 @@ success; else stdout has `{"error": "..."}`.
 
 | Command | Caller | Input | Output |
 |---|---|---|---|
-| `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "platforms": {"<name>": "<hash>"}}}` (empty string for a missing item) |
-| `install mise\|mise-config\|room-env --sha256 H` / `install platform <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (platform) | `{}`; refuses data with another hash |
+| `info` | server | — | `{"os", "arch", "version", "hashes": {"helper", "mise", "mise_config", "room_env", "tools": {"<name>": "<hash>"}}}` (empty string for a missing item) |
+| `install mise\|mise-config\|room-env --sha256 H` / `install tool <name> --sha256 H` | server | gzip stream (mise), bytes, or a `tar` stream (tool) | `{}`; refuses data with another hash |
 | `usage` | server | — | `{"cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_free_bytes"}`, best effort (M10b): the CPU use over 1 s (`/proc/stat`; `ps` on macOS; `GetSystemTimes` on Windows) and the memory (`/proc/meminfo`; `vm_stat`; `GlobalMemoryStatusEx`). The server runs it for the room details. |
 | `hardware` | server | — | `{"cpu", "cores", "memory_bytes", "disk_free_bytes", "os_version"}`, best effort (M10). The server runs it after each provisioning and keeps it on the room for the status view. |
-| `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out"}`; installs the machine-level tools of `hostel/mise/config.toml` |
-| `begin` | server | `{"lease_id", "platform", "devices"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
-| `run-script <platform> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "missing", "timed_out"}`; `missing` when the platform has no script for this step and OS |
-| `cleanup` | server | `{"lease_id", "platform", "devices", "ports", "health"}` (from the database, so a repeated cleanup does not need `lease.json`; the server sets `health` at the time of the cleanup: the platforms that the room is ready for) | `{"steps": [...]}` (section 17) |
+| `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out", "versions": {"<tool>": "<version>"}}`; installs the machine's mise tools of `hostel/mise/config.toml` and reports their versions (the inventory of the mise tools) |
+| `begin` | server | `{"lease_id", "tools", "started"}` | `{}`. Writes `slots/<slot>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other slot of the room has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another slot, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
+| `run-script <tool> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "last_line", "missing", "timed_out"}`; `missing` when the tool has no script for this step and OS; `last_line` is the version that a `check` prints |
+| `cleanup` | server | `{"lease_id", "started", "ports", "check"}` (from the database, so a repeated cleanup does not need `lease.json`; `started` are the screen tools of the lease with their options, stopped in reverse order; the server sets `check` at the time of the cleanup: the tools that the room has installed) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
 | `sync-apply <plan-id>` | guest | a `tar` stream (not JSON) | `{"written", "deleted"}` |
@@ -706,128 +756,164 @@ success; else stdout has `{"error": "..."}`.
 
 The `ready` lease data contains the absolute helper path, so the guest can call it.
 
-### Platform directories
+### Tool directories
 
-Since M9, the platforms are in the server's database (`platform_revisions`).
-The binary embeds the default platforms (`ios`, `android`, `macos`, `windows`,
-from `platforms/` of the repository); each default applies until an admin
-replaces it with their own files or removes it. Admins add their own platforms
-from a client:
-
-```
-hostel config platforms                     # name, kind, machines, source (default, changed, own)
-hostel config platforms new tvos ./tvos     # a folder with a template (--os linux|macos|windows)
-hostel config platforms pull ios ./ios      # the current files into a new folder
-hostel config platforms push ./tvos         # check and save the folder (the name is the folder name)
-hostel config platforms reset ios           # a default back to the version of this release
-hostel config platforms remove tvos         # refused while a machine lists it
-```
-
-A push sends only platform files (`platform.toml`, `README.md`, and scripts);
-the server checks it with the whole configuration (the same rules as below) and
-applies it at once. The server writes the effective platforms to
-`data_dir/platforms/<hash>/` and uses them as before. A free room whose
-platforms changed provisions again (an on-demand room: when a lease uses the
-device platform). At the first start of M9, the platforms in `platforms_dir`
-that differ from the defaults are imported as revision 1; after that,
-`platforms_dir` is not read. Each device platform has one directory; OS
-platforms can have one.
+A defined tool is a directory (M10e; `m10e-implementation.md`). The binary
+embeds the default tools (`android-sdk`, `android-emulator`, `xcode`,
+`ios-simulator`, `macos-desktop`, `windows-desktop`, from `tools/` of the
+repository); each default applies until an admin replaces it with their own
+files or removes it. The tools are in the server's database
+(`tool_revisions`). Admins add their own tools from a client:
 
 ```
-platforms/
-  ios/
-    platform.toml
-    provision.macos.sh   prepare.macos.sh   screenshot.macos.sh   reset.macos.sh   health.macos.sh
-  android/
-    platform.toml
-    provision.linux.sh   prepare.linux.sh   screenshot.linux.sh   reset.linux.sh
-    provision.macos.sh   prepare.macos.sh   screenshot.macos.sh   reset.macos.sh
-  macos/
-    screenshot.macos.sh  # desktop screenshot (optional OS platform directory)
+hostel config tools                          # name, screen, machines, source (default, changed, own)
+hostel config tools new tvos-sim ./tvos-sim  # a folder with a template (--os linux|macos|windows, --screen)
+hostel config tools pull ios-simulator ./sim # the current files into a new folder
+hostel config tools push ./tvos-sim          # check and save the folder (the name is the folder name)
+hostel config tools reset ios-simulator      # a default back to the version of this release
+hostel config tools remove tvos-sim          # refused while a machine lists it
 ```
 
-`platform.toml`:
+A push sends only tool files (`tool.toml`, `GUIDE.md`, and scripts); the server
+checks it with the whole configuration (the same rules as below) and applies it
+at once. The server writes the effective tools to `data_dir/tools/<hash>/` and
+uses them. A free room whose tools changed installs again (an on-demand room:
+when a lease next uses it). mise tools have no directory (section 3).
+
+```
+tools/
+  android-sdk/
+    tool.toml   GUIDE.md
+    install.linux.sh   check.linux.sh   install.macos.sh   check.macos.sh
+  android-emulator/
+    tool.toml   GUIDE.md
+    install.linux.sh   start.linux.sh   screenshot.linux.sh   stop.linux.sh   check.linux.sh
+    install.macos.sh   start.macos.sh   screenshot.macos.sh   stop.macos.sh   check.macos.sh
+  xcode/
+    tool.toml   GUIDE.md   check.macos.sh
+  ios-simulator/
+    tool.toml   GUIDE.md
+    install.macos.sh   start.macos.sh   screenshot.macos.sh   stop.macos.sh   check.macos.sh
+  macos-desktop/
+    tool.toml   GUIDE.md   start.macos.sh   screenshot.macos.sh   stop.macos.sh
+  windows-desktop/
+    tool.toml   GUIDE.md   start.windows.ps1   screenshot.windows.ps1   stop.windows.ps1
+```
+
+`tool.toml`:
 
 ```toml
-description = "iOS Simulator"
-devices = ["iphone-17-pro", "ipad-pro-13"]   # the first is the default
-max_devices = 2                              # default 1
-requires = ["xcode-26.5"]                    # labels that each machine must have
-exclusive = false                            # true: the lease takes the whole room
-script_timeouts = { provision = "20m" }      # defaults: provision 20m, others 3m
+description = "Android emulator: one clean emulator for each lease"
+needs = ["android-sdk"]                    # tools that this tool uses; a machine that lists it gets them too
+screen = true                              # a screen tool: start, screenshot, and stop for each lease
+options = ["pixel-9", "pixel-tablet"]      # screen tools: the phones and tablets; the first is the default
+max_options = 2                            # options in one lease (default 1)
+whole_machine = false                      # true: the lease takes all slots of the room
+env = { ANDROID_HOME = "{cache}/android-sdk" }        # in every lease on a machine with this tool
+path = ["{cache}/android-sdk/platform-tools", "{cache}/android-sdk/emulator"]
+script_timeouts = { install = "30m", start = "5m" }   # defaults: install 20m, others 3m
 ```
 
-**OS platform directories** (`linux/`, `macos/`, `windows/`) are optional. Their
-`platform.toml` can have `description`, `requires`, `exclusive`, and
-`script_timeouts`, but not `devices` or `max_devices`. All steps are optional. A
-machine must not list an OS platform in `platforms`; the OS gives it automatically.
-Each room has a `room_platforms` row for its OS platform too (with no scripts, the
-row has an empty hash).
+- `{cache}` is `$HOSTEL_CACHE_DIR`, `{home}` the room user's home directory.
+- `env` and `path` of a software tool apply to **every** lease on a machine that
+  has the tool, also when the lease did not ask for it. The `env` and `path` of a
+  screen tool apply when the lease started it. Each tool declares its own
+  environment; Hostel adds nothing for one tool only.
+- A machine that lists a tool gets the tools in its `needs` (they are added to
+  its list; `hostel admin config check` shows the result).
+- A software tool has no `options` key: its option is the version that `check`
+  prints (or, for a mise tool, the installed version).
 
 **Script files.** `<step>.<os>.sh` for `macos` and `linux`, `<step>.<os>.ps1` for
 `windows`. The room's OS selects the file. A `.sh` or `.ps1` file with another
-name is a configuration error (it catches typing errors such as `prepar.linux.sh`).
-Other files in the directory are ignored and not uploaded. An OS platform directory
-can only have scripts for its own OS. Steps:
+name is a configuration error (it catches typing errors such as `strat.linux.sh`).
+Other files in the directory are ignored and not uploaded. A tool is available
+on an OS when its directory has at least one script for that OS, or when it has
+no scripts at all (a tool that only sets `env` and `path`). Steps:
 
-| Step | When | Example for `ios` on macOS |
+| Step | When | Example for `ios-simulator` |
 |---|---|---|
-| `provision` | once for each room and platform, and again when the platform scripts change | check Xcode; create one golden simulator for each device in `devices` |
-| `prepare` | each lease, before `ready` | clone the golden simulator of each requested device; boot it; write device facts to `device.env` |
-| `screenshot` | `hostel screenshot`; `$1` is the output path, `$2` the device (default: the first) | `xcrun simctl io "$udid" screenshot "$1"` |
-| `reset` | cleanup | stop the processes that use the slot's simulator clones (by UDID), then shut down and delete the clones |
-| `health` | after cleanup, at `repair`, and before a warm room takes a lease; only for a platform that the room is ready for (on an on-demand room, after its first `provision`) | Xcode works; enough free disk |
+| `install` | once for each room, and again when the tool's files change; before it, the `install` of each tool in `needs` | create one golden simulator for each option |
+| `check` | after `install`, after each cleanup, at repair, and before a warm room takes a lease; the last line of the output is the tool's version (a software tool) or its options, comma-separated (a screen tool); a non-zero exit code means that the tool does not work | Xcode works; the golden simulators exist; enough free disk |
+| `start` | screen tools only: for each lease that asked for the tool, before `ready`, after the `start` of the tools in `needs`; writes facts to `tool.env` | clone the golden simulator of each requested option; boot it |
+| `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output path, `$2` the option (default: the first of the lease) | `xcrun simctl io "$udid" screenshot "$1"` |
+| `stop` | screen tools only: cleanup of a lease that started the tool, in reverse order of `start` | stop the processes that use the slot's clones (by UDID), then shut down and delete the clones |
 
 Contract:
 
-- Each step is optional, except `prepare` for device platforms: a device platform
-  must have `prepare.<os>` for each OS of the machines that list it.
+- Each step is optional, except `start` for screen tools: a screen tool must
+  have `start.<os>` for each OS that it is available on.
 - Each step must be idempotent. A restart can run it again.
-- `provision` and `health` run in `hostel/`. `prepare`, `screenshot`, and `reset` run
-  in `slots/<slot>/`. The server creates `slots/<slot>/` before `prepare`.
-- Environment: `HOSTEL_PLATFORM`, `HOSTEL_PLATFORM_DEVICES` (all devices in
-  `platform.toml`, comma-separated), `HOSTEL_SLOT`, `HOSTEL_SLOT_DIR`,
-  `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_LEASE_ID`, `HOSTEL_DEVICES` (the
-  lease's devices, comma-separated; `prepare`, `screenshot`, `reset`),
-  `HOSTEL_EXCLUSIVE` (`1` when the lease holds the whole room, for example a
-  desktop lease, else empty; `prepare`, `screenshot`, `reset`), the `MISE_*`
-  variables, the provider, machine, and slot `env`, and `device.env` (for
-  `screenshot` and `reset`). Machine `env` is also the way to vary a script between
-  machines with the same OS. Scripts get `HOSTEL_LEASE_ID`, not `HOSTEL_LEASE`: device
-  processes that `prepare` starts are therefore not stopped by cleanup step 1, and
-  `reset` can shut them down cleanly.
-- **Device facts.** `prepare` writes them to `device.env`. Each platform documents
-  its variable names. The `ios` scripts write `SIMULATOR_UDID` (first device) and
-  `SIMULATOR_UDIDS` (all, comma-separated). The `ios` scripts (`platforms/ios`)
-  act only on simulators with the name prefix `hostel-`: the golden simulators
-  `hostel-golden-<device>-<iOS version>` (from `provision`) and the lease's
-  simulators `hostel-<slot>-<device>`. The machine `env` value `HOSTEL_IOS_RUNTIME`
-  (for example `26.5`) selects the runtime; the default is the newest iOS runtime.
-  The `android` scripts (`platforms/android`) write `ANDROID_SERIAL` (first
-  device), `ANDROID_SERIALS` (all, comma-separated), and `ANDROID_HOME` (the SDK
-  in `$HOSTEL_CACHE_DIR/android-sdk`). `provision` installs the SDK (Java from the
-  machine-level tools), on Linux the Ubuntu packages that the emulator needs
-  (with `sudo`), and one golden AVD `hostel-golden-<device>-<API>-<tag>` for each
-  device with a `clean` snapshot. `prepare` starts each lease device from that
-  snapshot with `-read-only` (the AVD does not change, so each lease gets a clean
-  device) on the console port `HOSTEL_ANDROID_PORT` (slot or machine `env`,
-  default 5554) + 2 × device index; a machine with several slots sets it for each
-  slot. `reset` stops the emulators on the slot's ports. The machine `env` values
-  `HOSTEL_ANDROID_API` (default 36) and `HOSTEL_ANDROID_TAG` (default
-  `google_apis`) select the system image. Linux rooms need `/dev/kvm`.
-- Before a platform `provision` script, the server runs `mise install` for the
-  machine-level tools (helper `mise-install`, at each room provisioning), so
-  scripts can use them: the helper adds `hostel/bin` and the output of
-  `mise env --json` (in the script's directory) to the script environment.
+- `install` and `check` run in `hostel/`. `start`, `screenshot`, and `stop` run in
+  `slots/<slot>/`. The server creates `slots/<slot>/` before `start`.
+- Environment: `HOSTEL_TOOL` (this tool), `HOSTEL_TOOL_OPTIONS` (the lease's
+  options of this tool, comma-separated; `start`, `screenshot`, `stop`),
+  `HOSTEL_TOOL_ALL_OPTIONS` (all options in `tool.toml`), `HOSTEL_TOOLS` (all
+  tools of the lease, with their options), `HOSTEL_SLOT`, `HOSTEL_SLOT_DIR`,
+  `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_LEASE_ID`, `HOSTEL_EXCLUSIVE`
+  (`1` when the lease holds the whole room, for example a desktop lease, else
+  empty; `start`, `screenshot`, `stop`), the `MISE_*` variables, the `env` and
+  `path` of the machine's software tools, the provider, machine, and slot `env`,
+  and `tool.env` (for `screenshot` and `stop`). Machine `env` is also the way to
+  vary a script between machines with the same OS. Scripts get
+  `HOSTEL_LEASE_ID`, not `HOSTEL_LEASE`: screen processes that `start` starts are
+  therefore not stopped by cleanup step 1, and `stop` can shut them down cleanly.
+- **Tool facts.** `start` writes them to `tool.env`. Each tool documents its
+  variable names in its `GUIDE.md`.
+- Before the `install` scripts, the server runs `mise install` for the machine's
+  mise tools (helper `mise-install`, at each room provisioning), so scripts can
+  use them: the helper adds `hostel/bin` and the output of `mise env --json` (in
+  the script's directory) to the script environment.
 - A non-zero exit code is a failure. The last 4 KB of output go to the event log.
 - The helper runs a script with `/bin/sh <script>` (so the file needs no execute
   bit) in its own process group, and stops the group at the step timeout. A
   background process that the script starts (for example a simulator) can keep
   running after the script ends.
 
-`hostel admin config check` (section 9) fails if a device platform lacks `prepare`
-for an OS that serves it, if a machine lists an unknown platform or an OS platform,
-or if an OS platform directory declares devices.
+`hostel admin config check` (section 9) fails if a screen tool lacks `start` for
+an OS that it is available on, if a machine lists a tool that is neither a
+defined tool nor a mise tool, if a machine lists a tool that is not available on
+its OS (for example `windows-desktop` on Linux), if a `needs` entry is unknown or
+makes a loop, and on the old keys (`platforms`, `labels`, `requires`,
+`devices`).
+
+**`GUIDE.md`.** A short text for agents: what the tool gives, its environment
+variables, and how to use it (build with it; start, see, and drive a screen).
+`hostel tools <name>` and `hostel agent-guide` show it (section 10). The agent
+guide shows only the guides of the tools that the server has.
+
+**The default tools.**
+
+- **`android-sdk`** (software; `needs = ["jdk"]`; Linux and macOS). `install`
+  installs the SDK in `$HOSTEL_CACHE_DIR/android-sdk` (Java from the `jdk` tool)
+  and, on Linux, the Ubuntu packages that the emulator needs (with `sudo`).
+  `check` prints the SDK platform version. `env`: `ANDROID_HOME`; `path`:
+  `platform-tools` (`adb`), `cmdline-tools/latest/bin` (`sdkmanager`), and
+  `emulator`. The machine `env` value `HOSTEL_ANDROID_API` (default 36) selects
+  the SDK platform and the system image.
+- **`android-emulator`** (screen; `needs = ["android-sdk"]`; options `pixel-9`,
+  `pixel-tablet`; `max_options = 2`). `install` creates one golden AVD
+  `hostel-golden-<option>-<API>-<tag>` for each option with a `clean` snapshot.
+  `start` starts each lease option from that snapshot with `-read-only` (the AVD
+  does not change, so each lease gets a clean emulator) on the console port
+  `HOSTEL_ANDROID_PORT` (slot or machine `env`, default 5554) + 2 × option index; a
+  machine with several slots sets it for each slot. It writes `ANDROID_SERIAL`
+  (the first option) and `ANDROID_SERIALS` (all, comma-separated). `stop` stops
+  the emulators on the slot's ports. The machine `env` value `HOSTEL_ANDROID_TAG`
+  (default `google_apis`) selects the system image. Linux rooms need `/dev/kvm`.
+- **`xcode`** (software; macOS). `check` prints the Xcode version (`xcodebuild
+  -version`). It installs nothing: Xcode comes with the machine image.
+- **`ios-simulator`** (screen; `needs = ["xcode"]`; options `iphone-17-pro`,
+  `ipad-pro-13`; `max_options = 2`). It acts only on simulators with the name
+  prefix `hostel-`: the golden simulators `hostel-golden-<option>-<iOS version>`
+  (from `install`) and the lease's simulators `hostel-<slot>-<option>`. `start`
+  writes `SIMULATOR_UDID` (the first option) and `SIMULATOR_UDIDS` (all,
+  comma-separated). The machine `env` value `HOSTEL_IOS_RUNTIME` (for example
+  `26.5`) selects the runtime; the default is the newest iOS runtime.
+- **`macos-desktop`** (screen; macOS; `whole_machine = true`): section 9, "The
+  Mac desktop".
+- **`windows-desktop`** (screen; Windows; `whole_machine = true`): section 9,
+  "The Windows desktop".
 
 ## 9. Configuration files
 
@@ -842,8 +928,8 @@ another relative path is relative to the directory of `server.toml`.
 `hostel server init` asks for the server name, the public addresses, and the
 owner's name (or takes `--server-id`, `--url`, `--user`, `--listen`, `--tls`), and
 writes a commented template with `tls = "self-signed"`, a gateway host key, the
-server's own SSH key pair (`data_dir/server_ed25519`), the TLS certificate, and an
-empty `platforms_dir`. When the server has no users, it makes the first admin
+server's own SSH key pair (`data_dir/server_ed25519`), and the TLS certificate.
+When the server has no users, it makes the first admin
 invite and prints `hostel connect <code>` (M8). `hostel server invite [--role
 admin|member] [--name n]` makes an invite on the server machine without the API
 (for example when nobody can sign in as admin). `hostel admin pubkey` prints the
@@ -852,7 +938,7 @@ server's public key.
 **Two parts (M9).** `server.toml` has only the keys that the server needs on
 its machine before it opens its database: `server_id`, `listen`,
 `gateway_listen`, `gateway_public`, `tls`, `public_urls`, `data_dir`,
-`helper_dir`, `platforms_dir`. Everything else (the providers with their
+`helper_dir`. Everything else (the providers with their
 machines, and the settings `idle_timeout`, `poll_timeout`, `limit_retry`,
 `port_process_offline`, `intervals`, `mise`) is the **configuration document**:
 TOML with the same keys, kept in the database with a revision for each change
@@ -860,15 +946,15 @@ TOML with the same keys, kept in the database with a revision for each change
 the wrong part is an error with its key path. Errors in the document name its
 revision ("configuration revision 4: providers.home.machines.box.os: ...").
 
-- **Import.** At the first start of M9, a `server.toml` with document keys is
-  split: the document keys become revision 1 (with their comments and order),
-  the old file stays as `server.toml.pre-m9`, and `server.toml` keeps the local
-  keys. Later, a document key in `server.toml` stops the server with a message.
+- **No old keys.** The keys of the configuration before M10e (`platforms`,
+  `labels`, `requires`, a `tools` map, `platforms_dir`) fail the check with the
+  new form in the message. There is no import or migration (owner decision,
+  2026-11-05).
 - **Changes.** An admin changes the document from a client: `hostel config
   edit` (in `$EDITOR`), `hostel config apply <file>`, or the targeted commands:
   `hostel config settings set <key>=<value>`; `hostel config rooms` (the
-  machines with their rooms), `rooms set <machine> <key>=<value>` (`platforms`
-  and `labels` as comma lists), `rooms remove <machine>`, `rooms drain|undrain|
+  machines with their rooms), `rooms set <machine> <key>=<value>` (`tools` as a
+  comma list), `rooms remove <machine>`, `rooms drain|undrain|
   repair|destroy <machine|room>` (the same as `hostel admin room`, by name);
   `hostel config providers` (list), `providers add <name> --kind <kind>`,
   `providers remove <name>`. The client sends the whole
@@ -879,18 +965,18 @@ revision ("configuration revision 4: providers.home.machines.box.os: ...").
 - **Apply.** A valid revision applies at once, without a restart: the server
   builds the providers again (only the changed ones: a Namespace provider
   checks its login, an external provider loads its capabilities), hashes the
-  platforms, adds rooms for new static machines, and wakes the scheduler. A
-  room records the hash of its machine settings, its platforms, and the `mise`
-  settings when it is provisioned. When it is free and the hash changed, a
-  static room provisions again and an on-demand room is destroyed. A machine
+  tools, adds rooms for new static machines, and wakes the scheduler. A room
+  records the hash of its machine settings, its tools, and the `mise` settings
+  when it is provisioned. When it is free and the hash changed, a static room
+  provisions again and an on-demand room is destroyed. A machine
   with an active lease cannot be removed (drain its room, and remove it when
   the lease ends); an on-demand machine cannot be removed while it has rooms
   (destroy them first: `hostel config rooms destroy <room>`); a provider
   cannot be removed while it has on-demand rooms. The room of a removed static
   machine is retired.
   The local keys still need a restart.
-- **Machines that join.** `hostel config rooms add <name> [--platform p]
-  [--label l] [--provider p]` makes a machine invite (24 hours, once) and prints
+- **Machines that join.** `hostel config rooms add <name> [--tool t]...
+  [--provider p]` makes a machine invite (24 hours, once) and prints
   one command for macOS and Linux (`curl ... /v1/install.sh | sudo sh -s --
   <code>`) and one for Windows (`curl.exe ... /v1/download/hostel-windows-<arch>.exe`,
   then `hostel.exe machine join <code>`). With TLS `self-signed`, curl pins the
@@ -924,7 +1010,7 @@ revision ("configuration revision 4: providers.home.machines.box.os: ...").
   `hostel config settings`, `hostel config history`); for members, the values
   of `env`, `command_env`, and `github_token` are `***`.
 
-The document, as in `server.toml` before M9:
+The document:
 
 ```toml
 
@@ -934,8 +1020,7 @@ kind = "static"
 [providers.home.machines.macbook]
 address = "hostel@macbook.local"    # user@host[:port]; default user hostel, port 22
 os = "macos"                        # required for static machines
-platforms = ["ios", "android"]      # device platforms; "macos" is automatic
-labels = ["xcode-26.5", "desktop"]
+tools = ["xcode", "ios-simulator", "android-emulator", "jdk:21", "macos-desktop"]   # android-sdk comes with android-emulator
 
 [providers.namespace]
 kind = "namespace"
@@ -945,9 +1030,8 @@ warm_running = "5m"                 # default for its machines
 
 [providers.namespace.machines.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
-platforms = ["ios"]
-labels = ["xcode-26.5", "desktop"]
-# tahoe-slim has several Xcode versions; select one.
+tools = ["xcode", "ios-simulator", "macos-desktop"]
+# tahoe-slim has several Xcode versions; select one (the xcode check then reports 26.5).
 env = { DEVELOPER_DIR = "/Applications/Xcode_26.5.app/Contents/Developer", HOSTEL_IOS_RUNTIME = "26.5" }
 max_rooms = 1
 max_lifetime = "3h"                 # required for a devbox: the plan's maximum duration
@@ -955,9 +1039,7 @@ max_lifetime = "3h"                 # required for a devbox: the plan's maximum 
 [providers.namespace.machines.linux]
 # image: the room container (default ubuntu:24.04)
 spec = { product = "instance", machine_type = "linux/amd64:8x16" }
-platforms = ["android"]
-labels = ["kvm"]
-tools = { java = "21" }             # the android provision script needs Java
+tools = ["android-sdk", "android-emulator", "jdk:21", "node:22"]   # jdk and node are mise tools
 max_rooms = 2
 ```
 
@@ -969,7 +1051,6 @@ Server-level keys and defaults:
 | `gateway_listen` / `gateway_public` | `127.0.0.1:7422` / same as `gateway_listen`, or `/v1/gateway` with `tls = "self-signed"` (the client adds the server address that it uses and its pinned key); `gateway_public` can also be a `wss://<host>/v1/gateway` URL (section 13) |
 | `data_dir` | `~/.local/share/hostel` |
 | `helper_dir` | `<data_dir>/helpers` (`hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>`, section 8) |
-| `platforms_dir` | `~/.config/hostel/platforms`; read only at the import (M9) |
 | `idle_timeout`, `poll_timeout`, `limit_retry` | `10m`, `5m`, `2m` (`aging` was removed in M8; the key is an error) |
 | `tls` | `off`; `hostel server init` writes `self-signed` (the server's own certificate in `data_dir/tls_cert.pem`, `tls_key.pem`; clients pin its key) |
 | `public_urls` | `[]`: the addresses that clients use, in invite codes; port 0 becomes the listen port; empty: the listen address. Each is `https://` (also with `tls = "off"`: the proxy has TLS); `http://` only on loopback with `tls = "off"`, because clients send the invite secret and their token to it |
@@ -990,9 +1071,7 @@ not inherited: on a provider it is a limit for all machines together.
 | `address`, `connect` | static machine | `connect = false` (true: the host is behind NAT; section 13) |
 | `os` | machine | required for `static` and `external`; from `spec` for `namespace` |
 | `spec` | on-demand machine | required |
-| `platforms` | machine | `[]` (OS platform only) |
-| `labels` | machine | `[]` |
-| `tools` | provider, machine | `{}` (machine-level mise tools, for example `{ java = "temurin-21" }`) |
+| `tools` | provider, machine | `[]` (no tools; the machine still takes leases that ask for no tools). Entries: a defined tool (`android-emulator`, `android-emulator:pixel-9` to give only that option), or a mise tool with its version (`jdk:21`, `node:22`; several versions of one tool are allowed) |
 | `slots` | machine | one slot `a`; slot `n` (from 0) gets ports `7500 + 10n` to `7509 + 10n` |
 | `env` | provider, machine, slot | `{}` |
 | `max_lease` | provider, machine | `2h` |
@@ -1006,28 +1085,29 @@ Explicit slots: `slots = [{ name = "a", ports = [7500, 7501], env = { ANDROID_SE
 so two leases on one room cannot read each other's files or stop each other's
 processes. The user needs the server key in its `authorized_keys`, and a home
 directory that other users cannot read. The server connects as the machine user
-(`address`) for the room-level steps (probe, install, provision, health) and as
-the slot user for the slot steps (begin, prepare, cleanup) and for the guest's
+(`address`) for the room-level steps (probe, upload, `install`, `check`) and as
+the slot user for the slot steps (begin, `start`, cleanup) and for the guest's
 connections. At each room provisioning, it probes each slot user (its home goes to
-`slots.home`), uploads its own `hostel/` directory, and installs the machine-level
-tools for it. After the cleanup of such a slot, the server runs the health scripts
-as the machine user. A platform whose `prepare` needs the result of `provision` in
-the machine user's account (for example the iOS golden simulators, which belong to
-the user that made them) does not work with slot users; such machines keep one
-slot or use slots without users.
+`slots.home`), uploads its own `hostel/` directory, and installs the machine's
+mise tools for it. After the cleanup of such a slot, the server runs the `check`
+scripts as the machine user. A screen tool whose `start` needs the result of
+`install` in the machine user's account (for example the iOS golden simulators,
+which belong to the user that made them) does not work with slot users; such
+machines keep one slot or use slots without users.
 
 **Commands for the owner:**
 
 - The server reads `~/.config/hostel/server.toml` by default; `--config` selects
   another file.
 - `hostel admin config check [--config server.toml]` validates `server.toml` and all
-  platform directories, and prints the effective configuration with all defaults.
+  tool directories, and prints the effective configuration with all defaults (with
+  the tools that `needs` adds to each machine).
   The server runs the same check at start and refuses to start on an error.
 - Error positions: TOML syntax errors, type errors, and unknown keys give the file,
   line, and column (from the decoder). Semantic errors (for example an unknown
-  platform) give the file and the key path, for example
-  `server.toml: providers.home.machines.macbook.platforms[1]: unknown platform
-  "andriod"`. A missing script names the platform directory and the missing file.
+  tool) give the file and the key path, for example
+  `server.toml: providers.home.machines.macbook.tools[1]: unknown tool
+  "andriod-sdk"`. A missing script names the tool directory and the missing file.
 - `hostel admin config schema` writes `hostel.schema.json` (JSON Schema from the Go
   types). Editors use it through the `#:schema` line for completion and checks.
   Generate it with a small reflection over the configuration structs. If that code
@@ -1036,28 +1116,34 @@ slot or use slots without users.
 
 ### Repository (`hostel.toml`)
 
-The repository declares what it needs. The file goes to the room with the other
-files. Sections are keyed by platform name.
+The repository declares what it needs (owner decision, 2026-11-05). The file goes
+to the room with the other files. The settings for every lease are on the top
+level; `[tool.<name>]` holds only what changes when the lease has that tool.
 
 ```toml
-include = [".env"]                  # extra files that git ignores; glob patterns
+tools = ["android-sdk", "jdk:21"]      # what "hostel acquire" asks for when no tools are given
+include = [".env"]                     # extra files that git ignores; glob patterns
+setup = ["./gradlew --version"]        # after mise install, in every lease
+env = { APP_ENV = "test" }             # in every lease
 
-[tunnels.api]                       # room → guest (section 14)
+[tunnels.api]                          # room → guest (section 14)
 local_port_env = "PORT"
 
-[platforms.ios]
-devices = ["iphone-17-pro"]         # default devices for this repository
-# requires = ["xcode-26.5"]         # labels that this repository needs on this platform
-setup = ["tuist install && tuist generate --no-open"]
+[tool.android-emulator]                # only when the lease has this tool
 env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
-[platforms.android]
-env = { APP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
-
+[tool.ios-simulator]
+setup = ["tuist install && tuist generate --no-open"]
+env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 ```
 
-- The platform's `requires`, the repository platform `requires`, and `--require`
-  are merged. `--device` replaces `devices`.
+- Tools on the command line replace `tools`.
+- The `setup` of each `[tool.<name>]` of a tool that the lease has runs after the
+  top-level `setup`; its `env` replaces keys of the top-level `env`. A
+  `[tool.<name>]` of a software tool applies when the lease asked for it (not for
+  every lease on a machine that has it).
+- The keys of the form before M10e (`[platforms.<name>]`, `devices`, `requires`)
+  fail the check with the new form in the message.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
   Then the `setup` commands run in order, with `sh -c` (or PowerShell on Windows):
   the setup job is `mise install && PATH="$(mise bin-paths | tr '\n' ':')$PATH" &&
@@ -1069,20 +1155,22 @@ env = { APP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
 **Caches.** mise installs, package stores, DerivedData, and Gradle caches are outside
 `slots/<slot>/work`. Cleanup does not delete them.
 
-### The Mac desktop (Mac Catalyst)
+### The Mac desktop (`macos-desktop`)
 
-A Mac Catalyst app runs on the macOS desktop, not in a simulator. Rules:
+A Mac app (also a Mac Catalyst app) runs on the macOS desktop, not in a
+simulator. The screen tool `macos-desktop` gives it. Rules:
 
-- It uses the OS platform `macos`. The guest requests the desktop for each lease:
-  `hostel acquire macos --require desktop`. A repository must not put `desktop` in
-  its `requires`, because then every `macos` lease of that repository is exclusive.
-- The owner gives the label `desktop` only to machines with a logged-in graphical
+- The guest asks for the desktop for each lease that needs it:
+  `hostel acquire xcode macos-desktop`. A repository puts `macos-desktop` in its
+  `tools` only when each of its leases needs the desktop, because each such lease
+  takes the whole machine.
+- The owner lists `macos-desktop` only for machines with a logged-in graphical
   session: a static Mac with automatic login, or a Namespace devbox (it has a
   desktop).
-- A lease that requires `desktop` is exclusive (section 5): two leases must not
-  share one desktop. A `macos` lease without `desktop` (for example a headless
-  build) is not exclusive.
-- `platforms/macos/screenshot.macos.sh` uses `screencapture` on the room. Over SSH,
+- `macos-desktop` has `whole_machine = true` (section 5): two leases must not
+  share one desktop. A lease on the same Mac without it (for example a build
+  with `xcode`) is not exclusive.
+- `tools/macos-desktop/screenshot.macos.sh` uses `screencapture` on the room. Over SSH,
   macOS can refuse this without the Screen Recording permission. On the static Mac
   it needs the permission for `sshd-keygen-wrapper` (M2); on a devbox it works
   without a prompt (M3, 2026-10-26).
@@ -1096,22 +1184,22 @@ A Mac Catalyst app runs on the macOS desktop, not in a simulator. Rules:
 - **Desktop cleanup (M7).** Apps that a guest starts with `open` are children of
   launchd, without `HOSTEL_LEASE` and outside the lease's sessions, so the process
   cleanup (section 17) does not find them. For a desktop lease
-  (`HOSTEL_EXCLUSIVE=1`), `platforms/macos/prepare.macos.sh` records the
-  foreground apps (`lsappinfo`; PID, start time, bundle ID) and the entries of
-  `~/Applications`, and `reset.macos.sh` ends each foreground app that was not
+  (`macos-desktop`), its `start.macos.sh` records the foreground apps
+  (`lsappinfo`; PID, start time, bundle ID) and the entries of
+  `~/Applications`, and its `stop.macos.sh` ends each foreground app that was not
   running then (SIGKILL: a quit can wait at a save dialog; not Finder or the
   Dock), deletes its saved window state, ends the `agent-device` runner, and
-  deletes the new entries of `~/Applications`. A headless `macos` lease does not
-  touch the desktop. The room needs an unlocked desktop session: a locked screen
+  deletes the new entries of `~/Applications`. A lease without `macos-desktop`
+  does not touch the desktop. The room needs an unlocked desktop session: a locked screen
   gives the lock screen to `screencapture` and blocks the runner (found on the
   static MacBook, 2026-10-29).
 
-### The Windows desktop (M7)
+### The Windows desktop (`windows-desktop`)
 
-- The guest requests it with `hostel acquire windows --require desktop`
-  (exclusive, as on the Mac). The machine has the label `desktop`, a signed-in
-  desktop user, and the "Hostel desktop" task (`static-room-setup.md`, Windows,
-  step 6).
+- The guest asks for it with `hostel acquire windows-desktop` (with `dotnet` or
+  other tools to build; `whole_machine = true`, as on the Mac). The owner lists
+  `windows-desktop` only for a machine with a signed-in desktop user and the
+  "Hostel desktop" task (`static-room-setup.md`, Windows, step 6).
 - **The desktop program.** SSH sessions (Windows session 0) cannot show
   windows, take screenshots, or use UI Automation. The task of the desktop user
   starts `hostel room desktop serve` as the room user in the desktop session
@@ -1122,7 +1210,7 @@ A Mac Catalyst app runs on the macOS desktop, not in a simulator. Rules:
 - **`desktop [--detach] <command>`** (`hostel/bin/desktop`, `room desktop
   run`) sends a command with the lease environment and the current directory.
   The program accepts only the lease of the slot (the caller's `HOSTEL_LEASE`
-  must match `lease.json`) and only a desktop (exclusive) lease. It sets
+  must match `lease.json`) and only a lease that started `windows-desktop`. It sets
   `HOSTEL_LEASE` and `HOSTEL_SLOT` from `lease.json` (not from the request), runs the command in its own job object
   (kill on close, no breakaway; on macOS and Linux a process group), and returns
   the output and exit code. With `--detach`, it returns the PID at once. If the
@@ -1135,13 +1223,14 @@ A Mac Catalyst app runs on the macOS desktop, not in a simulator. Rules:
   that. Without the program, `desktop` exits with 69.
 - **Control.** Windows rooms with `agent_device` get the pinned `winapp` CLI
   (Microsoft, `config.WinAppVersion`, SHA-256 checked) in
-  `hostel/tools/winapp-<version>`. `hostel/bin/winapp.cmd` runs it through
+  `hostel/winapp-<version>` (not under `hostel/tools/`, which holds only tool
+  directories). `hostel/bin/winapp.cmd` runs it through
   `desktop`. `winapp ui` reads the UI Automation tree and drives apps with
   patterns (`invoke`, `set-value`) and with real input (`click`, `send-keys
   --via send-input`), which it sends only when the app is the foreground
   window.
-- **Screenshot.** `platforms/windows/screenshot.windows.ps1` captures the whole
-  desktop through `desktop`.
+- **Screenshot.** `tools/windows-desktop/screenshot.windows.ps1` captures the
+  whole desktop through `desktop`.
 - **Limits.** The apps of a lease run as the room user, but they share the
   desktop with the desktop user's windows: real input can reach a window of
   the desktop user that is not elevated. An app that is started through the
@@ -1160,15 +1249,19 @@ and Hostel does not use another mise that the room has.
   (point `helper_dir` at it) and verifies the release checksums. The pin is in the
   Hostel repository, so a Hostel release fixes the mise version.
 - **Two levels of tools.**
-  - Machine level: `tools` in the provider or machine. The server writes them to
-    `hostel/mise/config.toml` and installs them when it provisions the room.
+  - Machine level: the mise tools in the machine's `tools` (`jdk:21`,
+    `node:22`; section 3). The server writes them to `hostel/mise/config.toml`,
+    installs them when it provisions the room, and records their versions in the
+    inventory. They are tools as the defined tools are: a guest can ask for
+    them (`hostel acquire node:22`).
   - Repository level: the repository's own `mise.toml`, `.mise.toml`, or
     `.tool-versions`, and idiomatic files (`.nvmrc`, `.python-version`). The setup
     job runs `mise install` in `work/` first. Repository versions override machine
-    versions (normal mise precedence).
+    versions (normal mise precedence). These are not machine tools: they work on
+    every machine, and a guest does not ask for them.
 - **What mise does not install.** Xcode, simulator runtimes, Android system images,
-  and other heavy toolchains come from the machine image or the platform `provision`
-  script. Machines declare them as labels.
+  and other heavy toolchains come from the machine image or a defined tool's
+  `install` script (section 8).
 - **Environment.** All room-side processes of Hostel (scripts, jobs, shells) get:
 
   | Variable | Value |
@@ -1191,7 +1284,7 @@ and Hostel does not use another mise that the room has.
 - **Opt-out.** `mise = false` in `hostel.toml` skips the repository-level steps.
 - **agent-device.** Each room gets [agent-device](https://github.com/callstack/agent-device)
   (owner decision, 2026-10-23): agents use it to tap, type, and read the UI of
-  devices on the room. Hostel pins its version and the Node version that runs it
+  screen tools on the room (simulators, emulators, the Mac desktop). Hostel pins its version and the Node version that runs it
   (`internal/config/agentdevice.go`; T3 Code pins the same version). At
   provisioning, `mise-install` installs both and writes `hostel/bin/agent-device`
   (`agent-device.cmd` on Windows), which runs `mise exec node@<pin>
@@ -1223,32 +1316,49 @@ a connection, commands that need the server exit with 78 and print how to connec
 ### Local state
 
 - Directory: `$(git rev-parse --git-dir)/hostel/` (the per-worktree git directory),
-  one subdirectory for each platform. It holds the lease ID, the private key, the
-  pinned gateway host key, the port process PID and control socket, and the step that `acquire` finished last.
-- A platform has at most one active lease in a worktree.
-- Commands select the lease with `--platform`. If the worktree has only one active
+  one subdirectory for each lease name (`--name`, default `main`). It holds the
+  lease ID, the request, the private key, the pinned gateway host key, the port
+  process PID and control socket, and the step that `acquire` finished last.
+- A worktree can have several active leases with different names, for example a
+  build lease and a QA lease (`--name qa`).
+- Commands select the lease with `--name`. If the worktree has only one active
   lease, they use it.
 
-### `hostel acquire <platform> --task "..."`
+### `hostel acquire [<tool[:option]>...] --task "..."`
 
 The command is resumable. Each step records its result in the local state.
 
 1. If the state has a lease that is not final, continue it. If `--task`,
-   `--priority`, `--device`, or `--require` differ, print a warning and continue the
-   existing lease (release it first to change them). If the stored lease is final,
-   start a new one.
-2. Read `hostel.toml`. Generate an ed25519 key pair for the lease.
-3. `POST /v1/leases` with platform, devices, task, priority, required labels,
-   tunnels (names and fixed room ports), `fresh`, public key, repository name,
-   worktree path, and host name.
+   `--priority`, or the tools differ, print a warning and continue the existing
+   lease (release it first to change them). If the stored lease is final, start a
+   new one.
+2. Read `hostel.toml`. The tools are the arguments, else `tools` of
+   `hostel.toml`, else none (any machine). Generate an ed25519 key pair for the
+   lease.
+3. `POST /v1/leases` with the tools, task, priority, tunnels (names and fixed
+   room ports), `fresh`, public key, repository name, worktree path, and host
+   name. A request that no configured machine can serve fails here (exit code 69,
+   with the reason).
 4. Long-poll `GET /v1/leases/{id}?since=<revision>&wait=50s`. Print one line for
-   each change: state, position, reason, estimated wait.
+   each change: state, position, "waiting behind N leases", reason, estimated
+   wait.
 5. When the lease is `ready`: compute the environment (below) and call `set-env`.
 6. Start the port process and wait until all tunnels are confirmed (section 14).
 7. Sync the files (section 12).
 8. Start the setup job and attach to it.
-9. Print a summary: platform, devices, provider and machine, work directory,
-   environment, expiry, and the next commands.
+9. Print the **lease facts** and the next commands: the machine (provider and
+   name), its OS with version and architecture, its hardware, all tools of the
+   machine with their options and environment names (also the ones that the lease
+   did not ask for), the screen tools that started for the lease with their
+   options and facts (`ANDROID_SERIAL`, `SIMULATOR_UDID`), the work directory, the
+   tunnels, and the expiry:
+
+   ```
+   lease l-4f2a is ready on ns/linux
+     machine  linux 24.04 (amd64), 8 cores, 16 GB
+     tools    android-sdk 36 (ANDROID_HOME; adb on PATH) · jdk 21 · docker 27.3
+     started  —   (no screen tools; add android-emulator to get one)
+   ```
 
 If `--wait` (default 100 seconds) ends before step 9, the command prints
 `hostel: not finished; run the same command again` and exits with code 75.
@@ -1262,10 +1372,14 @@ source overrides an earlier one):
 2. the provider, machine, and slot `env`, and the `MISE_*` variables (section 9);
 3. the output of `mise env --json` in `work/` (tool paths and the repository's
    mise `[env]`);
-4. `device.env` (from `prepare`);
-5. `lease.env`: the repository platform `env` after placeholder substitution by
-   the guest, plus `HOSTEL_TUNNEL_<NAME>_PORT` for each tunnel;
-6. `HOSTEL_LEASE`, `HOSTEL_PLATFORM`, `HOSTEL_DEVICES`, `HOSTEL_SLOT`,
+4. the `env` and `path` of the machine's software tools, and of the screen tools
+   that started for the lease (section 8);
+5. `tool.env` (from the `start` scripts);
+6. `lease.env`: the repository `env` and the `env` of its `[tool.<name>]`
+   sections for the lease's tools, after placeholder substitution by the guest,
+   plus `HOSTEL_TUNNEL_<NAME>_PORT` for each tunnel;
+7. `HOSTEL_LEASE`, `HOSTEL_TOOLS` (the lease's tools with their options),
+   `HOSTEL_SLOT`,
    `HOSTEL_WORK_DIR`, `HOSTEL_CACHE_DIR`, `HOSTEL_ROOM_OS`, `HOSTEL_ROOM_ARCH`, and
    `AGENT_DEVICE_STATE_DIR` (section 9, "mise on rooms"). The helper reads the lease
    data from `slots/<slot>/lease.json`.
@@ -1277,13 +1391,14 @@ a fixed `room_port` get ports from the slot's pool in name order.
 
 | Command | Effect |
 |---|---|
-| `hostel platforms` | Each platform: kind, description, devices, free slots, queue length, estimated wait (R1). |
-| `--platform <name>` | On all lease commands below: selects the lease when the worktree has more than one. |
-| `hostel acquire <platform> --task ... [--device d]... [--priority low\|normal\|high] [--require label]... [--fresh] [--wait 100s] [--background]` | Creates or continues a lease. The lease ID is in the worktree (`$(git rev-parse --git-dir)/hostel/<platform>/lease.json`), so the same command continues the same lease and its place. When it returns with code 75 for a waiting lease, it says how long the server keeps the place without it (`poll_timeout`). With `--background`, a lease that is not ready makes it return at once and start a detached `hostel keep-place --dir <state dir>` that polls the lease until it is ready or ends (one keeper for each lease: `keeper.json` holds its ID, the lease ID, its process ID, and its heartbeat; it also stops when the worktree has another lease, after 1 h without an answer, and after 24 h; it removes its heartbeat when it stops; server errors and network errors do not stop it). |
+| `hostel tools [<tool>] [--json]` | Each tool: its options (from the inventories), whether it is a screen tool, the machines that have it, free slots, waiting leases, and the estimated wait (R1); a last line names the repository's mise tools, which work on every machine. With a name: the description, the needs, the environment names, the machines with their options and OS, and the tool's `GUIDE.md`. |
+| `--name <name>` | On all lease commands below: selects the lease when the worktree has more than one (default `main`). |
+| `hostel acquire [<tool[:option]>...] --task ... [--name n] [--priority low\|normal\|high] [--fresh] [--wait 100s] [--background]` | Creates or continues a lease. The lease ID is in the worktree (`$(git rev-parse --git-dir)/hostel/<name>/lease.json`), so the same command continues the same lease and its place. When it returns with code 75 for a waiting lease, it says how long the server keeps the place without it (`poll_timeout`). With `--background`, a lease that is not ready makes it return at once and start a detached `hostel keep-place --dir <state dir>` that polls the lease until it is ready or ends (one keeper for each lease: `keeper.json` holds its ID, the lease ID, its process ID, and its heartbeat; it also stops when the worktree has another lease, after 1 h without an answer, and after 24 h; it removes its heartbeat when it stops; server errors and network errors do not stop it). |
 | `hostel sync [--setup]` | Sends the changed files again. `--setup` runs the setup job again. |
 | `hostel run [--detach] [--wait 100s] [--json] -- <command>` | Starts a job in the work directory and streams its output. One argument runs with `sh -c` (`hostel run -- "make && make test"`); several arguments run without a shell. The command is found in the job's PATH (with the mise tools). |
 | `hostel attach <job> [--wait 100s]` / `hostel jobs` / `hostel stop <job>` | Job control. |
-| `hostel screenshot [--device d] [-o file.png]` | Runs the platform `screenshot` script and downloads the PNG. |
+| `hostel screenshot [--tool <tool[:option]>] [-o file.png]` | Runs the `screenshot` script of a screen tool of the lease and downloads the PNG. `--tool` is necessary only when the lease started more than one screen, or a screen tool with several options. |
+| `hostel info` | Prints the lease facts again (acquire step 9). |
 | `hostel cp <from> <to>` | Copies files with `tar-out` or `tar-in`. A `:` prefix marks a path in the work directory. The target is the full new path; a target that ends with `/` (or an existing local directory) receives the source with its own name. Both sides refuse to write below a symbolic link and replace a link at a file path instead of following it. |
 | `hostel diff` | Shows the temporary changes against the last baseline commit. |
 | `hostel ssh [-- command]` | Interactive shell, or one command, with the system `ssh` client and the file of `ssh-config`. |
@@ -1291,11 +1406,11 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel tunnel list` | Lists the tunnels with their local and room ports. |
 | `hostel tunnel add <name> (--local-port N \| --local-port-env VAR) [--room-port P]` / `tunnel set <name> [--local-port N] [--room-port P]` / `tunnel remove <name>` | Changes tunnels during a lease (section 14). |
 | `hostel forward <room-port> [--local-port N]` / `forward list` / `forward stop <room-port>` | Guest → room forwards (section 14). |
-| `hostel status [room \| platform]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, time, lease ID), the machines without rooms, and the queues with their next lease. `hostel status <room>` prints the details of a room (hardware, leases with jobs, queue, events, room ID); `hostel status <platform>` prints the queue (position, user, task, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
+| `hostel status [room \| tool]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, tools, time, lease ID) and their inventory, the machines without rooms, and the waiting line. `hostel status <room>` prints the details of a room (hardware, inventory, leases with jobs, the waiting leases that it can serve, events, room ID); `hostel status <tool>` prints the waiting leases that asked for that tool (position, user, task, tools, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
-| `hostel agent-guide` | Prints short usage instructions for coding agents. |
+| `hostel agent-guide` | Prints short usage instructions for coding agents: the general rule ("ask for the tools you need; ask for a screen tool only when you need to see the app"), then the `GUIDE.md` of each tool that the server has. |
 | `hostel update [--check] [--version v]` | Replaces this binary with a newer release (section 2, "Releases and updates"). |
-| `hostel screenshot [--device d] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
+| `hostel screenshot [--tool t] [-o file.png]` | (see above) The script writes to a file in the slot directory; the guest downloads it, deletes it on the room, and prints the local path. |
 
 Connection and users (M8, `multiplayer.md`): `hostel connect <invite code>`,
 `hostel disconnect`, `hostel config users [invite|code|set|remove]` (`remove
@@ -1314,11 +1429,12 @@ commands; `hostel status` prints plain text with the next commands at the end.
 
 - Not connected: *Check in* (an invite code, then the name; the same code as
   `hostel connect`, package `internal/connect`) or *Leave*.
-- Main menu: *Lobby* (the platforms: free machines of all that serve it, the
-  queue, the wait; a platform page with its machines, the typical lease, and
-  the full queue), *Rooms* (the machines with their platforms and state in
-  plain words; a machine page with the hardware, the live use, and each lease
-  with its user, task, computer, repository, branch, and running jobs), *Front
+- Main menu: *Lobby* (the tools, screen tools first: free machines of all that
+  have it, the waiting leases that asked for it, the wait; a tool page with its
+  options, its machines, the typical lease, and its waiting leases), *Rooms*
+  (the machines with their tools and state in plain words; a machine page with
+  the hardware, the inventory, the live use, and each lease with its user, task,
+  tools, computer, repository, branch, and running jobs), *Front
   desk* (the server and you; *Invite a guest* for admins, *Add your other
   computer* for members, *Guest list*, *Add a room* for admins, *Check out*). Themed labels have a muted plain description (owner decision,
   2026-11-03).
@@ -1327,7 +1443,7 @@ commands; `hostel status` prints plain text with the next commands at the end.
   of a queued lease, stop or allow new leases on the room of a static machine and repair it, invite
   someone, change a role, remove a user, a code for the caller's other
   computer, a machine code.
-- Data: one long poll of `GET /v1/status`; `GET /v1/platforms` after each
+- Data: one long poll of `GET /v1/status`; `GET /v1/tools` after each
   status answer; a machine page reads `GET /v1/rooms/{name}` when it opens and
   at most every 10 s. Each request has a deadline; after an error the app asks
   again after 5 s; a refused token (401/403) goes to Check in. Text from users
@@ -1352,12 +1468,12 @@ commands; `hostel status` prints plain text with the next commands at the end.
   header bar (the Hostel sign, the place, the user and role) and the footer
   (the description of the selected item, or a question or message; then the
   keys as chips; `?` lists all keys). The levels stay: the main menu, lists
-  (Lobby, Rooms, Front desk, Guest list), and detail pages (a platform, a
+  (Lobby, Rooms, Front desk, Guest list), and detail pages (a tool, a
   machine). A list item has a bold title line and a dim second line, each
   with a part on the right; the selected item has an amber bar on the left. A
   detail page starts with the name, a description, and a summary line, then
   sections with a small heading and a thin line, separated by empty space (no
-  boxes). On a platform page one cursor goes from the machines down to the
+  boxes). On a tool page one cursor goes from the machines down to the
   waiting line (`tab` jumps between them). A state shows as glyph, color, and
   word (● Vacant, ◉ Occupied, ◐ Getting ready, ✕ Broken, ○ Offline). Colors
   (ANSI 256; `NO_COLOR` turns them off): amber for Hostel and the selection,
@@ -1385,7 +1501,7 @@ commands; `hostel status` prints plain text with the next commands at the end.
   `hostel --demo` runs the app with made-up data and no server (`demo.go`);
   it does not read or change the guest configuration.
 
-All guest commands except `platforms`, `status`, and `agent-guide` call
+All guest commands except `tools`, `status`, and `agent-guide` call
 `POST /v1/leases/{id}/touch`. When a lease command fails (for example because
 the gateway closed the connection at expiry), the guest calls `touch` again; if
 the lease ended, it reports the end reason instead of the connection error. An
@@ -1394,15 +1510,18 @@ attach that cannot connect again stops at once when the lease ended.
 Example:
 
 ```
-$ hostel platforms
-PLATFORM  KIND    DEVICES                     FREE  QUEUE  EST. WAIT
-ios       device  iphone-17-pro, ipad-pro-13  1     0      now
-android   device  pixel-9-api-35              0     1      ~6 min
-macos     os      -                           1     0      now
-linux     os      -                           -     0      ~1 min (new room)
+$ hostel tools
+TOOL               OPTIONS                      SCREEN  MACHINES                FREE  WAITING  EST. WAIT
+android-sdk        36                                   home/macbook, ns/linux  2     0        now
+android-emulator   pixel-9, pixel-tablet        yes     home/macbook, ns/linux  1     1        ~6 min
+xcode              26.1                                 home/macbook            1     0        now
+ios-simulator      iphone-17-pro, ipad-pro-13   yes     home/macbook            1     0        now
+macos-desktop                                   yes     home/macbook            1     0        now
+From the repository's mise files, on every machine: node, pnpm (and any mise tool).
 
-$ hostel acquire ios --device ipad-pro-13 --task "QA the sidebar on iPad"
-$ hostel acquire linux --task "run the API test suite"
+$ hostel acquire ios-simulator:ipad-pro-13 --task "QA the sidebar on iPad"
+$ hostel acquire android-sdk jdk --task "build the Android app"
+$ hostel acquire --task "run the API test suite"
 ```
 
 ### Exit codes and output
@@ -1412,7 +1531,7 @@ $ hostel acquire linux --task "run the API test suite"
 | 0 | Success. |
 | 1 | Error. The message starts with `hostel:`. |
 | 2 | Usage error. |
-| 69 | No machine can satisfy the request, or an unknown platform or device (R4). |
+| 69 | No configured machine can satisfy the request: an unknown tool or option, or no machine with all requested tools (R4). The message names the reason. |
 | 75 | Not finished. The last line on stderr names the command to run next. For `acquire` it is the same command; for `run` and `attach` it is `hostel attach <id>`. Never run `hostel run` again for this reason: that starts a second job. |
 | other | `run` and `attach`: the exit code of the remote command. |
 
@@ -1428,7 +1547,7 @@ Progress goes to stderr. The final result goes to stdout.
 
 All requests except `POST /v1/connect` use `Authorization: Bearer <token>`. JSON
 in and out. A user can read and change only their own leases (from any of their
-computers); an admin can do everything. Any user can read `status`, `platforms`,
+computers); an admin can do everything. Any user can read `status`, `tools`,
 and `users`. Room tokens can only read `GET /v1/info`. Requests and answers
 have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 
@@ -1436,8 +1555,8 @@ have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 |---|---|
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
 | `POST /v1/server/update {"version"}`, `GET /v1/server/update` (admin) | Starts a remote update (`""`: the latest release; HTTP 202 with `{"state", "from", "to"}`; 409 while one runs or when the release is not newer); its state `{"state": "idle\|running\|failed", "from", "to", "error"}` (M10d). |
-| `GET /v1/platforms` | Platforms: name, kind, description, devices, `max_devices`, free slots, queue length, estimated wait, the keys of the machines that serve it, and `typical_lease_seconds` (the median of its last leases; M10b). |
-| `POST /v1/leases` | Creates a lease. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_platform" \| "unknown_device" \| "too_many_devices" \| "no_machine"}` for R4. |
+| `GET /v1/tools` | Tools: name, description, screen flag, needs, `options` (the configured options of a screen tool, or the versions in the inventories), `max_options`, `whole_machine`, the environment names, the guide, the machines that have it (key, OS, options on that machine, online), free slots, waiting leases, estimated wait, and `typical_lease_seconds` (the median of the last leases that asked for it). Also the repository-level note (mise tools on every machine). |
+| `POST /v1/leases` | Creates a lease: `{"tools": ["android-sdk", "android-emulator:pixel-9"], "task", ...}`. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_tool" \| "unknown_option" \| "too_many_options" \| "no_machine", "message"}` for R4; `no_machine` names the tools that no machine has together and the machines of each tool. |
 | `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait` (at most 60 s and half of `poll_timeout`, so the guest polls again before the timeout). Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). The lease has `poll_timeout_ms` and `idle_timeout_ms` (the server settings), for the messages of the guest. |
 | `POST /v1/leases/{id}/touch` | Records guest activity. HTTP 409 with `{"code": "lease_ended"}` and the end reason for a lease that ended; the guest then marks its local state as final. |
 | `PUT /v1/leases/{id}/tunnels` | Registers the lease's tunnels: `[{"name", "room_port"}]` (`room_port` 0 = select from the slot pool). Returns the room port of each tunnel, or HTTP 409 for a port that is not available. |
@@ -1445,22 +1564,25 @@ have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 | `POST /v1/leases/{id}/move`, `/priority` (admin) | Queue control (section 5): `{"first": true}` or `{"before": "<lease id>"}`; `{"priority": "low|normal|high"}`. HTTP 409 for a lease that is not queued. |
 | `GET /v1/status[?since=R&wait=50s]` | Leases (with their user, ready time, and the estimated wait of queued leases), rooms (with hardware), the machines of the configuration (with the
 `connect_version` of a connected machine, M10d), the server ID, the caller (user, role), and `revision` (a hash of the content without the wait estimates). With `since`, the answer waits (at most 50 s) until the revision differs from `R`; the server checks again on each lease change and every 2 s (M10). |
-| `GET /v1/rooms/{name}` | Room details (M10): the room, its machine, its leases, the jobs of its ready leases (the server asks the room helper, `job list`, all in one 10 s deadline; on an error `jobs_error` says "jobs unknown"), the queue of its platforms, its last 10 events, and the live use (`usage`, the helper command `usage` in the same deadline; M10b). A member gets the jobs and events of the member's own leases only (commands and messages can hold secrets). |
+| `GET /v1/rooms/{name}` | Room details (M10): the room, its machine, its leases, the jobs of its ready leases (the server asks the room helper, `job list`, all in one 10 s deadline; on an error `jobs_error` says "jobs unknown"), the waiting leases that it can serve, its last 10 events, and the live use (`usage`, the helper command `usage` in the same deadline; M10b). A member gets the jobs and events of the member's own leases only (commands and messages can hold secrets). |
 | `POST /v1/connect` (no token) | `{"secret", "name", "computer"}` from an invite code; returns `{"server_id", "user", "role", "token"}` once. HTTP 403 for an invalid code, 409 `name_taken`, 429 after 10 failures per minute. |
 | `GET /v1/me`, `DELETE /v1/me` | The token's user, role, and computer; `DELETE` revokes the token (`hostel disconnect`). |
 | `GET /v1/users`, `PATCH /v1/users/{name}`, `DELETE /v1/users/{name}`, `DELETE /v1/users/{name}/computers/{computer}` (admin to change) | Users with their computers; `{"role"}`; removal (tokens revoked, leases ended); removal of one computer (its tokens revoked; the user stays). The server keeps at least one admin (HTTP 409 `last_admin`). |
 | `GET /v1/config`, `PUT /v1/config`, `GET /v1/config/history` (admin to change) | The configuration document `{revision, document}`; a change `{base_revision, document}` gives the new revision, HTTP 409 (`conflict`) if `base_revision` is not the latest, or HTTP 422 with the errors (M9) |
-| `GET /v1/config/platforms`, `GET/PUT/DELETE /v1/config/platforms/{name}`, `POST /v1/config/platforms/{name}/reset` (admin to change) | The platforms with their source and machines; a platform's files `{name, files}`; a new version; removal (HTTP 409 while a machine lists it); a default back to the release's version (M9) |
+| `GET /v1/config/tools`, `GET/PUT/DELETE /v1/config/tools/{name}`, `POST /v1/config/tools/{name}/reset` (admin to change) | The defined tools with their source and machines; a tool's files `{name, files}`; a new version; removal (HTTP 409 while a machine lists it); a default back to the release's version |
 | `POST /v1/machines/invites` (admin), `POST /v1/machines/join` (the code, no token), `GET /v1/install.sh`, `GET /v1/download/hostel-<os>-<arch>[.exe]` (no token) | A machine code with the commands to run; the join (adds the machine, returns a room token and the server's SSH key); the install script and the binaries of `helper_dir` (M9) |
 | `POST /v1/logins/{cli}`, `GET /v1/logins/{cli}[?wait=1]` (admin; `cli` is `devbox` or `nsc`) | Starts a provider CLI login on the server and returns its address (or `already`); the state (`waiting`, `done`, `failed`) (M9) |
 | `POST /v1/invites` | `{"role", "name"}` (admin) or `{"self": true}` (a code for the caller's other computer); returns the code, the key fingerprint, and the expiry (24 hours). |
 | `POST /v1/rooms/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Room control. `repair` takes `{"accept_host_key": bool}` and is for broken static rooms; `destroy` is for on-demand rooms without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "machine"}` (`machine` = `<provider>/<machine>`, only for `room`). A new token is returned once. |
 
-A `ready` lease includes the access data: gateway address, gateway host key,
-gateway user, helper path, slot name, work directory, tunnel ports, provider and
-machine names, room OS and architecture, `tunnel_check`, `expires_at`, and
-`idle_expires_at`.
+A `ready` lease includes the access data and the lease facts: gateway address,
+gateway host key, gateway user, helper path, slot name, work directory, tunnel
+ports, provider and machine names, room OS, OS version, architecture, and
+hardware, the room's inventory (each tool with its option, state, and
+environment names), the started screen tools with their options and `tool.env`
+names, `tunnel_check`, `expires_at`, and `idle_expires_at`. Each lease (also
+queued) has `tools` (the request), `waiting_behind` (queued), and `started`.
 
 ## 12. File sync
 
@@ -1835,8 +1957,8 @@ failed; the result lists each step.
    only by its session (found in M2, 2026-10-23). A scan also runs at the start of
    each guest command and each job. Only a process that starts a new session and
    hides its environment, and whose parent ended before the next guest command or
-   cleanup, escapes; the `ios` reset also stops the processes whose command line
-   has the UDID of a slot simulator (the `agent-device` runner has it). Send
+   cleanup, escapes; the `ios-simulator` `stop` also stops the processes whose
+   command line has the UDID of a slot simulator (the `agent-device` runner has it). Send
    SIGTERM, wait 10 seconds, then SIGKILL.
 
    On Windows (M6), the helper reads `HOSTEL_LEASE` from the environment block of
@@ -1849,9 +1971,9 @@ failed; the result lists each step.
    outside it (its supervisor must break away, section 15).
    The helper merges environment sources with upper-case names on Windows, which
    ignores the case of names (`Path` is `PATH`).
-2. Run the `reset` script of the lease's platform. If `slots/<slot>/` does not exist
-   (a repeated cleanup after step 5), the helper creates it empty first; `reset` must
-   then do nothing.
+2. Run the `stop` script of each screen tool that started for the lease, in
+   reverse order of `start`. If `slots/<slot>/` does not exist (a repeated cleanup
+   after step 5), the helper creates it empty first; `stop` must then do nothing.
 3. Restore `authorized_keys` from `authorized_keys.base`.
 4. Check that no process of the lease (step 1) remains, and that the slot
    ports and the lease's fixed room ports (`ports` in the input) are free: try to
@@ -1860,11 +1982,12 @@ failed; the result lists each step.
    the room's SSH server removes its listeners after the connections close.
 5. Delete the devbox task markers of the slot's jobs whose supervisor was killed
    (if any), and the directory `slots/<slot>/`. This
-   deletes `work/`, `.env`, job output, `device.env`, and the manifest. The shared
+   deletes `work/`, `.env`, job output, `tool.env`, and the manifest. The shared
    `cache/` stays. This step is last
-   before `health`, so a repeated cleanup still finds `device.env` until `reset` has
+   before `check`, so a repeated cleanup still finds `tool.env` until `stop` has
    run.
-6. Run the `health` script of each platform that the room is ready for.
+6. Run the `check` script of each tool that the room has installed, and update
+   the inventory.
 
 If a step fails, the slot and the room become `broken` (R24). On success, the slot
 is `free`.
@@ -1899,9 +2022,9 @@ Warm policy after cleanup:
 - **Revocation.** Guests have no room credentials. Ending a lease closes its
   connections and invalidates its key at once (section 13).
 - **Logs.** No tokens, keys, file contents, environment values, or output of guest
-  jobs in server logs. Output tails of platform scripts (which the owner controls) go
+  jobs in server logs. Output tails of tool scripts (which the owner controls) go
   to the event log; the scripts must not print secrets.
-- **Integrity between leases.** Helper, mise, and platform scripts are checked by
+- **Integrity between leases.** Helper, mise, and tool scripts are checked by
   hash at each `preparing`; `authorized_keys` is restored at cleanup (sections 8 and
   17).
 
@@ -1928,7 +2051,7 @@ What a guest can still do in version 1:
 
 Planned hardening (milestone M11):
 
-1. **One OS user for each lease.** `prepare` creates a new user without
+1. **One OS user for each lease.** Lease preparation creates a new user without
    administrator rights; cleanup stops all its processes (`pkill -u`), removes its
    crontab, and deletes the user and its home directory. Most persistence lives in
    that home directory, so it goes too.
@@ -1950,7 +2073,7 @@ Privilege escalation to root on a room stays out of scope.
 - Server logs: `log/slog` JSON lines with lease ID and room ID.
 - `events` table: one row for each state change and each provider action.
 - `hostel status` shows the rooms with their leases (user, task, time, lease
-  ID), the machines without rooms, and the queues; `hostel status <room>` adds
+  ID), the machines without rooms, and the waiting line; `hostel status <room>` adds
   the hardware, the jobs, and the last events (M10).
 
 ## 20. Testing
@@ -1982,12 +2105,13 @@ Privilege escalation to root on a room stays out of scope.
   (`FAKE_CAN_STOP`), and access through a proxy command (`FAKE_PROXY`). A lock
   file for each name makes `provision` idempotent when a killed server's call
   still runs.
-- The test platform `fakedevice` reads markers in the room cache: `slow-prepare`,
-  `fail-prepare`, `slow-reset`, `fail-reset`. Tests create them with `docker exec`
-  to drive failures and restarts at a known state.
-- Test platforms in `test/platforms/`: a device platform whose scripts simulate a
-  device (they write `device.env` and a fake screenshot), with scripts for `linux`
-  and for `macos`. An `external` machine with `os = "macos"` runs the `.macos.sh`
+- The test tools in `test/tools/`: `fake-sdk` (software; `check` prints a
+  version) and `fake-screen` (a screen tool with `needs = ["fake-sdk"]` and the
+  options `option-a`, `option-b`; its scripts simulate a screen: they write
+  `tool.env` and a fake screenshot), with scripts for `linux` and for `macos`.
+  `fake-screen` reads markers in the room cache: `slow-start`, `fail-start`,
+  `slow-stop`, `fail-stop`. Tests create them with `docker exec` to drive
+  failures and restarts at a known state. An `external` machine with `os = "macos"` runs the `.macos.sh`
   scripts in a Linux container, so the tests cover script selection by OS.
 - Tests use short durations (for example `idle_timeout = "3s"`). They wait for
   conditions with a deadline. They never use a fixed sleep as an assertion.
@@ -2021,17 +2145,18 @@ Privilege escalation to root on a room stays out of scope.
 1. All guest SSH goes to the gateway, which terminates it (sections 1 and 13).
    Guests never get a credential for a room, so Hostel can end access at any time.
    There is no direct guest-to-room access.
-2. Configuration model: providers contain machines; platforms are OS platforms
-   (automatic) or device platforms (directories with scripts for each OS). The guest
-   sees only platforms (section 3).
+2. Configuration model: providers contain machines; machines list tools (software
+   and screen tools; mise tools or directories with scripts for each OS). The guest
+   sees only tools and asks for the tools that it needs; a lease starts only the
+   screen tools that it asked for (section 3; owner decision 2026-11-05).
 3. Configuration format: TOML with strict decoding, defaults, a JSON Schema, and
    `hostel admin config check` (section 9).
 4. The guest syncs files and starts the repository setup after `ready`. The server
-   prepares only the room and its devices (section 10).
+   prepares only the room and the lease's screen tools (section 10).
 5. Warm policy: keep the toolchain and caches; always delete lease state; keep a room
    running for `warm_running`, then stopped for `warm_stopped`; evict idle rooms when
    a lease needs the capacity (sections 5 and 17).
-6. Each lease gets clean devices from the platform scripts (section 8). The method
+6. Each lease gets clean screens from the screen tools' scripts (section 8). The method
    depends on the timing experiments in M2 and M4.
 7. Version 1 calls the `devbox` and `nsc` CLIs on the server.
 8. File sync uses manifests and `tar`, not `rsync`, so that it works on Windows
