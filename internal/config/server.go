@@ -736,23 +736,6 @@ func (m *Machine) Tool(name string) *MachineTool {
 	return nil
 }
 
-// ToolOptions returns the options of a defined screen tool on the machine:
-// the options of its entries, or all options of the tool when an entry has
-// none.
-func (m *Machine) ToolOptions(t *Tool) []string {
-	var out []string
-	for _, mt := range m.ToolList {
-		if mt.Name != t.Name {
-			continue
-		}
-		if mt.Option == "" {
-			return slices.Clone(t.Options)
-		}
-		out = append(out, mt.Option)
-	}
-	return out
-}
-
 // MiseTools returns the mise tools of the machine: name → versions ("latest"
 // for an entry without a version).
 func (m *Machine) MiseTools() map[string][]string {
