@@ -119,13 +119,22 @@ func tomlList(items []string) string {
 var leaseIDRE = regexp.MustCompile(`Lease ([a-z0-9]+) is ready`)
 
 // acquire runs "hostel acquire fake-screen" (or the tools in args) until the
-// lease is ready and returns its ID.
+// lease is ready and returns its ID. Exit code 75 (not finished, for example
+// a slow setup on a loaded machine) runs the same command again, as an agent
+// does, up to three times.
 func (f *fixture) acquire(args ...string) string {
 	f.e.t.Helper()
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		args = append([]string{"fake-screen"}, args...)
 	}
-	r := f.e.mustHostel(append([]string{"acquire", "--task", "e2e test"}, args...)...)
+	cmd := append([]string{"acquire", "--task", "e2e test"}, args...)
+	r := f.e.hostel(cmd...)
+	for i := 0; i < 2 && r.code == 75; i++ {
+		r = f.e.hostel(cmd...)
+	}
+	if r.code != 0 {
+		f.e.t.Fatalf("hostel %s: %s", strings.Join(cmd, " "), r)
+	}
 	m := leaseIDRE.FindStringSubmatch(r.stdout)
 	if m == nil {
 		f.e.t.Fatalf("acquire printed no lease ID: %s", r)
