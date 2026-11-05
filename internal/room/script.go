@@ -100,6 +100,7 @@ func (h *helper) script(tool, step, slot string, args []string, reqEnv map[strin
 	resp.OutputTail = out.String()
 	resp.LastLine = lastLine(resp.OutputTail)
 	var exitErr *exec.ExitError
+	var runErr error
 	switch {
 	case ctx.Err() != nil:
 		resp.TimedOut = true
@@ -111,20 +112,22 @@ func (h *helper) script(tool, step, slot string, args []string, reqEnv map[strin
 		// (for example a simulator) still holds its output open.
 		resp.ExitCode = cmd.ProcessState.ExitCode()
 	case err != nil:
-		return resp, fmt.Errorf("run %s: %w", script, err)
+		runErr = fmt.Errorf("run %s: %w", script, err)
 	}
+	// Also when the script did not run: the stop of the earlier tools needs
+	// their facts.
 	if step == config.StepStart {
 		facts, err := readEnvFile(toolEnv)
 		if err != nil {
-			return resp, err
+			return resp, errors.Join(runErr, err)
 		}
 		resp.Facts = sortedNames(facts)
 		mergeEnv(earlier, facts)
 		if err := writeEnvFile(toolEnv, earlier); err != nil {
-			return resp, err
+			return resp, errors.Join(runErr, err)
 		}
 	}
-	return resp, nil
+	return resp, runErr
 }
 
 func sortedNames(m map[string]string) []string {

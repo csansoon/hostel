@@ -541,8 +541,10 @@ func (s *Store) Requeue(ctx context.Context, id string, from []string, reason st
 			return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s %s → failed after %d attempts: %s", id, state, attempts, reason))
 		}
 		newState = protocol.LeaseQueued
+		// The screen tools that started belong to the old slot: its cleanup
+		// stopped them, or its cleanup_data has them.
 		_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'queued', room_id = NULL, slot_name = '', provider = '', machine = '',
-			began_at = NULL, attempts = ?, reason = ?, revision = revision + 1 WHERE id = ?`, attempts, reason, id)
+			began_at = NULL, started = '[]', attempts = ?, reason = ?, revision = revision + 1 WHERE id = ?`, attempts, reason, id)
 		if err != nil {
 			return err
 		}

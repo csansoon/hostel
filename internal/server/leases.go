@@ -318,6 +318,7 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 		IdleExpiresAt:      l.LastActivityAt.Add(s.config().IdleTimeout.D()),
 	}
 	out.Access.Hardware, out.Access.Tools = s.roomFacts(r.Context(), room)
+	out.Access.LeaseTools = leaseToolNames(s.config(), l.Tools)
 	return out
 }
 

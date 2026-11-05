@@ -1160,10 +1160,14 @@ env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 ```
 
 - Tools on the command line replace `tools`.
-- The `setup` of each `[tool.<name>]` of a tool that the lease has runs after the
-  top-level `setup`; its `env` replaces keys of the top-level `env`. A
-  `[tool.<name>]` of a software tool applies when the lease asked for it (not for
-  every lease on a machine that has it).
+- A `[tool.<name>]` applies when the lease has that tool: the lease asked for
+  it, or a tool that the lease asked for needs it (owner decision, 2026-11-05;
+  `[tool.android-sdk]` applies to a lease for `android-emulator`). It does not
+  apply to every lease on a machine that has the tool. Each section applies
+  once, in the order of needs (the server gives the list: `lease_tools`,
+  section 11).
+- The `setup` of each `[tool.<name>]` that applies runs after the top-level
+  `setup`; its `env` replaces keys of the top-level `env`.
 - The keys of the form before M10e (`[platforms.<name>]`, `devices`, `requires`)
   fail the check with the new form in the message.
 - The setup job always starts with `mise install` in `work/` ("mise on rooms" below).
@@ -1403,7 +1407,8 @@ source overrides an earlier one):
    that started for the lease (section 8);
 5. `tool.env` (from the `start` scripts);
 6. `lease.env`: the repository `env` and the `env` of its `[tool.<name>]`
-   sections for the lease's tools, after placeholder substitution by the guest,
+   sections for the lease's tools and their needs, after placeholder
+   substitution by the guest,
    plus `HOSTEL_TUNNEL_<NAME>_PORT` for each tunnel;
 7. `HOSTEL_LEASE`, `HOSTEL_TOOLS` (the lease's tools with their options),
    `HOSTEL_SLOT`,
@@ -1610,7 +1615,9 @@ gateway host key, gateway user, helper path, slot name, work directory, tunnel
 ports, provider and machine names, room OS, OS version, architecture, and
 hardware, the room's inventory (each tool with its option, state, and
 environment names), the started screen tools with their options and `tool.env`
-names, `tunnel_check`, `expires_at`, and `idle_expires_at`. Each lease (also
+names, `lease_tools` (the names of the requested tools and their needs, in the
+order of needs: the `[tool.<name>]` sections of `hostel.toml` that apply),
+`tunnel_check`, `expires_at`, and `idle_expires_at`. Each lease (also
 queued) has `tools` (the request), `waiting_behind` (queued), and `started`.
 
 ## 12. File sync

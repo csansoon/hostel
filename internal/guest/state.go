@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -120,13 +119,12 @@ func (r *Repo) LoadState() (*State, bool, error) {
 }
 
 // leaseTools are the tools of the lease for hostel.toml: the requested ones
-// and the screen tools that started.
+// and their needs, each once (from the server).
 func (s *State) leaseTools() []string {
-	out := slices.Clone(s.Tools)
-	for _, st := range s.Started {
-		out = append(out, st.Name)
+	if s.Access == nil {
+		return nil
 	}
-	return out
+	return s.Access.LeaseTools
 }
 
 // Save writes the state with a temporary file and a rename.

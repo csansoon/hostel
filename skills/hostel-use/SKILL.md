@@ -202,6 +202,9 @@ env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 - Setup: `mise install` in the work directory (the repository's `mise.toml`,
   `.tool-versions`, `.nvmrc`, ...), then each top-level `setup` command, then
   the `setup` of each `[tool.<name>]` of the lease. The first failure stops it.
+- A `[tool.<name>]` applies when the lease has the tool: you asked for it, or a
+  tool that you asked for needs it (`[tool.android-sdk]` applies to a lease for
+  `android-emulator`).
 - The `env` of a `[tool.<name>]` replaces keys of the top-level `env`.
 - Tools on the command line replace `tools`.
 - `{tunnels.<name>.port}` becomes the tunnel's room port.

@@ -318,6 +318,9 @@ type Access struct {
 	// lease did not ask for.
 	Hardware *Hardware       `json:"hardware,omitempty"`
 	Tools    []InventoryTool `json:"tools"`
+	// LeaseTools are the names of the lease's tools and of their needs, in
+	// the order of needs: the [tool.<name>] sections of hostel.toml that apply.
+	LeaseTools []string `json:"lease_tools"`
 }
 
 // PriorityName returns the API name of a priority.

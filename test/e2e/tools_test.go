@@ -118,17 +118,39 @@ var panelTool = map[string]string{
 	"tool.toml": "description = \"Panel on the fake screen\"\nneeds = [\"fake-screen\"]\nscreen = true\nenv = { PANEL_ON = \"yes\" }\n",
 	"start.linux.sh": "#!/bin/sh\nif test -e \"$HOSTEL_CACHE_DIR/fail-panel\"; then exit 1; fi\n" +
 		"echo \"start panel $HOSTEL_LEASE_ID\" >> \"$HOSTEL_CACHE_DIR/fake-screen.log\"\necho PANEL_ID=panel-$HOSTEL_LEASE_ID > tool.env\n",
-	"stop.linux.sh": "#!/bin/sh\necho \"stop panel $HOSTEL_LEASE_ID\" >> \"$HOSTEL_CACHE_DIR/fake-screen.log\"\n",
+	"stop.linux.sh": "#!/bin/sh\necho \"stop panel $HOSTEL_LEASE_ID $PANEL_ID\" >> \"$HOSTEL_CACHE_DIR/fake-screen.log\"\n",
 }
+
+// bigTool is a screen tool that needs fake-panel and whose start script
+// cannot run: its environment has a value that is too large for exec.
+var bigTool = map[string]string{
+	"tool.toml":      "description = \"Too large\"\nneeds = [\"fake-panel\"]\nscreen = true\nenv = { BIG = \"" + strings.Repeat("x", 140000) + "\" }\n",
+	"start.linux.sh": "#!/bin/sh\necho \"start big $HOSTEL_LEASE_ID\" >> \"$HOSTEL_CACHE_DIR/fake-screen.log\"\n",
+}
+
+// toolSections are [tool.<name>] sections whose setup counts its runs.
+const toolSections = `
+[tool.fake-sdk]
+setup = ["echo fake-sdk >> tool-setup.txt"]
+env = { SDK_SECTION = "on" }
+
+[tool.fake-screen]
+setup = ["echo fake-screen >> tool-setup.txt"]
+`
 
 // TestToolLease (M10e): a lease for a software tool starts no screen; a lease
 // for a screen tool starts it with its option; a screen tool that needs
 // another starts after it, and cleanup stops them in reverse order; a failed
 // start stops what started before it. The env and path of the tools reach
-// the commands; screenshots by tool; one lease per worktree.
+// the commands; screenshots by tool; one lease per worktree. The
+// [tool.<name>] of hostel.toml applies once for each tool of the lease, also
+// for a tool that came as a need.
 func TestToolLease(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-panel"}, tools: map[string]map[string]string{"fake-panel": panelTool}})
+	files := defaultRepoFiles()
+	files["hostel.toml"] = fixtureRepoConfig + toolSections
+	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-panel", "fake-big"}, files: files,
+		tools: map[string]map[string]string{"fake-panel": panelTool, "fake-big": bigTool}})
 	log := func() string { return f.c.sh("cat " + cacheDir + "/fake-screen.log") }
 
 	// A software tool: no screen starts; the software env and path are there.
@@ -142,6 +164,9 @@ func TestToolLease(t *testing.T) {
 	}
 	if l := f.lease(id); len(l.Started) != 0 || !slices.Equal(l.Tools, []string{"fake-sdk"}) {
 		t.Fatalf("lease: tools %v, started %+v", l.Tools, l.Started)
+	}
+	if got := f.work("cat tool-setup.txt"); got != "fake-sdk" {
+		t.Fatalf("the [tool.<name>] setup of a fake-sdk lease: %q", got)
 	}
 	if r := f.e.hostel("screenshot"); r.code != 1 || !strings.Contains(r.stderr, "the lease has no screen tool") {
 		t.Fatalf("screenshot without a screen: %s", r)
@@ -159,6 +184,13 @@ func TestToolLease(t *testing.T) {
 	if r.stdout != "fake-screen:option-b|option-b-"+id+"|/home/hostel/hostel/cache/fake-sdk\n" {
 		t.Fatalf("the environment of a fake-screen lease: %q", r.stdout)
 	}
+	// fake-sdk came as a need: its section applies; each setup runs once.
+	if got := f.work("cat tool-setup.txt"); got != "fake-sdk\nfake-screen" {
+		t.Fatalf("the [tool.<name>] setup of a fake-screen lease: %q", got)
+	}
+	if r := f.e.mustHostel("run", "--", "echo $SDK_SECTION"); r.stdout != "on\n" {
+		t.Fatalf("the [tool.fake-sdk] env of a fake-screen lease: %q", r.stdout)
+	}
 	if l := f.lease(id); len(l.Started) != 1 || l.Started[0].Name != "fake-screen" || !slices.Equal(l.Started[0].Options, []string{"option-b"}) ||
 		!slices.Equal(l.Started[0].Facts, []string{"FAKE_SCREEN_ID", "FAKE_SCREEN_IDS", "FAKE_SCREEN_OS"}) {
 		t.Fatalf("started: %+v", l.Started)
@@ -175,7 +207,7 @@ func TestToolLease(t *testing.T) {
 	}
 	f.e.mustHostel("release")
 	f.waitSlotFree()
-	if !regexp.MustCompile(`start linux ` + id + ` option-a exclusive=\nstart panel ` + id + `\nstop panel ` + id + `\nstop linux ` + id + ` option-a`).MatchString(log()) {
+	if !regexp.MustCompile(`start linux ` + id + ` option-a exclusive=\nstart panel ` + id + `\nstop panel ` + id + ` panel-` + id + `\nstop linux ` + id + ` option-a`).MatchString(log()) {
 		t.Fatalf("the order of start and stop:\n%s", log())
 	}
 
@@ -190,8 +222,22 @@ func TestToolLease(t *testing.T) {
 	if !strings.Contains(log(), "stop linux "+failed+" option-a") || strings.Contains(log(), "stop panel "+failed) {
 		t.Fatalf("stops after the failed start:\n%s", log())
 	}
+	// The waiting lease has no started tools: they were on the old slot.
+	if l := f.lease(failed); l.State != protocol.LeaseQueued || len(l.Started) != 0 {
+		t.Fatalf("the lease after the failed start: %s, started %+v", l.State, l.Started)
+	}
 	f.e.mustHostel("release")
 	f.marker("fail-panel", false)
+	f.admin("admin", "room", "repair", f.roomID())
+
+	// A start script that cannot run at all: the stops of the tools that
+	// started before it still get their facts.
+	big := createdID(t, f.e.hostel("acquire", "fake-big", "--task", "big fails", "--wait", "1s"))
+	f.e.waitFor("the stops after the failed start", 2*time.Minute, func() bool { return strings.Contains(log(), "stop linux "+big) })
+	if !strings.Contains(log(), "stop panel "+big+" panel-"+big+"\n") || strings.Contains(log(), "start big") {
+		t.Fatalf("stops after a start that could not run:\n%s", log())
+	}
+	f.e.mustHostel("release")
 	f.admin("admin", "room", "repair", f.roomID())
 
 	// Two options of a screen tool: a screenshot names one.

@@ -272,9 +272,9 @@ stay. Changes:
   ```
 
   The settings for every lease are on the top level. `[tool.<name>]` holds only
-  what changes when the lease has that tool (its `setup` runs after the top-level
-  `setup`, its `env` replaces keys of the top-level `env`). Tools on the command
-  line replace `tools`.
+  what changes when the lease has that tool, also as a need of a requested tool
+  (its `setup` runs after the top-level `setup`, its `env` replaces keys of the
+  top-level `env`). Tools on the command line replace `tools`.
 - **The minimum guest version** goes up to the release of M10e: an older guest
   gets HTTP 426 and "run hostel update" (M10d), not a strange error.
 

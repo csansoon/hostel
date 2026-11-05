@@ -188,6 +188,21 @@ func leaseClosure(cfg *config.Server, tools []string) []*config.Tool {
 	return out
 }
 
+// leaseToolNames returns the names of a lease's tools and their needs: the
+// defined tools in the order of needs, then the other tools.
+func leaseToolNames(cfg *config.Server, tools []string) []string {
+	out := []string{}
+	for _, t := range leaseClosure(cfg, tools) {
+		out = append(out, t.Name)
+	}
+	for _, name := range toolNamesOf(tools) {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // leaseRequest is what a lease asks the scheduler for.
 func leaseRequest(cfg *config.Server, l store.Lease) scheduler.Request {
 	req := scheduler.Request{Tools: toolWants(l.Tools), PoolTunnels: poolTunnels(l.Tunnels), Fresh: l.Fresh}
