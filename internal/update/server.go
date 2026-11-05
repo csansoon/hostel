@@ -15,7 +15,7 @@ var helperRE = regexp.MustCompile(`^(hostel|mise)-(linux|darwin|windows)-(amd64|
 // Server updates a server to release r: it downloads and checks each file of
 // helperDir that differs from the release, and only then renames them into
 // place (a failed download changes nothing), then the server binary exe. The
-// platform defaults are in the binary. The caller restarts the server.
+// default tools are in the binary. The caller restarts the server.
 func Server(ctx context.Context, s *Source, r *Release, exe, helperDir string) (err error) {
 	for _, dir := range []string{helperDir, filepath.Dir(exe)} {
 		if err := CheckWritable(dir); err != nil {

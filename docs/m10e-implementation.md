@@ -377,43 +377,34 @@ later milestone:
 - **The owner's own server** needs a new configuration at the update (section
   8).
 
-## 13. State after phases 3 and 4
+## 13. State after phases 5 and 6
 
-Phases 3 and 4 built the lease model with tools (migration 011:
-`leases.tools`, `leases.started`), the start of each screen tool and its
-needs in the order of needs (stop in reverse order, only for what started),
-the `env` and `path` of `tool.toml` in scripts and leases, the inventory
-(also mise tool versions, updates at cleanup, removal of tools that a machine
-no longer lists), candidates by tools and options, one waiting line with
-"waiting behind N", `GET /v1/tools`, `POST /v1/leases` with `tools` (R4: HTTP
-422, exit code 69), the lease facts, the warning for a stored configuration of
-the old form, and the minimum guest version v0.3.0 (the M10e release must be
-v0.3.0 or later). The guest has the minimum of phase 5: `acquire
-[<tool[:option]>...]` (one lease per worktree, `hostel.toml` `tools` as the
-default), the lease facts at ready, `hostel info`, `hostel tools [name]
-[--json]`, `screenshot --tool`, and `hostel status` by the waiting line. The E2E
-tests use the test tools `fake-sdk`, `fake-screen`, and `fake-desktop`
-(`whole_machine`, instead of the label `desktop`).
+Phases 1 to 6 are built. Phase 5 (guest) added the agent guide from the
+server's tools (`hostel agent-guide` prints the general rule and the commands,
+then the `GUIDE.md` of each tool that a machine of the server lists; without
+a connection, only the general part), the median creation time of a new room
+in the estimated wait (`rooms.ready_at`, migration 012; 5 minutes before the
+first room; `hostel tools` shows "(new room)"), `platforms_dir` in
+`server.toml` ignored with a warning (server log and `hostel admin config
+check`), `install.sh --server` without a copy of the tools (the release has no
+`hostel-tools.tar.gz` now), and the skills, the README, and
+`static-room-setup.md` in the tool model (`skills/hostel-tools` replaces
+`skills/hostel-platforms`). Phase 6 (app) shows the tools in the Lobby (Screens,
+then Software), the tool page (options, machines with their options, the
+waiting leases with their tools, the first paragraph of the guide; no
+"Devices"), the inventory on the machine page (each tool with its options and
+check state), and the demo with real tool names.
 
-What remains:
+What remains (phase 7):
 
-- **Phase 5 (guest).** The agent guide (`internal/guest/info.go`) is the old
-  text (platforms, `--device`, `--require`); it must come from the `GUIDE.md`
-  files. The skills and the README. The last line of `hostel tools` names the
-  repository's mise tools in general words only (the server does not know the
-  repository). `install.sh --server` still copies the platform scripts, and a
-  `server.toml` with `platforms_dir` (written by it before M10e) stops the
-  server at start. Decision: the server ignores `platforms_dir` and logs a
-  warning (the update never makes the server unreachable), and the install
-  script no longer copies tools. "Waiting behind N" counts only leases that
-  still wait (a lease that the scheduler placed does not wait).
-- **Phase 6 (app).** The Lobby shows the tools of `GET /v1/tools` in the
-  simplest way (the tool page still says "Devices" for the options); the
-  machine page shows the configured tools, not the inventory; the demo data
-  uses the old names (ios, android, macos, windows, linux) as tool names.
-- **Estimated wait.** It is (waiting behind + 1) × the median lease time on the
-  candidate machines ÷ their slots, without the creation time of a new room.
-  Phase 5 adds the median creation time when a new room is necessary (design
-  section 5).
-- **Smoke tests** (real machines) are moved to the tools (`macos-desktop`,
-  `windows-desktop`, a lease without tools) but did not run.
+- **Review.** A local review by a subagent of the whole milestone
+  (`.claude/skills/pr-ready/SKILL.md`), and the fixes.
+- **Gates.** The full E2E suite in 10 separate runs in CI (the label `e2e-10`)
+  and one local run on macOS (`make test-e2e`) at a normal load; `make lint`.
+- **Smoke tests on real machines** (they did not run): the static Mac
+  (`xcode`, `ios-simulator`, `macos-desktop`), the Windows room
+  (`windows-desktop`, `dotnet`), and Namespace (`android-sdk`,
+  `android-emulator`; opt-in, costs money). The owner's server needs its
+  configuration in the new form at the update (section 8).
+- **Done when** (section 10): a new agent repeats the Android task of the
+  report with only the README, the skills, and `hostel agent-guide`.
