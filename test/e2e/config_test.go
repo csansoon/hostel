@@ -5,7 +5,6 @@ package e2e
 import (
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,10 +49,9 @@ func TestServerStart(t *testing.T) {
 func TestConfigErrors(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		config    string
-		platforms map[string]string // file below platforms_dir → content
-		want      []string          // each must be in stderr; {dir} is the config directory
+		name   string
+		config string
+		want   []string // each must be in stderr; {dir} is the config directory
 		// {line} in want is the line number of the first config line that
 		// contains marker.
 		marker string
@@ -65,14 +63,42 @@ func TestConfigErrors(t *testing.T) {
 			want:   []string{"{dir}/server.toml:{line}:1: unknown key \"providers.home.machines.box.colour\""},
 		},
 		{
-			name:   "unknown platform",
-			config: staticMachine + "platforms = [\"andriod\"]\n",
-			want:   []string{"{dir}/server.toml: providers.home.machines.box.platforms[0]: unknown platform \"andriod\""},
+			name:   "unknown tool",
+			config: staticMachine + "tools = [\"andriod-sdk\"]\n",
+			want:   []string{"{dir}/server.toml: providers.home.machines.box.tools[0]: unknown tool \"andriod-sdk\""},
 		},
 		{
-			name:   "OS platform in platforms",
-			config: staticMachine + "platforms = [\"linux\"]\n",
-			want:   []string{"{dir}/server.toml: providers.home.machines.box.platforms[0]: \"linux\" is an OS platform"},
+			name:   "a mise tool without a version",
+			config: staticMachine + "tools = [\"node\"]\n",
+			want:   []string{"providers.home.machines.box.tools[0]: unknown tool \"node\"", "a mise tool needs its version, for example \"node:22\""},
+		},
+		{
+			name:   "an OS in tools",
+			config: staticMachine + "tools = [\"linux\"]\n",
+			want:   []string{"{dir}/server.toml: providers.home.machines.box.tools[0]: \"linux\" is an OS"},
+		},
+		{
+			name:   "a tool without scripts for the OS of the machine",
+			config: staticMachine + "tools = [\"windows-desktop\"]\n",
+			want:   []string{"providers.home.machines.box.tools[0]: windows-desktop has no scripts for linux; it works on windows"},
+		},
+		{
+			name:   "an option that a screen tool does not have",
+			config: strings.Replace(staticMachine, `os = "linux"`, `os = "macos"`, 1) + "tools = [\"ios-simulator:watch\"]\n",
+			want:   []string{"providers.home.machines.box.tools[0]: \"ios-simulator:watch\": ios-simulator has no option \"watch\""},
+		},
+		{
+			name:   "the keys before M10e",
+			config: staticMachine + "platforms = [\"ios\"]\nlabels = [\"desktop\"]\n",
+			want: []string{
+				"{dir}/server.toml: providers.home.machines.box.platforms: removed in M10e: list the tools of the machine instead",
+				"{dir}/server.toml: providers.home.machines.box.labels: removed in M10e: labels are gone; list tools instead",
+			},
+		},
+		{
+			name:   "the tools map before M10e",
+			config: staticMachine + "tools = { jq = \"1.7.1\" }\n",
+			want:   []string{"{dir}/server.toml: providers.home.machines.box.tools: the map form before M10e; tools is now a list"},
 		},
 		{
 			name:   "static machine without os",
@@ -95,22 +121,6 @@ func TestConfigErrors(t *testing.T) {
 			},
 		},
 		{
-			name:      "OS platform directory with devices",
-			config:    staticMachine,
-			platforms: map[string]string{"linux/platform.toml": "description = \"Linux\"\ndevices = [\"x\"]\n"},
-			want:      []string{"{dir}/platforms/linux/platform.toml:2:1: unknown key \"devices\""},
-		},
-		{
-			name:   "device platform without prepare for a serving OS",
-			config: staticMachine + "platforms = [\"fakedevice\"]\n",
-			platforms: map[string]string{
-				"fakedevice/platform.toml":       "devices = [\"phone\"]\n",
-				"fakedevice/prepare.macos.sh":    "#!/bin/sh\n",
-				"fakedevice/screenshot.linux.sh": "#!/bin/sh\n",
-			},
-			want: []string{"{dir}/server.toml: providers.home.machines.box.platforms[0]: platform \"fakedevice\" has no prepare script for linux; add {dir}/platforms/fakedevice/prepare.linux.sh"},
-		},
-		{
 			name:   "WebSocket gateway without its path",
 			config: "gateway_public = \"wss://hostel.example.com\"\n" + staticMachine,
 			want:   []string{"{dir}/server.toml: gateway_public: \"wss://hostel.example.com\" must end with the path /v1/gateway"},
@@ -123,10 +133,10 @@ func TestConfigErrors(t *testing.T) {
 		},
 		{
 			name: "several errors at once",
-			config: staticMachine + "platforms = [\"andriod\"]\n" +
+			config: staticMachine + "tools = [\"andriod-sdk\"]\n" +
 				"[providers.home.machines.other]\naddress = \"h\"\n",
 			want: []string{
-				"{dir}/server.toml: providers.home.machines.box.platforms[0]: unknown platform \"andriod\"",
+				"{dir}/server.toml: providers.home.machines.box.tools[0]: unknown tool \"andriod-sdk\"",
 				"{dir}/server.toml: providers.home.machines.other.os: required for static machines",
 			},
 		},
@@ -142,9 +152,6 @@ func TestConfigErrors(t *testing.T) {
 				if c.marker != "" && line == 0 && strings.Contains(l, c.marker) {
 					line = i + 1
 				}
-			}
-			for file, body := range c.platforms {
-				e.writeFile(filepath.Join(e.configDir(), "platforms", file), body)
 			}
 			run := e.hostel("server", "run")
 			check := e.hostel("admin", "config", "check")
@@ -167,28 +174,24 @@ func TestConfigErrors(t *testing.T) {
 	}
 }
 
-// TestShippedPlatforms: the platform directories in platforms/ pass the
-// configuration check for a static Mac (docs/m2-implementation.md). The ios
-// scripts run only on a real Mac; M2 checks them there.
-func TestShippedPlatforms(t *testing.T) {
+// TestShippedTools: the default tools of the binary (tools/) pass the
+// configuration check for a static Mac with all of them; the needs add
+// android-sdk, jdk, and xcode. Their scripts run only on real machines; the
+// smoke tests run them there.
+func TestShippedTools(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	dir, err := filepath.Abs(filepath.Join("..", "..", "platforms"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.initServer(serverHeader() + fmt.Sprintf("platforms_dir = %q\n", dir) + `
+	e.initServer(serverHeader() + `
 [providers.home]
 kind = "static"
 
 [providers.home.machines.macbook]
 address = "hostel@macbook.local"
 os = "macos"
-platforms = ["ios"]
-labels = ["xcode-26.5", "desktop"]
+tools = ["ios-simulator", "android-emulator", "macos-desktop", "jdk:21"]
 `)
 	r := e.hostel("admin", "config", "check")
-	if r.code != 0 || !strings.Contains(r.stdout, "iphone-17-pro") {
-		t.Fatalf("config check of platforms/: %s", r)
+	if r.code != 0 || !strings.Contains(r.stdout, "iphone-17-pro") || !strings.Contains(r.stdout, "# home/macbook: the needs of its tools add xcode, android-sdk") {
+		t.Fatalf("config check of the default tools: %s", r)
 	}
 }

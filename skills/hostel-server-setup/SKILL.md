@@ -36,8 +36,8 @@ sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 `/opt/hostel/bin/hostel` is the server binary. The service's user owns
 `/opt/hostel`, so that an admin can update the server from the app or from a
 computer (section 9). `/opt/hostel/helpers` gets the binaries for all rooms (`hostel-<os>-<arch>`,
-`mise-<os>-<arch>`). `/opt/hostel/platforms` gets the platform scripts (only an
-old server imports them; the binary has the default platforms).
+`mise-<os>-<arch>`). The server uses the tools in its binary: the install
+script does not copy tool definitions.
 
 ## 3. Initialize
 
@@ -93,7 +93,8 @@ Run that command on your own computer within 24 hours (`hostel-install`).
 
 `server.toml` has only the keys that the server needs before it opens its
 database: `server_id`, `listen`, `gateway_listen`, `gateway_public`, `tls`,
-`public_urls`, `data_dir`, `helper_dir`, `platforms_dir`. `init` writes
+`public_urls`, `data_dir`, `helper_dir`. A `platforms_dir` key (written by
+the install script before M10e) is ignored with a warning: delete it. `init` writes
 `helper_dir` (with `--helper-dir`) and, behind a proxy, `gateway_public`. Check
 them:
 
@@ -160,7 +161,7 @@ For Namespace rooms, the `devbox` and `nsc` CLIs must be on the service's
 
 ## 6. The configuration in the database
 
-Everything else (providers, machines, platforms, and the settings) is the
+Everything else (providers, machines with their tools, and the settings) is the
 configuration document in the database. An admin changes it from any
 connected computer. A valid change applies at once, without a restart.
 
@@ -181,7 +182,7 @@ Settings: `idle_timeout` (10m), `poll_timeout` (5m), `limit_retry` (2m),
 
 The server refuses a change if another revision came first (edit again) or if
 it is invalid (the error names the key path). Machines and providers:
-`hostel-rooms`. Platforms: `hostel-platforms`. Users: `hostel-users`.
+`hostel-rooms`. Tools: `hostel-tools`. Users: `hostel-users`.
 
 ## 7. Invites on the server machine
 

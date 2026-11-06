@@ -8,21 +8,23 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// lobby lists the platforms, each with its free machines and its queue.
+// lobby lists the tools (screen tools first), each with its free machines and
+// its waiting leases.
 type lobby struct{ sel int }
 
 func (p *lobby) title() string { return "Lobby" }
 
-// queued returns the queued leases of a platform in queue order (a lease
-// that the scheduler has not placed yet comes last).
-func queued(st protocol.Status, platform string) []protocol.LeaseStatus {
+// queued returns the queued leases that asked for a tool, in the order of the
+// waiting line (a lease that the scheduler has not placed yet comes last).
+func queued(st protocol.Status, tool string) []protocol.LeaseStatus {
 	var out []protocol.LeaseStatus
 	for _, l := range st.Leases {
-		if l.State == protocol.LeaseQueued && l.Platform == platform {
+		if l.State == protocol.LeaseQueued && asks(l, tool) {
 			out = append(out, l)
 		}
 	}
@@ -38,11 +40,17 @@ func queued(st protocol.Status, platform string) []protocol.LeaseStatus {
 	return out
 }
 
-// onlineMachines are the machines of a platform that are not offline: the
+// asks reports whether a lease asked for a tool.
+func asks(l protocol.LeaseStatus, tool string) bool {
+	return slices.ContainsFunc(l.Tools, func(t string) bool { name, _, _ := strings.Cut(t, ":"); return name == tool })
+}
+
+// onlineMachines are the machines of a tool that are not offline: the
 // Lobby leaves out the offline ones (owner decision, 2026-11-03).
-func onlineMachines(m *model, p protocol.Platform) []protocol.MachineStatus {
+func onlineMachines(m *model, p protocol.Tool) []protocol.MachineStatus {
 	var out []protocol.MachineStatus
-	for _, key := range p.Machines {
+	for _, tm := range p.Machines {
+		key := tm.Key
 		if i := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == key }); i >= 0 && online(m.st, m.st.Machines[i]) {
 			out = append(out, m.st.Machines[i])
 		}
@@ -50,8 +58,8 @@ func onlineMachines(m *model, p protocol.Platform) []protocol.MachineStatus {
 	return out
 }
 
-// freeMachines counts the machines of a platform that can take a lease now.
-func freeMachines(m *model, p protocol.Platform) int {
+// freeMachines counts the machines of a tool that can take a lease now.
+func freeMachines(m *model, p protocol.Tool) int {
 	n := 0
 	for _, ms := range onlineMachines(m, p) {
 		if machineFree(m.st, ms, p.Name) {
@@ -68,34 +76,56 @@ func waitText(seconds int) string {
 	return "~" + ago(time.Duration(seconds)*time.Second)
 }
 
+// toolText is what a tool is, in a few words.
+func toolText(t protocol.Tool) string {
+	if t.Mise || t.Description == "" {
+		return "Installed with mise"
+	}
+	return t.Description
+}
+
 func (p *lobby) body(m *model) string {
 	switch {
-	case m.platformsErr != "" && !m.platformsRead:
-		return "\n  " + errStyle.Render(clean("Cannot read the platforms: "+m.platformsErr)) + "\n"
-	case !m.platformsRead:
-		return "\n  Reading the platforms …\n"
-	case len(m.platforms) == 0:
-		return "\n  No platform has a machine yet. An admin adds a machine in Front desk › Rooms.\n"
+	case m.toolsErr != "" && !m.toolsRead:
+		return "\n  " + errStyle.Render(clean("Cannot read the tools: "+m.toolsErr)) + "\n"
+	case !m.toolsRead:
+		return "\n  Reading the tools …\n"
+	case len(m.tools) == 0:
+		return "\n  No machine lists a tool yet. An admin adds a machine in Front desk › Rooms.\n"
 	}
 	stale := ""
-	if m.platformsErr != "" {
-		stale = "  " + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n"
+	if m.toolsErr != "" {
+		stale = "  " + errStyle.Render(clean("! Cannot read the tools: "+m.toolsErr+" (older data below; trying again)")) + "\n"
 	}
 	w := contentWidth(m)
 	var b strings.Builder
-	b.WriteString(stale + "\n")
-	for i, pl := range m.platforms {
-		total := len(onlineMachines(m, pl))
-		sub := clean(pl.Description) + " · " + plural(len(pl.Machines), "machine")
-		b.WriteString(item(w, i == p.sel, clean(pl.Name), sub, m.vacancy(pl), waitLine(pl, total)) + "\n\n")
+	b.WriteString(stale)
+	// The server sends the screen tools first.
+	for i, t := range m.tools {
+		if i == 0 || t.Screen != m.tools[i-1].Screen {
+			title := "Software"
+			if t.Screen {
+				title = "Screens"
+			}
+			b.WriteString(section(title, w, i > 0))
+		}
+		total := len(onlineMachines(m, t))
+		// The description gets the space that the options and the machines
+		// leave.
+		rest := " · " + plural(len(t.Machines), "machine")
+		if len(t.Options) > 0 {
+			rest = " · " + clean(strings.Join(t.Options, ", ")) + rest
+		}
+		sub := ansi.Truncate(clean(toolText(t)), max(w*2/3-lipgloss.Width(rest), 12), "…") + rest
+		b.WriteString(item(w, i == p.sel, clean(t.Name), sub, m.vacancy(t), waitLine(t, total)) + "\n\n")
 	}
 	return b.String()
 }
 
-// vacancy is a platform's free machines: ● 2 vacant, ◉ all occupied, or no
+// vacancy is a tool's free machines: ● 2 vacant, ◉ all occupied, or no
 // machine online; it glows when it changes.
-func (m *model) vacancy(pl protocol.Platform) string {
-	free, total := freeMachines(m, pl), len(onlineMachines(m, pl))
+func (m *model) vacancy(t protocol.Tool) string {
+	free, total := freeMachines(m, t), len(onlineMachines(m, t))
 	s := state{fmt.Sprintf("%d vacant", free), colGreen, ""}
 	glyph := "●"
 	switch {
@@ -104,45 +134,49 @@ func (m *model) vacancy(pl protocol.Platform) string {
 	case free == 0:
 		s, glyph = state{"all occupied", colBlue, ""}, "◉"
 	}
-	if m.glowing("p:" + pl.Name) {
+	if m.glowing("t:" + t.Name) {
 		return fg(s.color).Render(glyph) + " " + lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(s.word)
 	}
 	return fg(s.color).Render(glyph + " " + s.word)
 }
 
-// waitLine is a platform's waiting line in a few words.
-func waitLine(pl protocol.Platform, online int) string {
-	if pl.Queue == 0 {
+// waitLine is a tool's waiting line in a few words.
+func waitLine(t protocol.Tool, online int) string {
+	if t.Waiting == 0 {
 		return mutedStyle.Render("nobody waiting")
 	}
-	next := "next room " + waitText(pl.EstimatedWaitSeconds)
+	next := "next room " + waitText(t.EstimatedWaitSeconds)
 	if online == 0 {
 		next = "no machine online"
 	}
-	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", pl.Queue)) + mutedStyle.Render(" · "+next)
+	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", t.Waiting)) + mutedStyle.Render(" · "+next)
 }
 
 func (p *lobby) hint(m *model) string {
-	if p.sel >= len(m.platforms) {
+	if p.sel >= len(m.tools) {
 		return ""
 	}
-	pl := m.platforms[p.sel]
-	return pl.Name + ": " + pl.Description
+	t := m.tools[p.sel]
+	h := t.Name + ": " + toolText(t)
+	if t.Screen {
+		h += " · a screen: it starts for each lease that asks for it"
+	}
+	return h
 }
 
 func (p *lobby) keys(m *model) []binding { return []binding{{"↑↓", "move"}, {"enter", "open"}} }
 
 func (p *lobby) key(m *model, k tea.KeyMsg) tea.Cmd {
-	if k.String() == "enter" && p.sel < len(m.platforms) {
-		return m.open(&platformPage{name: m.platforms[p.sel].Name, onMachines: true})
+	if k.String() == "enter" && p.sel < len(m.tools) {
+		return m.open(&toolPage{name: m.tools[p.sel].Name, onMachines: true})
 	}
-	p.sel = move(p.sel, len(m.platforms), k.String())
+	p.sel = move(p.sel, len(m.tools), k.String())
 	return nil
 }
 
-// platformPage is one platform: its machines and its full queue, with the
-// queue actions.
-type platformPage struct {
+// toolPage is one tool: its options, its machines, a summary of its guide,
+// and the waiting leases that asked for it, with the actions on them.
+type toolPage struct {
 	name string
 	// sel is the selected lease (its ID: the queue order changes).
 	sel string
@@ -153,19 +187,19 @@ type platformPage struct {
 	machineSel string
 }
 
-func (p *platformPage) title() string { return p.name }
+func (p *toolPage) title() string { return p.name }
 
-func (p *platformPage) platform(m *model) (protocol.Platform, bool) {
-	i := slices.IndexFunc(m.platforms, func(pl protocol.Platform) bool { return pl.Name == p.name })
+func (p *toolPage) tool(m *model) (protocol.Tool, bool) {
+	i := slices.IndexFunc(m.tools, func(t protocol.Tool) bool { return t.Name == p.name })
 	if i < 0 {
-		return protocol.Platform{}, false
+		return protocol.Tool{}, false
 	}
-	return m.platforms[i], true
+	return m.tools[i], true
 }
 
 // selected returns the queue and the index of the selected lease (the first
 // one when the selected lease left the queue).
-func (p *platformPage) selected(m *model) ([]protocol.LeaseStatus, int) {
+func (p *toolPage) selected(m *model) ([]protocol.LeaseStatus, int) {
 	q := queued(m.st, p.name)
 	i := slices.IndexFunc(q, func(l protocol.LeaseStatus) bool { return l.ID == p.sel })
 	if i < 0 && len(q) > 0 {
@@ -175,43 +209,69 @@ func (p *platformPage) selected(m *model) ([]protocol.LeaseStatus, int) {
 	return q, i
 }
 
-func (p *platformPage) body(m *model) string {
-	pl, ok := p.platform(m)
+func (p *toolPage) body(m *model) string {
+	t, ok := p.tool(m)
 	if !ok {
-		return "\n  This platform is not on the server any more.\n"
+		return "\n  No machine of the server has this tool any more.\n"
 	}
 	now := time.Now()
 	w := contentWidth(m)
-	machines := p.machines(m, pl)
+	machines := p.machines(m, t)
 	q, qsel := p.selected(m)
 	if len(q) == 0 {
 		p.onMachines = true
 	}
 	var b strings.Builder
-	if m.platformsErr != "" {
-		b.WriteString(margin + errStyle.Render(clean("! Cannot read the platforms: "+m.platformsErr+" (older data below; trying again)")) + "\n")
+	if m.toolsErr != "" {
+		b.WriteString(margin + errStyle.Render(clean("! Cannot read the tools: "+m.toolsErr+" (older data below; trying again)")) + "\n")
 	}
 
 	typical := "typical stay not known yet"
-	if pl.TypicalLeaseSeconds > 0 {
-		typical = "typical stay " + ago(time.Duration(pl.TypicalLeaseSeconds)*time.Second)
+	if t.TypicalLeaseSeconds > 0 {
+		typical = "typical stay " + ago(time.Duration(t.TypicalLeaseSeconds)*time.Second)
 	}
-	b.WriteString(head(clean(pl.Name), clean(pl.Description), m.vacancy(pl)+"     "+waitLine(pl, len(machines))+"     "+mutedStyle.Render(typical)))
+	b.WriteString(head(clean(t.Name), clean(toolText(t)), m.vacancy(t)+"     "+waitLine(t, len(machines))+"     "+mutedStyle.Render(typical)))
 
-	// The machines: one line each.
-	b.WriteString(heading("Machines", w) + "\n\n")
-	if len(machines) == 0 {
-		b.WriteString(margin + "   " + mutedStyle.Render("No machine for "+clean(pl.Name)+" is online.") + "\n")
+	// The options: the phones and tablets of a screen tool, or the versions
+	// of a software tool.
+	b.WriteString(heading("Options", w) + "\n\n")
+	var opts []string
+	for _, o := range t.Options {
+		opts = append(opts, fg(colBlue).Render(clean(o)))
 	}
-	_, msel := p.selectedMachine(m, pl)
-	nameW := 0
+	var about []string
+	switch {
+	case len(t.Options) == 0:
+		about = append(about, "no options: ask for "+clean(t.Name))
+	case t.Screen:
+		about = append(about, "the first is the default")
+		if t.MaxOptions > 1 {
+			about = append(about, fmt.Sprintf("up to %d in one lease", t.MaxOptions))
+		}
+	default:
+		about = append(about, "the versions on the machines; "+clean(t.Name)+":<version> asks for one")
+	}
+	if t.WholeMachine {
+		about = append(about, "a lease takes the whole machine")
+	}
+	b.WriteString(line(strings.Join(append(opts, mutedStyle.Render(strings.Join(about, " · "))), "    ")))
+
+	// The machines: one line each, with the options of the tool on it.
+	b.WriteString("\n\n" + heading("Machines", w) + "\n\n")
+	if len(machines) == 0 {
+		b.WriteString(margin + "   " + mutedStyle.Render("No machine with "+clean(t.Name)+" is online.") + "\n")
+	}
+	_, msel := p.selectedMachine(m, t)
+	nameW, optW := 0, 0
 	for _, ms := range machines {
 		nameW = max(nameW, lipgloss.Width(clean(ms.Key)))
+		optW = max(optW, lipgloss.Width(clean(machineOptions(t, ms.Key))))
 	}
 	for i, ms := range machines {
 		s := machineState(m.st, ms, now)
 		word := m.word("m:"+ms.Key, s)
-		line := s.dot() + " " + cell(boldStyle.Render(clean(ms.Key)), nameW) + "   " + cell(word, len("No new leases")) + "   " + mutedStyle.Render(s.detail)
+		line := s.dot() + " " + cell(boldStyle.Render(clean(ms.Key)), nameW) + "   " + cell(word, len("No new leases")) + "   " +
+			cell(fg(colBlue).Render(clean(machineOptions(t, ms.Key))), optW) + "   " + mutedStyle.Render(s.detail)
 		b.WriteString(row(w, p.onMachines && i == msel, line) + "\n")
 	}
 
@@ -233,27 +293,41 @@ func (p *platformPage) body(m *model) string {
 			prio = mutedStyle.Render("▼ low priority")
 		}
 		title := pos + "  " + clean(l.User) + "  " + fmt.Sprintf("%q", clean(l.Task))
-		sub := "   " + prio + mutedStyle.Render(" · waiting "+ago(now.Sub(l.CreatedAt)))
+		sub := "   " + prio + mutedStyle.Render(" · waiting "+ago(now.Sub(l.CreatedAt))+" · asks for "+clean(strings.Join(l.Tools, " ")))
 		right := fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + " room in " + waitText(l.EstimatedWaitSeconds))
 		b.WriteString(item(w, !p.onMachines && i == qsel, title, sub, right, "") + "\n\n")
 	}
 
-	// The devices.
-	if len(pl.Devices) > 0 {
-		b.WriteString("\n\n" + heading("Devices", w) + "\n\n")
-		var ds []string
-		for _, d := range pl.Devices {
-			ds = append(ds, fg(colBlue).Render(clean(d)))
+	// The guide: its first paragraph.
+	if g := guideSummary(t.Guide); g != "" {
+		b.WriteString("\n\n" + heading("Guide", w) + "\n\n")
+		for _, l := range strings.Split(lipgloss.NewStyle().Width(w-3).Render(clean(g)), "\n") {
+			b.WriteString(line(strings.TrimRight(l, " ")))
 		}
-		b.WriteString(margin + "   " + strings.Join(ds, "    ") + "      " + mutedStyle.Render(fmt.Sprintf("up to %d at the same time", pl.MaxDevices)) + "\n")
+		b.WriteString(note("hostel tools " + clean(t.Name) + " shows the whole guide."))
 	}
 	return b.String()
 }
 
+// machineOptions are the options of a tool on one machine.
+func machineOptions(t protocol.Tool, key string) string {
+	i := slices.IndexFunc(t.Machines, func(tm protocol.ToolMachine) bool { return tm.Key == key })
+	if i < 0 {
+		return ""
+	}
+	return strings.Join(t.Machines[i].Options, ", ")
+}
+
+// guideSummary is the first paragraph of a tool's guide, in one line.
+func guideSummary(guide string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(guide), "\n\n")
+	return strings.Join(strings.Fields(first), " ")
+}
+
 // selectedMachine returns the machines of the card and the index of the
 // selected one (the first when it is gone).
-func (p *platformPage) selectedMachine(m *model, pl protocol.Platform) ([]protocol.MachineStatus, int) {
-	ms := p.machines(m, pl)
+func (p *toolPage) selectedMachine(m *model, t protocol.Tool) ([]protocol.MachineStatus, int) {
+	ms := p.machines(m, t)
 	i := slices.IndexFunc(ms, func(x protocol.MachineStatus) bool { return x.Key == p.machineSel })
 	if i < 0 && len(ms) > 0 {
 		i, p.machineSel = 0, ms[0].Key
@@ -261,18 +335,18 @@ func (p *platformPage) selectedMachine(m *model, pl protocol.Platform) ([]protoc
 	return ms, i
 }
 
-// machines are the online machines that serve the platform, in state order.
-func (p *platformPage) machines(m *model, pl protocol.Platform) []protocol.MachineStatus {
-	return byState(m.st, onlineMachines(m, pl), time.Now())
+// machines are the online machines that have the tool, in state order.
+func (p *toolPage) machines(m *model, t protocol.Tool) []protocol.MachineStatus {
+	return byState(m.st, onlineMachines(m, t), time.Now())
 }
 
-func (p *platformPage) hint(m *model) string {
-	pl, ok := p.platform(m)
+func (p *toolPage) hint(m *model) string {
+	t, ok := p.tool(m)
 	if !ok {
 		return ""
 	}
 	if p.onMachines {
-		if ms, i := p.selectedMachine(m, pl); i >= 0 {
+		if ms, i := p.selectedMachine(m, t); i >= 0 {
 			s := machineState(m.st, ms[i], time.Now())
 			return ms[i].Key + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
 		}
@@ -280,7 +354,7 @@ func (p *platformPage) hint(m *model) string {
 	}
 	q, i := p.selected(m)
 	if i < 0 {
-		return "The Waiting line: the agents that wait for a room for " + pl.Name + ", first in, first out inside each priority."
+		return "The Waiting line: the agents that wait for a machine with " + t.Name + ", first in, first out inside each priority."
 	}
 	l := q[i]
 	h := fmt.Sprintf("%s · %q · from %s", clean(l.User), clean(l.Task), clean(l.Guest))
@@ -290,15 +364,15 @@ func (p *platformPage) hint(m *model) string {
 	return h
 }
 
-func (p *platformPage) canEnd(m *model, l protocol.LeaseStatus) bool {
+func (p *toolPage) canEnd(m *model, l protocol.LeaseStatus) bool {
 	return m.admin() || (m.st.User != "" && l.User == m.st.User)
 }
 
-func (p *platformPage) keys(m *model) []binding {
+func (p *toolPage) keys(m *model) []binding {
 	ks := []binding{{"↑↓", "move"}, {"tab", "next section"}}
 	if p.onMachines {
-		pl, _ := p.platform(m)
-		if ms, _ := p.selectedMachine(m, pl); len(ms) > 0 {
+		t, _ := p.tool(m)
+		if ms, _ := p.selectedMachine(m, t); len(ms) > 0 {
 			ks = append(ks, binding{"enter", "open the machine"})
 		}
 		return ks
@@ -312,7 +386,7 @@ func (p *platformPage) keys(m *model) []binding {
 
 // actions are what the user can do with the selected lease of the waiting
 // line; each one runs the key of its letter.
-func (p *platformPage) actions(m *model, q []protocol.LeaseStatus, i int) []option {
+func (p *toolPage) actions(m *model, q []protocol.LeaseStatus, i int) []option {
 	l := q[i]
 	// The options keep the lease and the queue of this moment; the popup
 	// closes when the queue changes (cancelOnChange).
@@ -338,14 +412,14 @@ func (p *platformPage) actions(m *model, q []protocol.LeaseStatus, i int) []opti
 // runeKey is the key message of a letter.
 func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
-func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
+func (p *toolPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if k.String() == "tab" || k.String() == "shift+tab" {
 		p.onMachines = !p.onMachines
 		return nil
 	}
 	if p.onMachines {
-		pl, _ := p.platform(m)
-		ms, i := p.selectedMachine(m, pl)
+		t, _ := p.tool(m)
+		ms, i := p.selectedMachine(m, t)
 		// Down from the last machine goes on to the waiting line.
 		if q, _ := p.selected(m); (k.String() == "down" || k.String() == "j") && i == len(ms)-1 && len(q) > 0 {
 			p.onMachines, p.sel = false, q[0].ID
@@ -374,8 +448,8 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	case "up", "k":
 		if i > 0 {
 			p.sel = q[i-1].ID
-		} else if pl, _ := p.platform(m); len(p.machines(m, pl)) > 0 {
-			ms := p.machines(m, pl)
+		} else if t, _ := p.tool(m); len(p.machines(m, t)) > 0 {
+			ms := p.machines(m, t)
 			p.onMachines, p.machineSel = true, ms[len(ms)-1].Key
 		}
 	case "down", "j":
@@ -402,13 +476,13 @@ func (p *platformPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (p *platformPage) endLease(m *model, l protocol.LeaseStatus) {
+func (p *toolPage) endLease(m *model, l protocol.LeaseStatus) {
 	m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
 		return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
 	})
 }
 
-func (p *platformPage) moveUp(m *model, q []protocol.LeaseStatus, i int) {
+func (p *toolPage) moveUp(m *model, q []protocol.LeaseStatus, i int) {
 	l, before := q[i], q[i-1]
 	m.ask("Move up", fmt.Sprintf("Move %s (%q) up, before %s?", clean(l.User), clean(l.Task), clean(before.User)), func() tea.Cmd {
 		return m.do("POST", "/v1/leases/"+l.ID+"/move", protocol.MoveRequest{Before: before.ID}, "Moved.")
@@ -416,7 +490,7 @@ func (p *platformPage) moveUp(m *model, q []protocol.LeaseStatus, i int) {
 	p.cancelOnChange(m, q)
 }
 
-func (p *platformPage) moveDown(m *model, q []protocol.LeaseStatus, i int) {
+func (p *toolPage) moveDown(m *model, q []protocol.LeaseStatus, i int) {
 	l, next := q[i], q[i+1]
 	// Down: before the lease after the next one; at the end of the queue,
 	// the next lease moves up instead (the API has no "last").
@@ -433,7 +507,7 @@ func (p *platformPage) moveDown(m *model, q []protocol.LeaseStatus, i int) {
 	p.cancelOnChange(m, q)
 }
 
-func (p *platformPage) priority(m *model, l protocol.LeaseStatus) {
+func (p *toolPage) priority(m *model, l protocol.LeaseStatus) {
 	set := func(prio string) func() tea.Cmd {
 		return func() tea.Cmd {
 			return m.do("POST", "/v1/leases/"+l.ID+"/priority", protocol.PriorityRequest{Priority: prio}, "Priority of "+clean(l.User)+": "+prio+".")
@@ -448,7 +522,7 @@ func (p *platformPage) priority(m *model, l protocol.LeaseStatus) {
 
 // cancelOnChange makes the open question stale when the queue order is not q
 // any more: a move uses the neighbours that the question names.
-func (p *platformPage) cancelOnChange(m *model, q []protocol.LeaseStatus) {
+func (p *toolPage) cancelOnChange(m *model, q []protocol.LeaseStatus) {
 	ids := func(ls []protocol.LeaseStatus) []string {
 		var out []string
 		for _, l := range ls {

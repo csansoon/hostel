@@ -204,7 +204,7 @@ type DocProvider struct {
 type DocMachine struct {
 	Provider, Name, OS, Address string
 	Connect                     bool
-	Platforms, Labels           []string
+	Tools                       []string
 	Spec                        map[string]any
 }
 
@@ -217,12 +217,11 @@ func DocumentProviders(data []byte) ([]DocProvider, error) {
 		Providers map[string]struct {
 			Kind     string `toml:"kind"`
 			Machines map[string]struct {
-				OS        string         `toml:"os"`
-				Address   string         `toml:"address"`
-				Connect   bool           `toml:"connect"`
-				Platforms []string       `toml:"platforms"`
-				Labels    []string       `toml:"labels"`
-				Spec      map[string]any `toml:"spec"`
+				OS      string         `toml:"os"`
+				Address string         `toml:"address"`
+				Connect bool           `toml:"connect"`
+				Tools   []string       `toml:"tools"`
+				Spec    map[string]any `toml:"spec"`
 			} `toml:"machines"`
 		} `toml:"providers"`
 	}
@@ -240,7 +239,7 @@ func DocumentProviders(data []byte) ([]DocProvider, error) {
 		for _, mn := range childOrder(order, "providers", pn, "machines") {
 			m := p.Machines[mn]
 			dp.Machines = append(dp.Machines, DocMachine{Provider: pn, Name: mn, OS: m.OS, Address: m.Address,
-				Connect: m.Connect, Platforms: m.Platforms, Labels: m.Labels, Spec: m.Spec})
+				Connect: m.Connect, Tools: m.Tools, Spec: m.Spec})
 		}
 		out = append(out, dp)
 	}

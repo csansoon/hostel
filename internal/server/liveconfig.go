@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -29,22 +28,29 @@ type liveConfig struct {
 	revision  int
 	document  string
 	providers map[string]provider.Provider
-	// uploads has the platform files and hashes for each platform and OS.
-	uploads map[string]map[string]roomops.Platform
+	// tools are the files of the defined tools (name → file → content), and
+	// toolsDir has them on disk.
+	tools    map[string]map[string]string
+	toolsDir string
+	// uploads has the tool files and hashes for each tool and OS.
+	uploads map[string]map[string]roomops.Tool
+	// warning is a problem of the stored configuration that an admin must
+	// fix (GET /v1/status); a new configuration clears it.
+	warning string
 }
 
 func (s *Server) config() *config.Server { return s.live.Load().cfg }
 
 func (s *Server) providerMap() map[string]provider.Provider { return s.live.Load().providers }
 
-func (s *Server) platformUploads() map[string]map[string]roomops.Platform {
+func (s *Server) toolUploads() map[string]map[string]roomops.Tool {
 	return s.live.Load().uploads
 }
 
 // buildLive validates a configuration and builds its providers and uploads.
 // Providers whose settings did not change are reused (no login check again).
-func (s *Server) buildLive(ctx context.Context, cfg *config.Server, revision int, document string, old *liveConfig) (*liveConfig, error) {
-	lc := &liveConfig{cfg: cfg, revision: revision, document: document, providers: map[string]provider.Provider{}}
+func (s *Server) buildLive(ctx context.Context, cfg *config.Server, revision int, document string, tools map[string]map[string]string, toolsDir string, old *liveConfig) (*liveConfig, error) {
+	lc := &liveConfig{cfg: cfg, revision: revision, document: document, tools: tools, toolsDir: toolsDir, providers: map[string]provider.Provider{}}
 	fresh := &config.Server{ProviderOrder: nil, Providers: map[string]*config.Provider{}}
 	for _, name := range cfg.ProviderOrder {
 		if old != nil && old.providers[name] != nil && reflect.DeepEqual(old.cfg.Providers[name], cfg.Providers[name]) {
@@ -61,7 +67,7 @@ func (s *Server) buildLive(ctx context.Context, cfg *config.Server, revision int
 	for name, p := range built {
 		lc.providers[name] = p
 	}
-	uploads, err := platformUploads(cfg)
+	uploads, err := toolUploads(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -103,20 +109,8 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 			if err := writeOnce(file+".pre-m9", data); err != nil {
 				return nil, err
 			}
-			if err := importPlatforms(ctx, st, paths.PlatformsDir, now); err != nil {
-				return nil, fmt.Errorf("import the platforms of %s: %w", paths.PlatformsDir, err)
-			}
-			imported, err := st.LatestPlatforms(ctx)
-			if err != nil {
+			if _, err := config.LoadServer(file); err != nil {
 				return nil, err
-			}
-			dir, err := writePlatforms(paths.DataDir, effectivePlatforms(imported))
-			if err != nil {
-				return nil, err
-			}
-			if _, err := config.LoadServerFile(file, dir); err != nil {
-				// The imported platforms come from platforms_dir: name it.
-				return nil, errors.New(strings.ReplaceAll(err.Error(), dir, paths.PlatformsDir))
 			}
 			if _, err := st.AddConfig(ctx, 0, string(doc), 0, now); err != nil {
 				return nil, err
@@ -137,20 +131,30 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 			}
 		}
 	}
-	latestPlatforms, err := st.LatestPlatforms(ctx)
+	latestTools, err := st.LatestTools(ctx)
 	if err != nil {
 		return nil, err
 	}
-	dir, err := writePlatforms(paths.DataDir, effectivePlatforms(latestPlatforms))
+	tools := effectiveTools(latestTools)
+	dir, err := writeTools(paths.DataDir, tools)
 	if err != nil {
-		return nil, fmt.Errorf("write the platforms: %w", err)
+		return nil, fmt.Errorf("write the tools: %w", err)
 	}
-	removeOldPlatformDirs(paths.DataDir, dir)
-	cfg, err := config.LoadServerDocument(file, data, config.Document{Revision: latest.Revision, Data: []byte(latest.Document), PlatformsDir: dir})
+	removeOldToolDirs(paths.DataDir, dir)
+	document, warning := latest.Document, ""
+	if oldErr := config.OldForm([]byte(document)); oldErr != nil {
+		// No compatibility with the configuration before M10e (owner
+		// decision, 2026-11-05), but the server stays reachable: it starts
+		// without providers and machines, and an admin writes the new form.
+		warning = fmt.Sprintf("the stored configuration (revision %d) has the form before M10e, so the server runs without providers and machines; write the configuration again in the new form with \"hostel config edit\" (machines list tools): %v",
+			latest.Revision, strings.ReplaceAll(oldErr.Error(), "\n", "; "))
+		document = ""
+	}
+	cfg, err := config.LoadServerDocument(file, data, config.Document{Revision: latest.Revision, Data: []byte(document), Tools: tools, ToolsDir: dir})
 	if err != nil {
 		return nil, err
 	}
-	return &startConfig{cfg: cfg, revision: latest.Revision, document: latest.Document, local: data}, nil
+	return &startConfig{cfg: cfg, revision: latest.Revision, document: document, tools: tools, toolsDir: dir, local: data, warning: warning}, nil
 }
 
 // startConfig is the configuration at the start.
@@ -158,8 +162,11 @@ type startConfig struct {
 	cfg      *config.Server
 	revision int
 	document string
+	tools    map[string]map[string]string
+	toolsDir string
 	// local is server.toml: its keys change only with a restart.
-	local []byte
+	local   []byte
+	warning string
 }
 
 // writeOnce writes a file unless it exists.
@@ -190,14 +197,14 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 	if old.revision != base {
 		return 0, fmt.Errorf("%w: revision %d is the latest, not %d", store.ErrConflict, old.revision, base)
 	}
-	cfg, err := config.LoadServerDocument(old.cfg.File, s.localData, config.Document{Revision: base + 1, Data: []byte(document), PlatformsDir: old.cfg.PlatformsDir})
+	cfg, err := config.LoadServerDocument(old.cfg.File, s.localData, config.Document{Revision: base + 1, Data: []byte(document), Tools: old.tools, ToolsDir: old.toolsDir})
 	if err != nil {
-		return 0, errConfig{platformPaths(err.Error(), old.cfg.PlatformsDir)}
+		return 0, errConfig{err.Error()}
 	}
 	if err := s.checkRemovals(ctx, cfg); err != nil {
 		return 0, err
 	}
-	lc, err := s.buildLive(ctx, cfg, base+1, document, old)
+	lc, err := s.buildLive(ctx, cfg, base+1, document, old.tools, old.toolsDir, old)
 	if err != nil {
 		return 0, errConfig{err.Error()}
 	}
@@ -226,19 +233,20 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 	return rev, nil
 }
 
-// applyPlatform saves a platform change (new files, removed, or back to the
-// default) and applies it at once. The whole configuration is validated with
-// it: a platform that a machine lists cannot be removed.
-func (s *Server) applyPlatform(ctx context.Context, name, state string, files map[string]string, userID int64) (int, error) {
+// applyTool saves a tool change (new files, removed, or back to the default)
+// and applies it at once. The whole configuration is validated with it: a
+// tool that a machine lists cannot be removed.
+func (s *Server) applyTool(ctx context.Context, name, state string, files map[string]string, userID int64) (int, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	old := s.live.Load()
-	latest, err := s.store.LatestPlatforms(ctx)
+	latest, err := s.store.LatestTools(ctx)
 	if err != nil {
 		return 0, err
 	}
-	latest[name] = store.PlatformRevision{Platform: name, State: state, Files: files}
-	dir, err := writePlatforms(old.cfg.DataDir, effectivePlatforms(latest))
+	latest[name] = store.ToolRevision{Tool: name, State: state, Files: files}
+	tools := effectiveTools(latest)
+	dir, err := writeTools(old.cfg.DataDir, tools)
 	if err != nil {
 		return 0, err
 	}
@@ -246,55 +254,44 @@ func (s *Server) applyPlatform(ctx context.Context, name, state string, files ma
 	defer func() {
 		// A refused change leaves no directory; an applied one stays until the
 		// next start (a room upload can still read the previous one).
-		if !applied && dir != old.cfg.PlatformsDir {
+		if !applied && dir != old.toolsDir {
 			os.RemoveAll(dir)
 		}
 	}()
 	cfg, err := config.LoadServerDocument(old.cfg.File, s.localData,
-		config.Document{Revision: old.revision, Data: []byte(old.document), PlatformsDir: dir})
-	if err != nil {
-		return 0, errConfig{platformPaths(err.Error(), dir)}
-	}
-	lc, err := s.buildLive(ctx, cfg, old.revision, old.document, old)
+		config.Document{Revision: old.revision, Data: []byte(old.document), Tools: tools, ToolsDir: dir})
 	if err != nil {
 		return 0, errConfig{err.Error()}
 	}
+	lc, err := s.buildLive(ctx, cfg, old.revision, old.document, tools, dir, old)
+	if err != nil {
+		return 0, errConfig{err.Error()}
+	}
+	lc.warning = old.warning
 	s.schedMu.Lock()
 	defer s.schedMu.Unlock()
-	if err := s.checkLeasePlatforms(ctx, cfg); err != nil {
+	if err := s.checkActiveTools(ctx, cfg); err != nil {
 		return 0, err
 	}
-	// Cleanup runs the reset script of the version that prepared the lease.
+	// Cleanup runs the stop script of the version that started the lease.
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
 		return 0, err
 	}
 	for _, l := range leases {
-		if l.Platform != name {
+		if !leaseUses(old.cfg, l, name) {
 			continue
 		}
 		if l.State != protocol.LeaseQueued {
-			return 0, errConfig{fmt.Sprintf("the lease %s (%s) uses the platform %s; change the platform when its leases have ended", l.ID, l.State, name)}
+			return 0, errConfig{fmt.Sprintf("the lease %s (%s) uses the tool %s; change the tool when its leases have ended", l.ID, l.State, name)}
 		}
-		// A queued lease was checked against the old version: its devices
-		// and labels must fit the new one.
-		if np := cfg.Platforms[name]; np != nil {
-			for _, d := range l.Devices {
-				if np.Kind == config.KindDevice && !slices.Contains(np.Devices, d) {
-					return 0, errConfig{fmt.Sprintf("the queued lease %s asks for the device %s, which the new version of %s does not have; change the platform when the lease has ended, or release it", l.ID, d, name)}
-				}
-			}
-			if np.Kind == config.KindDevice && len(l.Devices) > np.MaxDevices {
-				return 0, errConfig{fmt.Sprintf("the queued lease %s asks for %d devices, more than max_devices of the new version of %s", l.ID, len(l.Devices), name)}
-			}
-			for _, label := range np.Requires {
-				if !slices.Contains(l.RequiredLabels, label) {
-					return 0, errConfig{fmt.Sprintf("the new version of %s requires the label %s, which the queued lease %s does not have; change the platform when the lease has ended, or release it", name, label, l.ID)}
-				}
-			}
+		// A queued lease was checked against the old version: its options
+		// must fit the new one.
+		if _, _, msg := checkLeaseTools(cfg, l.Tools); msg != "" {
+			return 0, errConfig{fmt.Sprintf("the queued lease %s does not fit the new version of %s (%s); change the tool when the lease has ended, or release it", l.ID, name, msg)}
 		}
 	}
-	rev, err := s.store.AddPlatformRevision(ctx, name, state, files, userID, time.Now())
+	rev, err := s.store.AddToolRevision(ctx, name, state, files, userID, time.Now())
 	if err != nil {
 		return 0, err
 	}
@@ -304,22 +301,18 @@ func (s *Server) applyPlatform(ctx context.Context, name, state string, files ma
 	return rev, nil
 }
 
-// platformPaths replaces the server's internal platform directory in an error
-// with the platform names ("platform ios: ...").
-func platformPaths(msg, dir string) string {
-	return strings.ReplaceAll(msg, dir+string(filepath.Separator), "platform ")
-}
-
-// checkLeasePlatforms refuses a configuration without the platform of a lease
-// that has not ended (the lease steps need the platform).
-func (s *Server) checkLeasePlatforms(ctx context.Context, cfg *config.Server) error {
+// checkActiveTools refuses a configuration without a tool of a lease that
+// has not ended (the lease steps need the tool).
+func (s *Server) checkActiveTools(ctx context.Context, cfg *config.Server) error {
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
 		return err
 	}
 	for _, l := range leases {
-		if cfg.Platforms[l.Platform] == nil {
-			return errConfig{fmt.Sprintf("the lease %s (%s) uses the platform %s; remove the platform when its leases have ended", l.ID, l.State, l.Platform)}
+		for _, name := range toolNamesOf(l.Tools) {
+			if cfg.Tools[name] == nil && !listedBy(cfg, name) {
+				return errConfig{fmt.Sprintf("the lease %s (%s) uses the tool %s; remove the tool when its leases have ended", l.ID, l.State, name)}
+			}
 		}
 	}
 	return nil
@@ -328,7 +321,7 @@ func (s *Server) checkLeasePlatforms(ctx context.Context, cfg *config.Server) er
 // checkRemovals refuses a configuration that removes a machine whose room has
 // an active lease, or a provider that still has rooms of its own.
 func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
-	if err := s.checkLeasePlatforms(ctx, cfg); err != nil {
+	if err := s.checkActiveTools(ctx, cfg); err != nil {
 		return err
 	}
 	rooms, err := s.store.Rooms(ctx)
@@ -369,9 +362,9 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 			if om := s.config().Machine(key); om != nil {
 				for _, l := range leases {
 					changed := !reflect.DeepEqual(om.Slots, nm.Slots) || om.Address != nm.Address || om.Connect != nm.Connect ||
-						om.OS != nm.OS || (l.Platform != nm.OS && !slices.Contains(nm.Platforms, l.Platform))
+						om.OS != nm.OS || slices.ContainsFunc(toolNamesOf(l.Tools), func(t string) bool { return nm.Tool(t) == nil })
 					if changed && l.RoomID == r.ID && l.State != protocol.LeaseQueued {
-						errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: slots, address, connect, os, and the lease's platform stay while the room %s has the active lease %s; drain the room (hostel config rooms drain %s) and change them when the lease ends", r.Provider, r.Machine, r.Name, l.ID, r.Name))
+						errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: slots, address, connect, os, and the lease's tools stay while the room %s has the active lease %s; drain the room (hostel config rooms drain %s) and change them when the lease ends", r.Provider, r.Machine, r.Name, l.ID, r.Name))
 						break
 					}
 				}
@@ -398,28 +391,28 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 }
 
 // machineHash is the hash of what a room of the machine is provisioned with:
-// the settings that provisioning uses, the machine-level tool settings, and
-// the platforms (for an on-demand room, its OS platform only: it provisions a
-// device platform again when a lease uses it). A free room with another hash
-// provisions again or is destroyed.
+// the settings that provisioning uses, the machine's tools, and the files of
+// its defined tools (for an on-demand room, its software tools only: it
+// installs a screen tool again when a lease uses it). A free room with another
+// hash provisions again or is destroyed.
 func machineHash(lc *liveConfig, m *config.Machine) string {
 	hashes := map[string]string{}
-	for _, name := range append([]string{m.OS}, m.Platforms...) {
-		if m.OnDemand() && lc.cfg.Platforms[name].Kind == config.KindDevice {
+	for _, t := range lc.cfg.DefinedTools(m) {
+		if m.OnDemand() && t.Screen {
 			continue
 		}
-		hashes[name] = lc.uploads[name][m.OS].Hash
+		hashes[t.Name] = lc.uploads[t.Name][m.OS].Hash
 	}
 	data, _ := json.Marshal(struct {
 		Address, OS string
 		Connect     bool
 		Spec        map[string]any
-		Platforms   []string
-		Tools, Env  map[string]string
+		Tools       []string
+		Env         map[string]string
 		Slots       []config.Slot
 		Mise        *config.Mise
 		Hashes      map[string]string
-	}{m.Address, m.OS, m.Connect, m.Spec, m.Platforms, m.Tools, m.Env, m.Slots, lc.cfg.Mise, hashes})
+	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Slots, lc.cfg.Mise, hashes})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

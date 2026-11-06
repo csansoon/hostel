@@ -1,5 +1,0 @@
-description = "Android Emulator"
-devices = ["pixel-9", "pixel-tablet"]
-max_devices = 2
-# A first provision downloads about 5 GB and boots each golden AVD once.
-script_timeouts = { provision = "30m", prepare = "5m" }

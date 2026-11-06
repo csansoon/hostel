@@ -93,13 +93,12 @@ func syncFiles(ctx context.Context, st *State, repo *Repo, rc *config.Repo, stde
 // Sync is "hostel sync [--setup]".
 func Sync(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel sync", stderr)
-	platform := fs.String("platform", "", "lease platform, if the worktree has several leases")
 	setup := fs.Bool("setup", false, "run the repository setup job again")
 	wait := fs.Duration("wait", 100*time.Second, "time to wait for the setup job before returning")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return ExitUsage
 	}
-	l, code := openLease(*platform, stderr)
+	l, code := openLease(stderr)
 	if l == nil {
 		return code
 	}
@@ -118,9 +117,9 @@ func Sync(args []string, stdout, stderr io.Writer) int {
 		}
 		switch {
 		case *setup:
-			cmd = setupCommand(rc, l.st.Platform, l.st.Access.RoomOS, true)
+			cmd = setupCommand(rc, l.st.leaseTools(), l.st.Access.RoomOS, true)
 		case rc.MiseEnabled() && slices.ContainsFunc(sent, func(p string) bool { return slices.Contains(miseFiles, p) }):
-			cmd = setupCommand(rc, l.st.Platform, l.st.Access.RoomOS, false)
+			cmd = setupCommand(rc, l.st.leaseTools(), l.st.Access.RoomOS, false)
 		}
 	}
 	code, err = runSetup(ctx, l, cmd, deadline, stderr)

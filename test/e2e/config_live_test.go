@@ -45,13 +45,15 @@ func (e *env) applyDoc(doc string) result {
 // TestConfigLive (M9): the providers, machines, and settings of server.toml
 // move into the database at the first start (revision 1); an admin changes
 // them from a client, and a change applies without a restart: the scheduler
-// uses new labels at once (labels do not make the room provision again). A member reads the
-// document without secret values and cannot change it. An old base revision,
-// an invalid document, and the removal of a machine with an active lease are
-// refused; a free removed machine's room is retired.
+// uses new machine tools at once. A member reads the document without secret
+// values and cannot change it. An old base revision, an invalid document, and
+// the removal of a machine with an active lease are refused; a free removed
+// machine's room is retired.
 func TestConfigLive(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, nil)
+	// No test tools: they need a running server, and this test checks the
+	// import at the first start.
+	f := newFixture(t, &fixtureOpts{noTools: true})
 	e, s := f.e, f.s
 
 	// The import.
@@ -90,20 +92,22 @@ func TestConfigLive(t *testing.T) {
 		t.Fatalf("history after a change: %s", r)
 	}
 
-	// New labels apply without a restart.
-	if r := e.hostel("acquire", "fakedevice", "--task", "gpu", "--require", "gpu"); r.code != 69 {
-		t.Fatalf("acquire with a label that no machine has: %s, want exit code 69", r)
+	// New machine tools apply without a restart.
+	e.useTools("fake-sdk")
+	e.pushTool("fake-sdk")
+	if r := e.hostel("acquire", "fake-sdk", "--task", "sdk"); r.code != 69 || !strings.Contains(r.stderr, "no machine has fake-sdk") {
+		t.Fatalf("acquire of a tool that no machine has: %s, want exit code 69", r)
 	}
 	doc := s.configDoc().Document
-	withLabel := strings.Replace(doc, "os = \"linux\"\n", "os = \"linux\"\nlabels = [\"gpu\"]\n", 1)
-	if r := e.applyDoc(withLabel); r.code != 0 || !strings.Contains(r.stdout, "Revision 3") {
-		t.Fatalf("apply new labels: %s", r)
+	withTool := strings.Replace(doc, "tools = []", `tools = ["fake-sdk"]`, 1)
+	if r := e.applyDoc(withTool); r.code != 0 || !strings.Contains(r.stdout, "Revision 3") {
+		t.Fatalf("apply new tools: %s", r)
 	}
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	lease := f.acquire("--require", "gpu")
+	lease := f.acquire("fake-sdk")
 	// The address of a room with a lease stays.
-	if r := e.applyDoc(strings.Replace(withLabel, "hostel@127.0.0.1:", "hostel@localhost:", 1)); r.code != 1 ||
-		!strings.Contains(r.stderr, "slots, address, connect, os, and the lease's platform stay while the room home/box has the active lease "+lease) {
+	if r := e.applyDoc(strings.Replace(withTool, "hostel@127.0.0.1:", "hostel@localhost:", 1)); r.code != 1 ||
+		!strings.Contains(r.stderr, "slots, address, connect, os, and the lease's tools stay while the room home/box has the active lease "+lease) {
 		t.Fatalf("change the address of a room with a lease: %s", r)
 	}
 
@@ -113,12 +117,12 @@ func TestConfigLive(t *testing.T) {
 		t.Fatalf("PUT with an old base revision: HTTP %d, want 409", code)
 	}
 	// An invalid document: the error names the revision and the key.
-	if r := e.applyDoc(strings.Replace(withLabel, `os = "linux"`, `os = "plan9"`, 1)); r.code != 1 ||
+	if r := e.applyDoc(strings.Replace(withTool, `os = "linux"`, `os = "plan9"`, 1)); r.code != 1 ||
 		!strings.Contains(r.stderr, "configuration revision 4: providers.home.machines.box.os") {
 		t.Fatalf("an invalid document: %s", r)
 	}
 	// The removal of a machine with an active lease.
-	removed := withLabel[:strings.Index(withLabel, "[providers.home.machines.box]")]
+	removed := withTool[:strings.Index(withTool, "[providers.home.machines.box]")]
 	if r := e.applyDoc(removed); r.code != 1 || !strings.Contains(r.stderr, "active lease "+lease) || !strings.Contains(r.stderr, "drain") {
 		t.Fatalf("remove a machine with an active lease: %s", r)
 	}
@@ -143,95 +147,92 @@ func TestConfigLive(t *testing.T) {
 	}
 }
 
-// TestPlatformsLive (M9): an admin adds a platform of their own from a client
+// TestToolsLive (M10e): an admin adds a tool of their own from a client
 // (new, push), adds it to a machine, and a lease for it runs after the room
-// provisions again, without a restart; pull gives the same files; a platform
-// that a machine lists cannot be removed, and a machine cannot stop listing
-// the platform of its active lease; a default platform can be changed,
-// reset, and removed.
-func TestPlatformsLive(t *testing.T) {
+// installs it, without a restart; pull gives the same files; a tool that a
+// machine lists cannot be removed, and a machine cannot stop listing a tool of
+// its active lease; a default tool can be changed, reset, and removed.
+func TestToolsLive(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	e, s := f.e, f.s
 
-	r := e.hostel("config", "platforms")
-	if r.code != 0 || !regexp.MustCompile(`fakedevice\s+device\s+home/box\s+own \(rev 1, \(import\)`).MatchString(r.stdout) ||
-		!regexp.MustCompile(`ios\s+device\s+-\s+default`).MatchString(r.stdout) {
-		t.Fatalf("config platforms: %s", r)
+	r := e.hostel("config", "tools")
+	if r.code != 0 || !regexp.MustCompile(`fake-screen\s+yes\s+home/box\s+own \(rev 1, admin`).MatchString(r.stdout) ||
+		!regexp.MustCompile(`fake-sdk\s+-\s+home/box\s+own`).MatchString(r.stdout) ||
+		!regexp.MustCompile(`ios-simulator\s+yes\s+-\s+default`).MatchString(r.stdout) {
+		t.Fatalf("config tools: %s", r)
 	}
 
 	dir := filepath.Join(t.TempDir(), "tvos")
-	if r := e.adminHostel("config", "platforms", "new", "tvos", dir); r.code != 0 {
-		t.Fatalf("platforms new: %s", r)
+	if r := e.adminHostel("config", "tools", "new", "tvos", dir, "--screen"); r.code != 0 {
+		t.Fatalf("tools new: %s", r)
 	}
-	if r := e.hostel("config", "platforms", "push", dir); r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
-		t.Fatalf("a member pushes a platform: %s", r)
+	if r := e.hostel("config", "tools", "push", dir); r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
+		t.Fatalf("a member pushes a tool: %s", r)
 	}
-	if r := e.adminHostel("config", "platforms", "push", dir); r.code != 0 {
-		t.Fatalf("platforms push: %s", r)
+	if r := e.adminHostel("config", "tools", "push", dir); r.code != 0 {
+		t.Fatalf("tools push: %s", r)
 	}
 	doc := s.configDoc().Document
-	if r := e.applyDoc(strings.Replace(doc, `platforms = ["fakedevice"]`, `platforms = ["fakedevice", "tvos"]`, 1)); r.code != 0 {
+	if r := e.applyDoc(strings.Replace(doc, `tools = ["fake-screen"]`, `tools = ["fake-screen", "tvos"]`, 1)); r.code != 0 {
 		t.Fatalf("add tvos to the machine: %s", r)
 	}
 	e.waitFor("a tvos lease", roomReady, func() bool {
 		return e.hostel("acquire", "tvos", "--task", "tvos", "--wait", "5s").code == 0
 	})
-	if r := e.mustHostel("run", "--", "echo \"$DEVICE\""); strings.TrimSpace(r.stdout) != "tvos-1" {
-		t.Fatalf("the device fact of the tvos lease: %q", r.stdout)
+	if r := e.mustHostel("run", "--", "echo \"$SCREEN\""); strings.TrimSpace(r.stdout) != "tvos-1" {
+		t.Fatalf("the fact of the tvos screen: %q", r.stdout)
 	}
-	if r := e.adminHostel("config", "platforms", "remove", "tvos"); r.code != 1 || !strings.Contains(r.stderr, "home/box lists the platform tvos") {
-		t.Fatalf("remove a platform that a machine lists: %s", r)
+	if r := e.adminHostel("config", "tools", "remove", "tvos"); r.code != 1 || !strings.Contains(r.stderr, "the machine home/box lists the tool tvos") {
+		t.Fatalf("remove a tool that a machine lists: %s", r)
 	}
-	// A platform keeps its version while a lease uses it.
-	if r := e.adminHostel("config", "platforms", "push", dir); r.code != 1 || !strings.Contains(r.stderr, "uses the platform tvos") {
-		t.Fatalf("push a platform that a lease uses: %s", r)
+	// A tool keeps its version while a lease uses it.
+	if r := e.adminHostel("config", "tools", "push", dir); r.code != 1 || !strings.Contains(r.stderr, "uses the tool tvos") {
+		t.Fatalf("push a tool that a lease uses: %s", r)
 	}
 	// The machine cannot stop listing tvos while the lease uses it.
-	if r := e.applyDoc(doc); r.code != 1 || !strings.Contains(r.stderr, "the lease's platform stay while the room home/box has the active lease") {
+	if r := e.applyDoc(doc); r.code != 1 || !strings.Contains(r.stderr, "the lease's tools stay while the room home/box has the active lease") {
 		t.Fatalf("remove tvos from the machine during its lease: %s", r)
 	}
 	e.mustHostel("release")
 
 	pulled := filepath.Join(t.TempDir(), "pulled")
-	if r := e.hostel("config", "platforms", "pull", "tvos", pulled); r.code != 0 {
-		t.Fatalf("platforms pull: %s", r)
+	if r := e.hostel("config", "tools", "pull", "tvos", pulled); r.code != 0 {
+		t.Fatalf("tools pull: %s", r)
 	}
-	for _, name := range []string{"platform.toml", "prepare.linux.sh", "provision.linux.sh"} {
+	for _, name := range []string{"tool.toml", "start.linux.sh", "check.linux.sh", "GUIDE.md"} {
 		if readFile(t, filepath.Join(dir, name)) != readFile(t, filepath.Join(pulled, name)) {
 			t.Fatalf("pulled %s differs", name)
 		}
 	}
-	if r := e.adminHostel("config", "platforms", "remove", "macos"); r.code != 1 || !strings.Contains(r.stderr, "OS platform") {
-		t.Fatalf("remove an OS platform: %s", r)
-	}
 
-	// A default platform: changed, back to the default, removed.
-	ios := filepath.Join(t.TempDir(), "ios")
-	e.mustHostel("config", "platforms", "pull", "ios", ios)
-	if err := os.WriteFile(filepath.Join(ios, "README.md"), []byte("our iOS\n"), 0o644); err != nil {
+	// A default tool: changed, back to the default, removed.
+	ios := filepath.Join(t.TempDir(), "ios-simulator")
+	e.mustHostel("config", "tools", "pull", "ios-simulator", ios)
+	if err := os.WriteFile(filepath.Join(ios, "GUIDE.md"), []byte("our iOS\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if r := e.adminHostel("config", "platforms", "push", ios); r.code != 0 {
+	if r := e.adminHostel("config", "tools", "push", ios); r.code != 0 {
 		t.Fatalf("push a changed default: %s", r)
 	}
-	if r := e.hostel("config", "platforms"); !regexp.MustCompile(`ios\s+device\s+-\s+changed \(rev 1, admin`).MatchString(r.stdout) {
+	if r := e.hostel("config", "tools"); !regexp.MustCompile(`ios-simulator\s+yes\s+-\s+changed \(rev 1, admin`).MatchString(r.stdout) {
 		t.Fatalf("a changed default: %s", r)
 	}
-	if r := e.adminHostel("config", "platforms", "reset", "ios"); r.code != 0 {
+	if r := e.adminHostel("config", "tools", "reset", "ios-simulator"); r.code != 0 {
 		t.Fatalf("reset: %s", r)
 	}
-	if r := e.adminHostel("config", "platforms", "remove", "android"); r.code != 0 {
+	if r := e.adminHostel("config", "tools", "remove", "android-emulator"); r.code != 0 {
 		t.Fatalf("remove a default: %s", r)
 	}
-	r = e.hostel("config", "platforms")
-	if !regexp.MustCompile(`ios\s+device\s+-\s+default\n`).MatchString(r.stdout) || strings.Contains(r.stdout, "android") {
+	r = e.hostel("config", "tools")
+	if !regexp.MustCompile(`ios-simulator\s+yes\s+-\s+default\n`).MatchString(r.stdout) || strings.Contains(r.stdout, "android-emulator") {
 		t.Fatalf("after reset and remove: %s", r)
 	}
 }
 
 // TestConfigRooms (M9): an admin lists the machines with their rooms, changes a
-// machine's labels (a new lease uses them at once), drains and undrains its
+// machine's tools (a new lease uses them at once), drains and undrains its
 // room, adds and removes a provider, and removes the machine; the targeted
 // commands keep the rest of the document. A member cannot change them.
 func TestConfigRooms(t *testing.T) {
@@ -239,20 +240,24 @@ func TestConfigRooms(t *testing.T) {
 	f := newFixture(t, nil)
 	e, s := f.e, f.s
 
+	// A tool that the server cannot give fails at the invite, not at the join.
+	if r := e.adminHostel("config", "rooms", "add", "typo", "--tool", "andriod-sdk"); r.code != 1 || !strings.Contains(r.stderr, `unknown tool "andriod-sdk"`) {
+		t.Fatalf("an invite with an unknown tool: %s", r)
+	}
 	r := e.hostel("config", "rooms")
-	if r.code != 0 || !regexp.MustCompile(`home/box\s+static\s+linux\s+fakedevice\s+-\s+home/box \(running\)`).MatchString(r.stdout) {
+	if r.code != 0 || !regexp.MustCompile(`home/box\s+static\s+linux\s+fake-screen\S*\s+home/box \(running\)`).MatchString(r.stdout) {
 		t.Fatalf("config rooms: %s", r)
 	}
-	if r := e.hostel("config", "rooms", "set", "box", "labels=gpu"); r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
-		t.Fatalf("a member sets labels: %s", r)
+	if r := e.hostel("config", "rooms", "set", "box", "tools=fake-screen,fake-desktop"); r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
+		t.Fatalf("a member sets tools: %s", r)
 	}
-	if r := e.adminHostel("config", "rooms", "set", "box", "labels=gpu, fast"); r.code != 0 {
+	if r := e.adminHostel("config", "rooms", "set", "box", "tools=fake-screen, fake-desktop"); r.code != 0 {
 		t.Fatalf("rooms set: %s", r)
 	}
-	if doc := s.configDoc().Document; !strings.Contains(doc, `labels = ["gpu", "fast"]`) || !strings.Contains(doc, `MACHINE_VAR = "machine-value"`) {
+	if doc := s.configDoc().Document; !strings.Contains(doc, `tools = ["fake-screen", "fake-desktop"]`) || !strings.Contains(doc, `MACHINE_VAR = "machine-value"`) {
 		t.Fatalf("the document after rooms set:\n%s", doc)
 	}
-	lease := f.acquire("--require", "fast")
+	lease := f.acquire("fake-desktop")
 	e.mustHostel("release")
 	e.waitFor("the lease ends", time.Minute, func() bool {
 		var l protocol.Lease
@@ -267,7 +272,7 @@ func TestConfigRooms(t *testing.T) {
 	if r := e.hostel("config", "rooms"); !strings.Contains(r.stdout, "running, drained") {
 		t.Fatalf("rooms after drain: %s", r)
 	}
-	if r := e.hostel("acquire", "fakedevice", "--task", "drained", "--wait", "1s"); r.code != 75 {
+	if r := e.hostel("acquire", "fake-screen", "--task", "drained", "--wait", "1s"); r.code != 75 {
 		t.Fatalf("acquire on a drained room: %s, want exit code 75", r)
 	}
 	if r := e.adminHostel("config", "rooms", "undrain", "box"); r.code != 0 {

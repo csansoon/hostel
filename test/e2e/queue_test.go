@@ -30,11 +30,15 @@ func (f *fixture) useRepo(name string) {
 	f.e.cwd = filepath.Join(f.e.home, name)
 }
 
-// queued starts a lease that must wait: acquire returns 75 and names the same
-// command; it returns the lease ID.
+// queued starts a lease that must wait (for fake-screen, or the tools in
+// args): acquire returns 75 and names the same command; it returns the lease
+// ID.
 func (f *fixture) queued(args ...string) string {
 	f.e.t.Helper()
-	r := f.e.hostel(append([]string{"acquire", "fakedevice", "--task", "wait", "--wait", "2s"}, args...)...)
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		args = append([]string{"fake-screen"}, args...)
+	}
+	r := f.e.hostel(append([]string{"acquire", "--task", "wait", "--wait", "2s"}, args...)...)
 	if r.code != 75 || !strings.HasSuffix(strings.TrimSpace(r.stderr), "not finished; run the same command again") {
 		f.e.t.Fatalf("acquire of a waiting lease: %s", r)
 	}
@@ -45,7 +49,7 @@ func (f *fixture) queued(args ...string) string {
 // until the lease is in state.
 func (f *fixture) acquireUntil(state string) string {
 	f.e.t.Helper()
-	r := f.e.hostel("acquire", "fakedevice", "--task", "until "+state, "--wait", "1s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "until "+state, "--wait", "1s")
 	if r.code != 75 {
 		f.e.t.Fatalf("acquire: %s", r)
 	}
@@ -71,7 +75,7 @@ func TestTwoGuestsOneSlot(t *testing.T) {
 	f := newFixture(t, nil)
 	f.acquire()
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
-	r := f.e.hostel("acquire", "fakedevice", "--task", "second", "--wait", "5s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "second", "--wait", "5s")
 	if r.code != 75 || !strings.Contains(r.stderr, "queued, position 1 (no free slot)") {
 		t.Fatalf("second guest: %s", r)
 	}
@@ -79,13 +83,14 @@ func TestTwoGuestsOneSlot(t *testing.T) {
 	f.useRepo("repo")
 	f.e.mustHostel("release")
 	f.useRepo("repo2")
-	r = f.e.mustHostel("acquire", "fakedevice", "--task", "second")
+	r = f.e.mustHostel("acquire", "fake-screen", "--task", "second")
 	if !strings.Contains(r.stdout, "Lease "+id+" is ready") || strings.Contains(r.stderr, "created") {
 		t.Fatalf("the same command does not continue lease %s: %s", id, r)
 	}
 }
 
-// TestPriority is scenario 3: a high lease passes a normal lease in the queue.
+// TestPriority is scenario 3: a high lease passes a normal lease in the
+// waiting line.
 func TestPriority(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
@@ -116,7 +121,7 @@ func TestBlockedMachines(t *testing.T) {
 	e.init()
 	dev := e.startStaticRoom("dev")
 	plain := e.startStaticRoom("plain")
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader() + `
 [providers.home]
 kind = "static"
@@ -124,7 +129,7 @@ kind = "static"
 [providers.home.machines.dev]
 address = "` + dev.address() + `"
 os = "linux"
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 
 [providers.home.machines.plain]
 address = "` + plain.address() + `"
@@ -139,12 +144,12 @@ os = "linux"
 	f.acquire()
 	e.newRepoNamed("waits", defaultRepoFiles())
 	f.queued()
-	// The linux lease can use both machines; dev is busy and blocked, so it
-	// gets plain.
-	e.newRepoNamed("linux", defaultRepoFiles())
-	r := e.mustHostel("acquire", "linux", "--task", "other machine")
+	// A lease without tools can use both machines; dev is busy and blocked,
+	// so it gets plain.
+	e.newRepoNamed("any", map[string]string{"a.txt": "a\n"})
+	r := e.mustHostel("acquire", "--task", "other machine")
 	if !strings.Contains(r.stderr, "on home/plain") {
-		t.Fatalf("linux lease: %s", r)
+		t.Fatalf("lease without tools: %s", r)
 	}
 }
 
@@ -158,11 +163,12 @@ func TestRequestErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"unknown platform", []string{"acquire", "nothing", "--task", "x"}, `unknown platform "nothing"`},
-		{"unknown device", []string{"acquire", "fakedevice", "--task", "x", "--device", "toaster"}, `has no device "toaster"`},
-		{"too many devices", []string{"acquire", "fakedevice", "--task", "x", "--device", "phone", "--device", "tablet", "--device", "watch"}, "at most 2 devices"},
-		{"no machine with the labels", []string{"acquire", "fakedevice", "--task", "x", "--require", "gpu"}, "with the labels gpu"},
-		{"OS platform without machine", []string{"acquire", "windows", "--task", "x"}, "no machine can serve platform windows"},
+		{"unknown tool", []string{"acquire", "nothing", "--task", "x"}, `unknown tool "nothing"`},
+		{"unknown option", []string{"acquire", "fake-screen:toaster", "--task", "x"}, `has no option "toaster"`},
+		{"too many options", []string{"acquire", "fake-screen:option-a", "fake-screen:option-b", "fake-screen:option-c", "--task", "x"}, "at most 2 options"},
+		{"a defined tool that no machine lists", []string{"acquire", "fake-desktop", "--task", "x"}, "no machine has fake-desktop;"},
+		{"a version that no machine has", []string{"acquire", "fake-sdk:1.4.20", "--task", "x"}, "no machine has fake-sdk:1.4.20; machines with fake-sdk: home/box (1.4.2)"},
+		{"an OS", []string{"acquire", "windows", "--task", "x"}, "windows is an OS, not a tool"},
 	}
 	for _, c := range cases {
 		r := f.e.hostel(c.args...)
@@ -176,8 +182,8 @@ func TestRequestErrors(t *testing.T) {
 		tunnels.WriteString("[tunnels.t" + string(rune('a'+i)) + "]\nlocal_port = 3000\n")
 	}
 	f.e.newRepoNamed("tunnels", map[string]string{"hostel.toml": tunnels.String()})
-	r := f.e.hostel("acquire", "fakedevice", "--task", "x")
-	if r.code != 69 || !strings.Contains(r.stderr, "and 11 tunnel ports") {
+	r := f.e.hostel("acquire", "fake-screen", "--task", "x")
+	if r.code != 69 || !strings.Contains(r.stderr, "11 tunnel ports") {
 		t.Fatalf("too many tunnels: %s", r)
 	}
 }
@@ -194,7 +200,7 @@ func TestPollTimeout(t *testing.T) {
 	if l := f.lease(id); !strings.Contains(l.EndReason, "poll timeout") {
 		t.Fatalf("end reason %q", l.EndReason)
 	}
-	r := f.e.hostel("acquire", "fakedevice", "--task", "wait", "--wait", "2s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "wait", "--wait", "2s")
 	if r.code != 1 || !strings.Contains(r.stderr, "ended (cancelled: poll timeout") {
 		t.Fatalf("acquire after the poll timeout: %s", r)
 	}
@@ -211,14 +217,14 @@ func TestAcquireBackground(t *testing.T) {
 	f.acquire()
 
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
-	r := f.e.hostel("acquire", "fakedevice", "--task", "in the background", "--background")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "in the background", "--background")
 	if r.code != 75 || !strings.Contains(r.stderr, "keeps the place of lease") {
 		t.Fatalf("acquire --background: %s", r)
 	}
 	kept := createdID(t, r)
 
 	f.e.newRepoNamed("repo3", defaultRepoFiles())
-	r = f.e.hostel("acquire", "fakedevice", "--task", "without polls", "--wait", "2s")
+	r = f.e.hostel("acquire", "fake-screen", "--task", "without polls", "--wait", "2s")
 	if r.code != 75 || !strings.Contains(r.stderr, "the server keeps the place of lease") || !strings.Contains(r.stderr, "for 6 s without this command") {
 		t.Fatalf("acquire of a waiting lease: %s", r)
 	}
@@ -228,11 +234,11 @@ func TestAcquireBackground(t *testing.T) {
 	// "acquire --wait 1s", run again before poll_timeout, keeps a place too:
 	// each run polls the lease at least once.
 	f.e.newRepoNamed("repo4", defaultRepoFiles())
-	r = f.e.hostel("acquire", "fakedevice", "--task", "short waits", "--wait", "1s")
+	r = f.e.hostel("acquire", "fake-screen", "--task", "short waits", "--wait", "1s")
 	short := createdID(t, r)
 	for start := time.Now(); time.Since(start) < 15*time.Second; {
 		time.Sleep(2 * time.Second) // the agent's other work, shorter than poll_timeout
-		if r := f.e.hostel("acquire", "fakedevice", "--task", "short waits", "--wait", "1s"); r.code != 75 {
+		if r := f.e.hostel("acquire", "fake-screen", "--task", "short waits", "--wait", "1s"); r.code != 75 {
 			t.Fatalf("acquire --wait 1s: %s", r)
 		}
 	}
@@ -252,11 +258,11 @@ func TestAcquireBackground(t *testing.T) {
 	f.e.mustHostel("release")
 	f.useRepo("repo2")
 	f.e.waitFor("the kept lease ready", 2*time.Minute, func() bool { return f.lease(kept).State == protocol.LeaseReady })
-	if r := f.e.mustHostel("acquire", "fakedevice", "--task", "in the background"); !strings.Contains(r.stdout, "Lease "+kept+" is ready") {
+	if r := f.e.mustHostel("acquire", "fake-screen", "--task", "in the background"); !strings.Contains(r.stdout, "Lease "+kept+" is ready") {
 		t.Fatalf("acquire after the background wait: %s", r)
 	}
 	// The keeper stops and removes its heartbeat.
-	beat := filepath.Join(f.e.home, "repo2", ".git", "hostel", "fakedevice", "keeper.json")
+	beat := filepath.Join(f.e.home, "repo2", ".git", "hostel", "lease", "keeper.json")
 	f.e.waitFor("the keeper stops", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
 
 	// A new waiting lease in the same worktree gets its own keeper at once;
@@ -266,7 +272,7 @@ func TestAcquireBackground(t *testing.T) {
 	f.useRepo("repo")
 	f.acquire()
 	f.useRepo("repo2")
-	r = f.e.hostel("acquire", "fakedevice", "--task", "again", "--background")
+	r = f.e.hostel("acquire", "fake-screen", "--task", "again", "--background")
 	if r.code != 75 {
 		t.Fatalf("a second acquire --background: %s", r)
 	}
@@ -289,7 +295,7 @@ func TestAcquireBackground(t *testing.T) {
 	if p, err := os.FindProcess(old); err == nil {
 		p.Kill()
 	}
-	if r := f.e.hostel("acquire", "fakedevice", "--task", "again", "--background"); r.code != 75 {
+	if r := f.e.hostel("acquire", "fake-screen", "--task", "again", "--background"); r.code != 75 {
 		t.Fatalf("acquire --background after the keeper was killed: %s", r)
 	}
 	f.e.waitFor("a new keeper", 30*time.Second, func() bool { p := keeperPID(); return p > 0 && p != old })
@@ -304,7 +310,7 @@ func TestAcquireBackground(t *testing.T) {
 	// exit code 75, run it again), the same command syncs and sets it up.
 	f.useRepo("repo2")
 	f.e.waitFor("acquire --background with a free slot", 2*time.Minute, func() bool {
-		r = f.e.hostel("acquire", "fakedevice", "--task", "free slot", "--background")
+		r = f.e.hostel("acquire", "fake-screen", "--task", "free slot", "--background")
 		if r.code != 0 && r.code != 75 {
 			t.Fatalf("acquire --background with a free slot: %s", r)
 		}

@@ -179,7 +179,7 @@ func TestAppCheckIn(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader())
 	e.startServer("")
 	code := e.inviteCode("--role", "member")
@@ -245,8 +245,10 @@ func TestAppCheckIn(t *testing.T) {
 }
 
 // TestAppDemo: "hostel --demo" shows the app with made-up data and no
-// server: the main menu with its numbers, the Lobby, and a platform page. It
-// does not create a guest configuration, and Check out does nothing.
+// server: the main menu with its numbers, the Lobby with the screen tools
+// first, a tool page with its options, and a machine page with its
+// inventory. It does not create a guest configuration, and Check out does
+// nothing.
 func TestAppDemo(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -254,9 +256,17 @@ func TestAppDemo(t *testing.T) {
 	a := e.startAppArgs(appCols, home, []string{"--demo"})
 	a.waitFor(30*time.Second, `demo\.hostel\.example`, `▌ \S+\s+Front desk`, `Lobby\s+\S \d+ waiting`, `Rooms\s+● \d+ vacant\s+◉ \d+ occupied`, `HOSTEL`)
 	a.in("2")
-	a.waitFor(10*time.Second, `▌ ios\s+[●◉○]`, `android`, `windows`)
+	a.waitFor(10*time.Second, `SCREENS`, `▌ android-emulator\s+[●◉○]`, `pixel-9, pixel-tablet · 3 machines`, `ios-simulator`, `windows-desktop`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `MACHINES`, `WAITING LINE`, `DEVICES`, `iphone-17-pro`)
+	a.waitFor(10*time.Second, `OPTIONS`, `pixel-9\s+pixel-tablet\s+the first is the default · up to 2 in one lease`, `MACHINES`, `home/macbook\s+\S+\s+pixel-9, pixel-tablet`,
+		`WAITING LINE`, `GUIDE`, `hostel tools android-emulator shows the whole guide\.`)
+	if s := a.screen(); strings.Contains(s, "DEVICES") || strings.Contains(s, "evice") {
+		t.Fatalf("the tool page names devices:\n%s", s)
+	}
+	a.in("\r")
+	a.waitFor(10*time.Second, `OS\s+(macos|linux)`, `Tools\s+\S+\s+.*● ready`, `HARDWARE|Hardware`)
+	a.in("\x1b")
+	a.waitFor(10*time.Second, `OPTIONS`)
 	a.in("1")
 	a.waitFor(10*time.Second, `▌ \S+\s+Guests`, `Check out`)
 	a.in("\x1b[B\x1b[B\x1b[B\r")
@@ -267,9 +277,9 @@ func TestAppDemo(t *testing.T) {
 	}
 }
 
-// TestAppLobby (M10b): the Lobby lists the platforms with their free
-// machines and queue; the page of a platform shows its machines and the full
-// queue. An admin moves a lease down (Shift+↓, y), sets its priority (p, h),
+// TestAppLobby (M10b): the Lobby lists the tools with their free machines
+// and waiting leases; the page of a tool shows its machines and its waiting
+// leases. An admin moves a lease down (Shift+↓, y), sets its priority (p, h),
 // and ends it (e, y); a member sees only "e" for the member's own lease.
 func TestAppLobby(t *testing.T) {
 	t.Parallel()
@@ -297,9 +307,10 @@ func TestAppLobby(t *testing.T) {
 	glyph := regexp.MustCompile(`Lobby\s+(\S) 2 waiting`).FindStringSubmatch(mv.screen())[1]
 	mv.waitFor(5*time.Second, `Lobby\s+[^`+glyph+`\s] 2 waiting`)
 	mv.in("2")
-	mv.waitFor(10*time.Second, `▌ fakedevice\s+◉ all occupied`, `\S 2 waiting · next room ~`)
+	mv.waitFor(10*time.Second, `SCREENS`, `▌ fake-screen\s+◉ all occupied`, `\S 2 waiting · next room ~`, `SOFTWARE`, `fake-sdk`)
 	mv.in("\r")
-	mv.waitFor(10*time.Second, `MACHINES`, `WAITING LINE`, `▌ ◉ home/box\s+Occupied`, `enter  open the machine`)
+	mv.waitFor(10*time.Second, `OPTIONS`, `option-a\s+option-b\s+option-c\s+the first is the default`,
+		`MACHINES`, `WAITING LINE`, `▌ ◉ home/box\s+Occupied\s+option-a, option-b, option-c`, `enter  open the machine`)
 	// Down from the last machine goes to the waiting line.
 	mv.in("\x1b[B")
 	mv.waitFor(10*time.Second, `▌ 1  ana  "wait"`, `tab  next section   enter  actions   esc  back`)
@@ -321,11 +332,12 @@ func TestAppLobby(t *testing.T) {
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
 	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`)
 	a.in("2")
-	a.waitFor(10*time.Second, `▌ fakedevice\s+◉ all occupied`, `\S 2 waiting · next room`)
+	a.waitFor(10*time.Second, `▌ fake-screen\s+◉ all occupied`, `\S 2 waiting · next room`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `◉ all occupied\s+\S 2 waiting`, `▌ ◉ home/box\s+Occupied`, `WAITING LINE`)
 	a.in("\t")
-	a.waitFor(10*time.Second, `▌ 1  ana  "wait"\s+\S room in ~\S+`, `normal priority · waiting \S+`, `enter  actions`)
+	a.waitFor(10*time.Second, `▌ 1  ana  "wait"\s+\S room in ~\S+`, `normal priority · waiting \S+ · asks for fake-screen`, `enter  actions`,
+		`GUIDE`, `A simulated screen for the E2E tests\.`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `End the lease\s+e`, `Move down\s+J`, `Change the priority\s+p`)
 	a.in("\x1b")
@@ -350,7 +362,7 @@ func TestAppLobby(t *testing.T) {
 	a.quit()
 }
 
-// TestAppRooms (M10b): Rooms lists the machines with their platforms and who
+// TestAppRooms (M10b): Rooms lists the machines with their tools and who
 // uses them; the page of a machine shows its hardware, its live use, and the
 // lease with the user, the task, the computer, the repository, the branch,
 // and the running job. An admin stops new leases (d, y) and allows them again,
@@ -365,9 +377,10 @@ func TestAppRooms(t *testing.T) {
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
 	a.waitFor(30*time.Second, `Rooms\s+● 0 vacant\s+◉ 1 occupied`)
 	a.in("3")
-	a.waitFor(10*time.Second, `HOME`, `▌ box\s+◉ Occupied`, `linux · fakedevice\s+guest · "e2e test"`)
+	a.waitFor(10*time.Second, `HOME`, `▌ box\s+◉ Occupied`, `linux · fake-screen · fake-sdk\s+guest · "e2e test"`)
 	a.in("\r")
-	a.waitFor(30*time.Second, `home/box`, `A fixed machine`, `◉ Occupied\s+guest · "e2e test"`, `Runs\s+linux\s+fakedevice`,
+	a.waitFor(30*time.Second, `home/box`, `A fixed machine`, `◉ Occupied\s+guest · "e2e test"`, `OS\s+linux`,
+		`Tools\s+fake-screen\s+option-a, option-b, option-c\s+● ready\s+screen`, `(?m)^\s+fake-sdk\s+1\.4\.2\s+● ready$`,
 		`Hardware\s+.*\d+ cores? · \d+\.\d GB · Debian`, `CPU\s+━+\s+\d+%`, `Memory\s+━+\s+\d+\.\d GB of \d+\.\d GB`, `Disk\s+\d+\.\d GB free`,
 		`▌ guest  "e2e test"\s+checked in \S+ ago`, `\S+ · repo · ⎇ fix-login\s+out by \d\d:\d\d`,
 		`▶ sleep 300\s+running`, `enter  actions   esc  back`)
@@ -421,8 +434,8 @@ func TestAppRooms(t *testing.T) {
 // TestAppFrontDesk (M10b): an admin opens Front desk › Invite a guest, invites
 // a member (m; the code shows, and the app prints it again after quit), and the code
 // connects; the admin makes the new user an admin (r, y) and removes the user
-// (x, y). Add a room asks for the name, the platforms, and the labels, and
-// shows the join commands.
+// (x, y). Add a room asks for the name and the tools, and shows the join
+// commands.
 func TestAppFrontDesk(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
@@ -492,10 +505,8 @@ func TestAppFrontDesk(t *testing.T) {
 	a.in("\r")
 	a.waitFor(10*time.Second, `HOSTEL\s+\S+ › Front desk › Rooms › Add a room`, `The name of the new machine`)
 	a.in("box2\r")
-	a.waitFor(10*time.Second, `Its platforms besides its OS`)
-	a.in("fakedevice\r")
-	a.waitFor(10*time.Second, `Its labels`)
-	a.in("desktop\r")
+	a.waitFor(10*time.Second, `Its tools, separated by commas`)
+	a.in("fake-screen\r")
 	a.waitFor(30*time.Second, `Run one of these on the machine home/box2, as an administrator\.`, `macOS or Linux`, `Windows \(PowerShell\)`)
 	a.quit()
 	if !regexp.MustCompile(`(?s)machine home/box2.*macOS or Linux:\n  curl .*hostel1-`).MatchString(a.screen()) {
@@ -517,26 +528,27 @@ func TestRoomOffline(t *testing.T) {
 		r := f.s.room("home/box")
 		return r.State == protocol.RoomBroken && r.Reason == "unreachable" && !r.LastSeen.IsZero()
 	})
-	if r := f.e.mustHostel("status"); !regexp.MustCompile(`(?m)^home/box\s+fakedevice, linux\s+offline \(last seen \d+[smh]\S* ago\)$`).MatchString(r.stdout) {
+	if r := f.e.mustHostel("status"); !regexp.MustCompile(`(?m)^home/box\s+fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2\s+offline \(last seen \d+[smh]\S* ago\)$`).MatchString(r.stdout) {
 		t.Fatalf("plain status of an offline machine:\n%s", r.stdout)
 	}
 
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
 	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`, `Rooms\s+● 0 vacant\s+◉ 0 occupied`)
 	a.in("2")
-	a.waitFor(10*time.Second, `▌ fakedevice\s+○ no machine online`)
+	a.waitFor(10*time.Second, `▌ fake-screen\s+○ no machine online`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `No machine for fakedevice is online\.`)
+	a.waitFor(10*time.Second, `No machine with fake-screen is online\.`)
 	a.in("3")
 	a.waitFor(10*time.Second, `▌ box\s+○ Offline`, `home/box: Offline · last seen \S+ ago`)
 
 	// A lease waits instead of failing.
-	if r := f.e.hostel("acquire", "fakedevice", "--task", "offline", "--wait", "2s"); r.code != 75 {
-		t.Fatalf("acquire while the only machine is offline: %s, want exit code 75", r)
+	if r := f.e.hostel("acquire", "fake-screen", "--task", "offline", "--wait", "2s"); r.code != 75 ||
+		!strings.Contains(r.stderr, "every machine with these tools is offline (home/box); the lease waits until one is back") {
+		t.Fatalf("acquire while the only machine is offline: %s, want exit code 75 and the reason", r)
 	}
 	f.c.start()
 	a.waitFor(2*time.Minute, `▌ box\s+[●◉] (Vacant|Occupied)`)
-	f.e.mustHostel("acquire", "fakedevice", "--task", "offline")
+	f.e.mustHostel("acquire", "fake-screen", "--task", "offline")
 	f.e.mustHostel("release")
 	f.waitSlotFree()
 

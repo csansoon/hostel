@@ -31,12 +31,12 @@ func readForward(t *testing.T, local string) string {
 // room, each slot with its own OS user. Each lease runs as its slot's user in
 // its own home, cannot read the other's files, and can forward only to its own
 // slot's ports. The cleanup of one lease leaves the other's job running. An
-// exclusive lease (label desktop) waits until both slots are free and then
-// takes both.
+// exclusive lease (a whole_machine tool) waits until both slots are free and
+// then takes both.
 func TestSlotUsers(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{slotUsers: []string{"hostel-a", "hostel-b"}, machineKeys: `labels = ["desktop"]
-slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
+	f := newFixture(t, &fixtureOpts{slotUsers: []string{"hostel-a", "hostel-b"}, machineTools: []string{"fake-screen", "fake-desktop"},
+		machineKeys: `slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
 `})
 	f.acquire()
 	if r := f.e.mustHostel("run", "--", "id -un; echo $HOSTEL_WORK_DIR"); r.stdout != "hostel-a\n/home/hostel-a/hostel/slots/a/work\n" {
@@ -82,7 +82,7 @@ slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
 
 	// An exclusive lease waits for the busy slot, then takes both slots.
 	f.e.newRepoNamed("third", defaultRepoFiles())
-	if r := f.e.hostel("acquire", "fakedevice", "--require", "desktop", "--task", "exclusive", "--wait", "2s"); r.code != 75 {
+	if r := f.e.hostel("acquire", "fake-desktop", "--task", "exclusive", "--wait", "2s"); r.code != 75 {
 		t.Fatalf("exclusive lease while slot a is busy: %s, want exit code 75", r)
 	}
 	f.useRepo("repo")
@@ -90,7 +90,7 @@ slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
 	f.useRepo("third")
 	var lease string
 	f.e.waitFor("the exclusive lease is ready", 2*time.Minute, func() bool {
-		r := f.e.hostel("acquire", "fakedevice", "--require", "desktop", "--task", "exclusive", "--wait", "10s")
+		r := f.e.hostel("acquire", "fake-desktop", "--task", "exclusive", "--wait", "10s")
 		if m := leaseIDRE.FindStringSubmatch(r.stdout); r.code == 0 && m != nil {
 			lease = m[1]
 			return true
@@ -113,25 +113,28 @@ slots = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
 	f.e.mustHostel("release")
 }
 
-// TestExclusiveScripts: the platform scripts of an exclusive lease (label
-// desktop) get HOSTEL_EXCLUSIVE=1, so they may reset the desktop; those of a
-// normal lease get it empty (M7).
+// TestExclusiveScripts: the tool scripts of an exclusive lease (a
+// whole_machine tool) get HOSTEL_EXCLUSIVE=1, so they may reset the desktop;
+// those of a normal lease get it empty (M7).
 func TestExclusiveScripts(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineKeys: "labels = [\"desktop\"]\n"})
-	desk := f.acquire("--require", "desktop")
+	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-desktop"}})
+	desk := f.acquire("fake-screen", "fake-desktop")
 	f.e.mustHostel("release")
 	f.waitSlotFree()
 	normal := f.acquire()
 	f.e.mustHostel("release")
 	f.waitSlotFree()
-	log := f.c.sh("cat " + cacheDir + "/fakedevice.log")
+	log := f.c.sh("cat " + cacheDir + "/fake-screen.log")
 	for _, want := range []string{
-		"prepare linux " + desk + " phone exclusive=1", "reset linux " + desk + " phone exclusive=1",
-		"prepare linux " + normal + " phone exclusive=\n", "reset linux " + normal + " phone exclusive=\n",
+		"start linux " + desk + " option-a exclusive=1", "stop linux " + desk + " option-a exclusive=1",
+		"start linux " + normal + " option-a exclusive=\n", "stop linux " + normal + " option-a exclusive=\n",
 	} {
 		if !strings.Contains(log+"\n", want) {
-			t.Fatalf("fakedevice.log has no %q:\n%s", want, log)
+			t.Fatalf("fake-screen.log has no %q:\n%s", want, log)
 		}
+	}
+	if log := f.c.sh("cat " + cacheDir + "/fake-desktop.log"); !strings.Contains(log, "start linux "+desk+" exclusive=1") || strings.Contains(log, normal) {
+		t.Fatalf("fake-desktop.log: %q, want a start for the desktop lease only", log)
 	}
 }

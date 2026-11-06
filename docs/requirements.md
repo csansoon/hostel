@@ -5,9 +5,9 @@ Status: ready for implementation. No code exists yet.
 ## 1. Purpose
 
 Coding agents edit code and run cheap checks on their local machine. Builds, UI QA,
-and device tests for other platforms run on remote machines. Hostel gives an agent
-short, temporary, exclusive access to a remote machine for one platform, and
-removes all traces of that access after the agent finishes.
+and tests on simulators, emulators, and desktops run on remote machines. Hostel
+gives an agent short, temporary, exclusive access to a remote machine that has the
+tools it asks for, and removes all traces of that access after the agent finishes.
 
 `context.md` explains why the project exists and what was tried before.
 
@@ -21,15 +21,16 @@ All other terms are plain technical words.
 | **Hostel** | The project, the `hostel` binary, and the central server. |
 | **Guest** | A client: an agent (or a person) that uses the `hostel` CLI. |
 | **Room** | One concrete remote machine at runtime (a static host, or one created cloud machine). |
-| **Slot** | A place on a room for one lease, with its own directory, devices, and ports. |
+| **Slot** | A place on a room for one lease, with its own directory, screens, and ports. |
 | **Lease** | Exclusive use of one slot, from the request to the end of cleanup. |
-| **Queue** | The leases that wait for a slot. |
+| **Queue** | The leases that wait for a slot (one waiting line for all leases). |
 | **Provider** | A source of machines, with its own settings (kind, login, account limit). Examples: a set of static hosts, a Namespace account, an external command. |
 | **Machine** | An entry in a provider. In a static provider, a real host (one room). In an on-demand provider, a template that gives rooms when needed. |
-| **Platform** | What a guest requests. An **OS platform** (`linux`, `macos`, `windows`) is a plain machine with that OS. A **device platform** (for example `ios`, `android`) is a machine with clean, booted devices. |
-| **Device** | A simulator or emulator that a device platform gives, for example `iphone-17-pro`. |
-| **Platform scripts** | The scripts of a device platform (one file for each step and OS) that provision, prepare, screenshot, reset, and check devices. |
-| **Labels** | Facts about a machine, for example `xcode-26.5` or `desktop`. A platform, a repository, or a request can require labels. |
+| **Tool** | Something that a machine gives to a lease: software (`android-sdk`, `xcode`, `jdk`) or a screen (`android-emulator`, `ios-simulator`, `macos-desktop`, `windows-desktop`). A guest asks for the tools that it needs and can use all software of the machine; a lease starts only the screen tools that it asked for (M10e, replaces platform, device, and labels). The OS is a property of the machine, not a tool. |
+| **Option** | A version of a software tool, or the phone or tablet of an emulator or simulator, after a colon: `node:22`, `android-emulator:pixel-9`. A filter: without it, any option matches. |
+| **Screen tool** | A tool that the agent looks at and acts on. Hostel starts it for each lease, takes screenshots of it, and cleans it up. |
+| **Tool scripts** | The scripts of a tool (one file for each step and OS) that install, check, start, screenshot, and stop it. |
+| **Inventory** | The tools of a room with their real options, as the server installed and checked them. |
 | **Cleanup** | The steps after a lease that delete everything the lease left. |
 | **Helper** | The `hostel room` mode of the binary. It runs on rooms. |
 | **Gateway** | The SSH server inside the Hostel server. All guest SSH traffic goes to it, and it connects to rooms. |
@@ -59,6 +60,9 @@ All other terms are plain technical words.
 | 2026-11-03 | Public release (milestone M10c): the repository becomes public under the MIT license, with a README, a one-command install from GitHub Releases, and skills (`skills/*/SKILL.md`) that teach any agent to install, set up, extend, and use Hostel. The personal and internal details (the owner's server address, machine names, details of the owner's app) are removed from the current files and from the git history (a rewrite and force-push, confirmed again before it runs). The first release is `v0.1.0`; Claude makes the repository public and pushes the tag after the owner's OK. |
 | 2026-11-03 | Hostel is its own tool, with its own goal: parallel QA and builds for coding agents on remote machines, for any app and for several apps at the same time. The docs do not name the app that it was first built for; examples use generic apps. |
 | 2026-11-04 | Updates (M10d, `m10d-implementation.md`): `hostel update` replaces the CLI with the latest release; releases are signed (Ed25519, the key a repository secret with a backup by the owner) and the binary checks the signature. The CLI prints a notice when the server is newer. The server refuses guests older than its minimum version (HTTP 426). `hostel server update` on the server machine, and a remote update by an admin (`--remote`, and Update the server in the app), which restarts the server with the new binary. Rooms keep getting the helper from the server. A machine that joined shows "Out of date" when its connect service is older than the server; an administrator runs `hostel machine update` on it (the service does not replace itself). The app checks for a new release in the background and shows an Update entry. |
+| 2026-11-05 | Tools (M10e, `m10e-implementation.md`) replace platforms, devices, and labels. A machine lists the tools that it gives (software and screens; the OS is a property of the machine, not a tool); the server installs and checks them and knows their real versions. A guest asks for tools, with an optional option as a filter (`node` any, `node:22`, `android-emulator:pixel-9`), and gets the first free machine that has all of them; all software of the machine is usable, and the lease starts only the screen tools that it asked for (an emulator only when asked for). A request that no machine can serve fails at once. When the lease is ready, the guest gets the facts of its machine (OS, hardware, all tools). `hostel.toml` has the top-level settings and `[tool.<name>]`; there is no compatibility with the old configuration. Desktops and emulators are tools too ("screen tools"). The server tells agents what each tool gives (`hostel tools`, a guide for each tool). One waiting line for all leases. Plain words: tool, option, machine, lease, slot; "platform" and "device" leave the vocabulary; Lobby and Rooms stay as app labels. |
+| 2026-11-05 | `[tool.<name>]` in `hostel.toml` applies when the lease has that tool, also when the tool came only as a need of a requested tool (for example, `[tool.android-sdk]` applies to a lease that asked for `android-emulator`). |
+| 2026-11-05 | One lease per worktree (M10e): lease commands always use the lease of the worktree, with no selector; a second machine at the same time uses another worktree. This is local to the CLI; the server knows leases by ID. |
 | 2026-11-04 | Waiting in the queue while an agent works: `acquire` says how long the server keeps a waiting lease without it (`poll_timeout`), and `acquire --background` returns at once while a small background process on the agent's computer keeps the place until the lease is ready or ends. |
 | 2026-11-05 | New look of the Hostel app (the levels stay: main menu, lists, detail pages): list items with a title line and a dim second line, sections with headings and empty space instead of boxes, glyph, color, and word for each state. Motion only inside a page (turning glyphs, a short glow on a change); pages do not slide. The main menu shows a small street as an easter egg (no legend, no explanation): the hostel between two buildings, a street lamp, a tree, and, rarely, a car that passes (a random time of up to 6 minutes before each car). The hostel has a fixed number of windows with a yellow light; the share of lit windows follows the share of occupied machines, so it works for one machine and for fifty. `hostel --demo` runs the app with made-up data and no server. Later the same day: the main menu is Front desk, Lobby, Rooms, with emoji icons on selectable items; Front desk has Guests (invite first), Rooms (admins: add a room, admin actions; management only there), This server, and Check out; every choice and question before a change is a popup (arrows and Enter, Esc cancels). |
 | 2026-10-23 | Hostel focuses on iOS (simulators) for now. macOS desktop apps (UI control with Automation Mode, Mac Catalyst builds with team signing) are future work. The `macos` platform keeps its desktop screenshot. |
@@ -88,17 +92,21 @@ All other terms are plain technical words.
 
 ### Discovery and requests
 
-- **R1.** A guest can list the platforms that are available now, with the number of
-  free slots, the queue length, and an estimated wait.
-- **R2.** A request contains: platform, optional devices, task description,
-  priority, and optional required labels.
-- **R3.** The guest does not select a provider, machine, room, or slot. It names an
-  OS only when the OS is what it needs (OS platforms).
-- **R4.** If no machine can ever satisfy a request (unknown platform or device, or no
-  machine with that platform and those labels), the request fails at once with a
-  clear message.
-- **R4a.** One platform can run on machines with different OSes (for example
-  Android on Linux and on macOS). The platform has scripts for each OS.
+- **R1.** A guest can list the tools that the machines give, with their options,
+  what each tool sets in the environment, how to use it, the number of free slots,
+  the waiting leases, and an estimated wait.
+- **R2.** A request contains: the tools (each with an optional option), task
+  description, and priority. A request without tools takes any machine.
+- **R3.** The guest does not select a provider, machine, room, slot, or OS. It names
+  the tools that it needs; only a desktop tool belongs to one OS.
+- **R4.** If no configured machine can satisfy a request (an unknown tool or option,
+  or no machine with all requested tools), the request fails at once with a clear
+  message that names the reason.
+- **R4a.** One tool can be available on machines with different OSes (for example
+  the Android SDK on Linux and on macOS). A defined tool has scripts for each OS.
+- **R4b.** When a lease is ready, the guest gets the facts of its machine: the OS
+  with version and architecture, the hardware, and all tools of the machine with
+  their options and environment (also the ones that it did not ask for).
 
 ### Queue
 
@@ -119,8 +127,8 @@ All other terms are plain technical words.
 - **R11.** First provider kinds: `static` (SSH hosts), `namespace` (devbox and
   instance machines), and `external` (any executable that implements a JSON
   contract). One provider can offer several machines.
-- **R12.** Before a room accepts a lease, the platform scripts check that the room
-  has the toolchain that the machine's labels declare.
+- **R12.** Before a room accepts a lease, the tool scripts check that each tool of
+  the machine works, and record its real option (the inventory).
 - **R13.** A room can stay warm after a lease (first running, then stopped), as its
   machine declares.
 - **R13a.** Limits exist for each on-demand machine and for each provider (account
@@ -135,8 +143,9 @@ All other terms are plain technical words.
   transfers only changed files and deletes files that the guest deleted.
 - **R16.** The room makes a local baseline commit after each send, so that an agent
   can see its temporary changes with a diff.
-- **R17.** The repository declares its project tools and setup commands for each
-  platform. The server does not hardcode project versions.
+- **R17.** The repository declares its usual tools, its project tools (mise), its
+  setup commands, and settings for each tool that it uses. The server does not
+  hardcode project versions.
 - **R17a.** Hostel installs and uses mise on each room. Rooms need no tool
   manager before Hostel uses them. Tool versions come from the machine configuration and from
   the repository's mise files; installed tools stay in a cache between leases.
@@ -152,7 +161,7 @@ All other terms are plain technical words.
 
 - **R19.** A guest can run commands in its slot, with streamed output. A command
   continues when the connection drops, and the guest can attach to it again.
-- **R20.** A guest can get screenshots of the slot's device, copy files to and from
+- **R20.** A guest can get screenshots of the lease's screen tools, copy files to and from
   the slot, and open an interactive SSH session.
 - **R21.** A person can see all leases, rooms, and the queue (`hostel status`).
 
@@ -161,7 +170,7 @@ All other terms are plain technical words.
 - **R22.** A lease ends when the guest releases it, after 10 minutes without guest
   activity (configurable), or at the maximum lease duration.
 - **R23.** Cleanup stops all processes of the lease, deletes the slot's files
-  (including extra files such as `.env`), resets the slot's devices, and removes the
+  (including extra files such as `.env`), stops the lease's screen tools, and removes the
   guest's access.
 - **R24.** If cleanup fails, the room is not used again until it is repaired or
   destroyed.
@@ -185,7 +194,7 @@ All other terms are plain technical words.
 - **N3. Resilience.** A server restart does not lose leases or the queue. A
   dropped connection does not stop a running command.
 - **N4. Secrets.** Hostel never logs tokens, keys, file contents, environment
-  values, or the output of guest jobs. The tail of platform script output (scripts that
+  values, or the output of guest jobs. The tail of tool script output (scripts that
   the owner controls) can go to the event log. Extra files such as `.env` exist on a room only during a lease.
 - **N5. Portability.** The server runs on macOS and Linux. The guest CLI runs on
   macOS, Linux, and Windows. Rooms can run macOS, Linux, or Windows.
@@ -236,11 +245,11 @@ All other terms are plain technical words.
 | The server is a single point of failure. | Leases and queue in SQLite; detached commands on rooms; guests reconnect. No new leases while the server is down. |
 | `.env` and other secrets on cloud disks. | Delete at cleanup; destroy the room if cleanup fails; never log contents. |
 | Namespace credentials on a VPS. | Only the server has them. Guests use Hostel tokens. TLS on the VPS. |
-| Device state goes from one lease to the next. | Platform scripts give each lease a clean device (simulator clone, clean emulator snapshot). |
+| Screen state goes from one lease to the next. | Screen tools give each lease a clean screen (simulator clone, clean emulator snapshot) and stop it at cleanup. |
 | An agent thinks that a long cold start is a hang. | Progress lines, the "run again" exit code, and an estimated wait. |
 | A static room behind NAT (the home MacBook) is not reachable from a VPS. | The room opens an outbound connection to the gateway. |
 | Many rooms download tools from GitHub and hit its rate limit. | Optional `mise.github_token`; installed tools stay in the room cache. |
-| One platform behaves differently on different OSes (for example an ARM Android image on a Mac, x86 on Linux). | `hostel status` and the lease summary show the provider and machine. The owner can limit a platform to some machines. |
+| One tool behaves differently on different OSes (for example an ARM Android image on a Mac, x86 on Linux). | The lease facts show the machine, its OS, and the real option of each tool. The owner lists a tool only on the machines where it should run. |
 | A build cache from an earlier lease breaks a build. | `--fresh` requests a new room with empty caches. |
 | Windows: SSH access and scripts are not verified. | Windows comes last (M6), on a static Windows host (`win-pc`); scripts in PowerShell. |
 | The data path goes through the server, which sees the plaintext. | The server is the owner's own machine. Transfers are small (source files only, about 87 MB for a the test app monorepo on the first sync). |

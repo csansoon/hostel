@@ -56,11 +56,11 @@ public partial class MainWindow : System.Windows.Window {
 // drives it with winapp ui (UI Automation, real clicks and keys), and takes a
 // desktop screenshot. A second lease finds no process of the app.
 func TestSmokeWindowsDesktop(t *testing.T) {
-	e, s := windowsSmoke(t, true, "labels = [\"desktop\"]\n", func(int) map[string]string { return smokeWPF })
+	e, s := windowsSmoke(t, true, "tools = [\"windows-desktop\"]\n", func(int) map[string]string { return smokeWPF })
 	acquire := func() {
 		start := time.Now()
 		for {
-			r := e.hostel("acquire", "windows", "--require", "desktop", "--task", "windows desktop smoke test", "--wait", "1m")
+			r := e.hostel("acquire", "windows-desktop", "--task", "windows desktop smoke test", "--wait", "1m")
 			if r.code == 0 {
 				t.Logf("lease ready after %s", time.Since(start).Round(time.Second))
 				return

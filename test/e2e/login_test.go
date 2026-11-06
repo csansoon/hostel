@@ -24,7 +24,7 @@ func TestProviderLogin(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	state := e.useFakeNsc(map[string]string{"FAKE_LOGGED_OUT": "1"})
 	e.writeConfig(serverHeader())
 	s := e.startServer("")

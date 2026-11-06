@@ -72,9 +72,9 @@ func (m *model) moving() bool {
 		return m.queued("") || m.starting("")
 	case *lobby:
 		return m.queued("")
-	case *platformPage:
-		pl, _ := p.platform(m)
-		return m.queued(p.name) || slices.ContainsFunc(pl.Machines, m.starting)
+	case *toolPage:
+		t, _ := p.tool(m)
+		return m.queued(p.name) || slices.ContainsFunc(t.Machines, func(tm protocol.ToolMachine) bool { return m.starting(tm.Key) })
 	case *rooms, *roomAdmin:
 		return m.starting("")
 	case *machinePage:
@@ -87,10 +87,10 @@ func (m *model) moving() bool {
 	return false
 }
 
-// queued reports a queued lease for platform ("" for any).
-func (m *model) queued(platform string) bool {
+// queued reports a queued lease for a tool ("" for any).
+func (m *model) queued(tool string) bool {
 	return slices.ContainsFunc(m.st.Leases, func(l protocol.LeaseStatus) bool {
-		return l.State == protocol.LeaseQueued && (platform == "" || l.Platform == platform)
+		return l.State == protocol.LeaseQueued && (tool == "" || asks(l, tool))
 	})
 }
 

@@ -144,7 +144,7 @@ func newHelper() (*helper, error) {
 		return nil, fmt.Errorf("the helper must be at hostel/bin/, not %s", exe)
 	}
 	h := &helper{root: filepath.Dir(bin), exe: exe, os: OSName()}
-	// The machine's configured OS selects the platform scripts.
+	// The machine's configured OS selects the tool scripts.
 	if re, err := h.readRoomEnv(); err == nil && re.OS != "" {
 		h.os = re.OS
 	}
@@ -166,9 +166,9 @@ func exeSuffix() string {
 	return ""
 }
 
-func (h *helper) misePath() string               { return filepath.Join(h.root, "bin", "mise"+exeSuffix()) }
-func (h *helper) miseConfigPath() string         { return filepath.Join(h.root, "mise", "config.toml") }
-func (h *helper) roomEnvPath() string            { return filepath.Join(h.root, "room-env.json") }
-func (h *helper) platformsDir() string           { return filepath.Join(h.root, "platforms") }
-func (h *helper) platformDir(name string) string { return filepath.Join(h.platformsDir(), name) }
-func (h *helper) slotDir(slot string) string     { return filepath.Join(h.root, "slots", slot) }
+func (h *helper) misePath() string           { return filepath.Join(h.root, "bin", "mise"+exeSuffix()) }
+func (h *helper) miseConfigPath() string     { return filepath.Join(h.root, "mise", "config.toml") }
+func (h *helper) roomEnvPath() string        { return filepath.Join(h.root, "room-env.json") }
+func (h *helper) toolsDir() string           { return filepath.Join(h.root, "tools") }
+func (h *helper) toolDir(name string) string { return filepath.Join(h.toolsDir(), name) }
+func (h *helper) slotDir(slot string) string { return filepath.Join(h.root, "slots", slot) }

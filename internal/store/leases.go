@@ -15,17 +15,19 @@ import (
 )
 
 type Lease struct {
-	ID             string
-	TokenID        int64
-	State          string
-	Revision       int64
-	Position       int
-	Reason         string
-	Platform       string
-	Devices        []string
+	ID       string
+	TokenID  int64
+	State    string
+	Revision int64
+	Position int
+	Reason   string
+	// Tools is the request: "name" or "name:option" entries.
+	Tools []string
+	// Started are the screen tools that started for the lease, in the order
+	// of their start.
+	Started        []protocol.StartedTool
 	Task           string
 	Priority       int
-	RequiredLabels []string
 	Tunnels        []protocol.TunnelRequest
 	Fresh          bool
 	PublicKey      string
@@ -59,18 +61,18 @@ func Final(state string) bool {
 	return false
 }
 
-const leaseColumns = `id, token_id, state, revision, position, reason, platform, devices, task, priority,
-	required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id,
+const leaseColumns = `id, token_id, state, revision, position, reason, tools, started, task, priority,
+	tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id,
 	slot_name, attempts, began_at, created_at, last_poll_at, last_activity_at, ready_at, expires_at,
 	ended_at, end_state, end_reason, manual_position, branch`
 
 func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	var l Lease
-	var devices, labels, tunnels string
+	var tools, started, tunnels string
 	var roomID, began, ready, expires, ended sql.NullInt64
 	var created, poll, activity int64
-	err := row.Scan(&l.ID, &l.TokenID, &l.State, &l.Revision, &l.Position, &l.Reason, &l.Platform, &devices,
-		&l.Task, &l.Priority, &labels, &tunnels, &l.Fresh, &l.PublicKey, &l.GuestHost, &l.Repo, &l.Worktree,
+	err := row.Scan(&l.ID, &l.TokenID, &l.State, &l.Revision, &l.Position, &l.Reason, &tools, &started,
+		&l.Task, &l.Priority, &tunnels, &l.Fresh, &l.PublicKey, &l.GuestHost, &l.Repo, &l.Worktree,
 		&l.Provider, &l.Machine, &roomID, &l.SlotName, &l.Attempts, &began, &created, &poll, &activity,
 		&ready, &expires, &ended, &l.EndState, &l.EndReason, &l.ManualPosition, &l.Branch)
 	if err != nil {
@@ -79,7 +81,7 @@ func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	for _, f := range []struct {
 		data string
 		dst  any
-	}{{devices, &l.Devices}, {labels, &l.RequiredLabels}, {tunnels, &l.Tunnels}} {
+	}{{tools, &l.Tools}, {started, &l.Started}, {tunnels, &l.Tunnels}} {
 		if err := json.Unmarshal([]byte(f.data), f.dst); err != nil {
 			return l, fmt.Errorf("lease %s: decode: %w", l.ID, err)
 		}
@@ -98,22 +100,39 @@ func jsonText(v any) string {
 // InsertLease stores a new queued lease.
 func (s *Store) InsertLease(ctx context.Context, l Lease, now time.Time) error {
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO leases (id, token_id, state, platform, devices, task, priority,
-			required_labels, tunnels, fresh, public_key, guest_host, repo, worktree, branch, created_at, last_poll_at, last_activity_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			l.ID, l.TokenID, protocol.LeaseQueued, l.Platform, jsonText(nonNil(l.Devices)), l.Task, l.Priority,
-			jsonText(nonNil(l.RequiredLabels)), jsonText(l.Tunnels), l.Fresh, l.PublicKey, l.GuestHost, l.Repo, l.Worktree, l.Branch,
+		_, err := tx.ExecContext(ctx, `INSERT INTO leases (id, token_id, state, tools, task, priority,
+			tunnels, fresh, public_key, guest_host, repo, worktree, branch, created_at, last_poll_at, last_activity_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			l.ID, l.TokenID, protocol.LeaseQueued, jsonText(nonNil(l.Tools)), l.Task, l.Priority,
+			jsonText(l.Tunnels), l.Fresh, l.PublicKey, l.GuestHost, l.Repo, l.Worktree, l.Branch,
 			now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
 		if err != nil {
 			return err
 		}
-		return insertEvent(ctx, tx, now, l.ID, 0, "lease", fmt.Sprintf("lease %s queued for %s: %s", l.ID, l.Platform, l.Task))
+		return insertEvent(ctx, tx, now, l.ID, 0, "lease", fmt.Sprintf("lease %s queued for %s: %s", l.ID, ToolsText(l.Tools), l.Task))
 	})
 	if err != nil {
 		return fmt.Errorf("insert lease: %w", err)
 	}
 	s.leaseChanged(l.ID)
 	return nil
+}
+
+// ToolsText names the tools of a request for messages.
+func ToolsText(tools []string) string {
+	if len(tools) == 0 {
+		return "any machine"
+	}
+	return strings.Join(tools, " ")
+}
+
+// SetStarted records the screen tools that started for a lease.
+func (s *Store) SetStarted(ctx context.Context, id string, started []protocol.StartedTool) error {
+	if started == nil {
+		started = []protocol.StartedTool{}
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE leases SET started = ? WHERE id = ?`, jsonText(started), id)
+	return err
 }
 
 func nonNil(v []string) []string {
@@ -403,10 +422,20 @@ func (s *Store) ResetTimers(ctx context.Context, now time.Time) error {
 }
 
 // RecentDurations returns the durations (from ready to end) of the last n
-// ended leases of a platform.
-func (s *Store) RecentDurations(ctx context.Context, platform string, n int) ([]time.Duration, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT ended_at - ready_at FROM leases
-		WHERE platform = ? AND ready_at IS NOT NULL AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT ?`, platform, n)
+// ended leases on the machines ("<provider>/<machine>"), or, with a tool, of
+// the last n ended leases that asked for that tool.
+func (s *Store) RecentDurations(ctx context.Context, machines []string, tool string, n int) ([]time.Duration, error) {
+	query := `SELECT ended_at - ready_at FROM leases WHERE ready_at IS NOT NULL AND ended_at IS NOT NULL AND `
+	var args []any
+	if tool != "" {
+		// Tool names have no LIKE wildcards (config.ValidName).
+		query += `EXISTS (SELECT 1 FROM json_each(leases.tools) WHERE value = ? OR value LIKE ?)`
+		args = append(args, tool, tool+":%")
+	} else {
+		query += `provider || '/' || machine IN (SELECT value FROM json_each(?))`
+		args = append(args, jsonText(nonNil(machines)))
+	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY ended_at DESC LIMIT ?`, append(args, n)...)
 	if err != nil {
 		return nil, fmt.Errorf("read lease durations: %w", err)
 	}
@@ -512,8 +541,10 @@ func (s *Store) Requeue(ctx context.Context, id string, from []string, reason st
 			return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s %s → failed after %d attempts: %s", id, state, attempts, reason))
 		}
 		newState = protocol.LeaseQueued
+		// The screen tools that started belong to the old slot: its cleanup
+		// stopped them, or its cleanup_data has them.
 		_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'queued', room_id = NULL, slot_name = '', provider = '', machine = '',
-			began_at = NULL, attempts = ?, reason = ?, revision = revision + 1 WHERE id = ?`, attempts, reason, id)
+			began_at = NULL, started = '[]', attempts = ?, reason = ?, revision = revision + 1 WHERE id = ?`, attempts, reason, id)
 		if err != nil {
 			return err
 		}
@@ -567,23 +598,23 @@ func (s *Store) FailLease(ctx context.Context, id string, from []string, reason,
 	return ok, nil
 }
 
-// PlaceLease is an admin's move of a queued lease inside the queue of its
-// platform (order: scheduler.Order): first, or before another queued lease.
+// PlaceLease is an admin's move of a queued lease inside the one waiting line
+// (order: scheduler.Order): first, or before another queued lease.
 // The lease and the leases before it get manual positions, so they keep this
 // order until they start. It reports false when the lease is not queued.
 func (s *Store) PlaceLease(ctx context.Context, id, before string, now time.Time) (bool, error) {
 	var moved bool
 	var changed []string
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		var platform string
-		err := tx.QueryRowContext(ctx, `SELECT platform FROM leases WHERE id = ? AND state = 'queued'`, id).Scan(&platform)
+		var one int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM leases WHERE id = ? AND state = 'queued'`, id).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id, priority, manual_position, created_at FROM leases WHERE platform = ? AND state = 'queued'`, platform)
+		rows, err := tx.QueryContext(ctx, `SELECT id, priority, manual_position, created_at FROM leases WHERE state = 'queued'`)
 		if err != nil {
 			return err
 		}
@@ -617,7 +648,7 @@ func (s *Store) PlaceLease(ctx context.Context, id, before string, now time.Time
 		if before != "" {
 			at = slices.Index(ids, before)
 			if at < 0 {
-				return fmt.Errorf("%w: lease %s is not queued for %s", ErrNotFound, before, platform)
+				return fmt.Errorf("%w: lease %s is not queued", ErrNotFound, before)
 			}
 		}
 		ids = slices.Insert(ids, at, id)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
+	"github.com/csansoon/hostel/internal/scheduler"
 	"github.com/csansoon/hostel/internal/store"
 )
 
@@ -18,7 +19,7 @@ const detailsJobsTimeout = 10 * time.Second
 
 // handleRoomDetails is GET /v1/rooms/{name} (M10): the room, its machine, its
 // leases with their jobs (from the room's helper; the server does not store
-// jobs), the queue of its platforms, and its last events.
+// jobs), the waiting leases that it can serve, and its last events.
 func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := r.PathValue("name")
@@ -38,9 +39,9 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read slots", err)
 		return
 	}
-	rps, err := s.store.RoomPlatforms(ctx)
+	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
-		s.internalError(w, "read room platforms", err)
+		s.internalError(w, "read room tools", err)
 		return
 	}
 	leases, err := s.store.ActiveLeases(ctx)
@@ -53,26 +54,28 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read users", err)
 		return
 	}
-	out := protocol.RoomDetails{Room: roomStatus(room, slots, rps), Leases: []protocol.LeaseStatus{},
+	out := protocol.RoomDetails{Room: roomStatus(s.config(), room, slots, rts), Leases: []protocol.LeaseStatus{},
 		Jobs: map[string][]protocol.JobInfo{}, Queue: []protocol.LeaseStatus{}, Events: []protocol.Event{}}
 	m := s.config().Machine(room.Provider + "/" + room.Machine)
 	if m != nil {
 		ms := machineStatus(m)
 		out.Machine = &ms
 	}
-	served := []string{}
-	if m != nil {
-		served = append([]string{m.OS}, m.Platforms...)
+	view, err := s.loadToolView(ctx)
+	if err != nil {
+		s.internalError(w, "read rooms", err)
+		return
 	}
+	machines := view.schedMachines()
 	var onRoom []store.Lease
 	for _, l := range leases {
 		switch {
 		case l.RoomID == room.ID:
 			out.Leases = append(out.Leases, leaseStatus(l, users))
 			onRoom = append(onRoom, l)
-		case l.State == protocol.LeaseQueued && slices.Contains(served, l.Platform):
+		case l.State == protocol.LeaseQueued && m != nil && slices.Contains(scheduler.Candidates(machines, leaseRequest(view.lc.cfg, l)), m.Key()):
 			ls := leaseStatus(l, users)
-			ls.EstimatedWaitSeconds = s.leaseWait(ctx, l)
+			ls.EstimatedWaitSeconds, _ = s.leaseWait(ctx, l)
 			out.Queue = append(out.Queue, ls)
 		}
 	}

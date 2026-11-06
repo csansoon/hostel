@@ -26,10 +26,9 @@ const joinProvider = "home"
 
 // machineInvite is the machine of a machine invite.
 type machineInvite struct {
-	Provider  string   `json:"provider"`
-	Name      string   `json:"name"`
-	Platforms []string `json:"platforms"`
-	Labels    []string `json:"labels"`
+	Provider string   `json:"provider"`
+	Name     string   `json:"name"`
+	Tools    []string `json:"tools"`
 }
 
 func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +36,7 @@ func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	m := machineInvite{Provider: req.Provider, Name: req.Name, Platforms: req.Platforms, Labels: req.Labels}
+	m := machineInvite{Provider: req.Provider, Name: req.Name, Tools: req.Tools}
 	if m.Provider == "" {
 		m.Provider = joinProvider
 	}
@@ -53,11 +52,9 @@ func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "", fmt.Sprintf("the machine %s/%s exists already", m.Provider, m.Name))
 		return
 	}
-	for _, pn := range m.Platforms {
-		if p := cfg.Platforms[pn]; p == nil || p.Kind != config.KindDevice {
-			writeError(w, http.StatusBadRequest, "", fmt.Sprintf("%q is not a device platform of this server; \"hostel config platforms\" lists them", pn))
-			return
-		}
+	if err := cfg.CheckToolList(m.Tools); err != nil {
+		writeError(w, http.StatusBadRequest, "", err.Error())
+		return
 	}
 	data, _ := json.Marshal(m)
 	now := time.Now()
@@ -219,11 +216,8 @@ func addJoinedMachine(doc []byte, cfg *config.Server, m machineInvite, osName st
 	}
 	path := []string{"providers", m.Provider, "machines", m.Name}
 	keys := [][2]string{{"address", `"hostel@localhost"`}, {"connect", "true"}, {"os", fmt.Sprintf("%q", osName)}}
-	if len(m.Platforms) > 0 {
-		keys = append(keys, [2]string{"platforms", quote(m.Platforms)})
-	}
-	if len(m.Labels) > 0 {
-		keys = append(keys, [2]string{"labels", quote(m.Labels)})
+	if len(m.Tools) > 0 {
+		keys = append(keys, [2]string{"tools", quote(m.Tools)})
 	}
 	for _, kv := range keys {
 		if doc, err = config.SetKey(doc, append(slices.Clone(path), kv[0]), kv[1]); err != nil {

@@ -12,8 +12,8 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// fixture is a server with one static Docker room that serves the fakedevice
-// platform, and a test repository.
+// fixture is a server with one static Docker room that has the test tools
+// fake-screen and fake-sdk (its need), and a test repository.
 type fixture struct {
 	e *env
 	s *serverProc
@@ -21,8 +21,6 @@ type fixture struct {
 }
 
 const fixtureRepoConfig = `include = [".env"]
-
-[platforms.fakedevice]
 setup = ["echo setup-ran > setup.txt"]
 env = { REPO_VAR = "repo-value" }
 `
@@ -34,8 +32,13 @@ type fixtureOpts struct {
 	machineKeys string
 	files       map[string]string
 	agentDevice bool
-	// platforms are extra platform files: platform → file → content.
-	platforms map[string]map[string]string
+	// tools are extra or changed tool files: tool → file → content.
+	tools map[string]map[string]string
+	// machineTools are the tools of the machine box (default fake-screen).
+	machineTools []string
+	// noTools: the server has no test tools (the machine none), so its first
+	// start imports server.toml with the machine.
+	noTools bool
 	// slotUsers are extra users of the room container.
 	slotUsers []string
 	// helperDir replaces the shared helper_dir (a test that changes it).
@@ -67,9 +70,17 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	}
 	e.slotUsers = opts.slotUsers
 	c := e.startStaticRoom("box")
-	e.usePlatform("fakedevice")
-	for name, files := range opts.platforms {
-		e.writePlatform(name, files)
+	if opts.noTools {
+		opts.machineTools = []string{}
+	} else {
+		e.useTools("fake-sdk", "fake-screen", "fake-desktop")
+	}
+	for name, files := range opts.tools {
+		e.writeTool(name, files)
+	}
+	machineTools := opts.machineTools
+	if machineTools == nil {
+		machineTools = []string{"fake-screen"}
 	}
 	header := serverHeaderWith(opts.agentDevice)
 	if opts.helperDir != "" {
@@ -82,9 +93,9 @@ kind = "static"
 [providers.home.machines.box]
 address = %q
 os = "linux"
-platforms = ["fakedevice"]
+tools = %s
 env = { MACHINE_VAR = "machine-value" }
-`, c.address()) + opts.machineKeys)
+`, c.address(), tomlList(machineTools)) + opts.machineKeys)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
 	e.useGuestToken()
@@ -96,12 +107,34 @@ env = { MACHINE_VAR = "machine-value" }
 	return &fixture{e: e, s: s, c: c}
 }
 
+// tomlList formats a TOML array of strings.
+func tomlList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, it := range items {
+		quoted[i] = fmt.Sprintf("%q", it)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
 var leaseIDRE = regexp.MustCompile(`Lease ([a-z0-9]+) is ready`)
 
-// acquire runs "hostel acquire" until the lease is ready and returns its ID.
+// acquire runs "hostel acquire fake-screen" (or the tools in args) until the
+// lease is ready and returns its ID. Exit code 75 (not finished, for example
+// a slow setup on a loaded machine) runs the same command again, as an agent
+// does, up to three times.
 func (f *fixture) acquire(args ...string) string {
 	f.e.t.Helper()
-	r := f.e.mustHostel(append([]string{"acquire", "fakedevice", "--task", "e2e test"}, args...)...)
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		args = append([]string{"fake-screen"}, args...)
+	}
+	cmd := append([]string{"acquire", "--task", "e2e test"}, args...)
+	r := f.e.hostel(cmd...)
+	for i := 0; i < 2 && r.code == 75; i++ {
+		r = f.e.hostel(cmd...)
+	}
+	if r.code != 0 {
+		f.e.t.Fatalf("hostel %s: %s", strings.Join(cmd, " "), r)
+	}
 	m := leaseIDRE.FindStringSubmatch(r.stdout)
 	if m == nil {
 		f.e.t.Fatalf("acquire printed no lease ID: %s", r)
@@ -137,8 +170,8 @@ func TestAcquireRunRelease(t *testing.T) {
 	if !strings.Contains(r.stderr, "exited with code 0") {
 		t.Fatalf("run: no exit line: %s", r)
 	}
-	r = f.e.mustHostel("run", "--", `echo "$REPO_VAR $MACHINE_VAR $FAKE_DEVICE_ID $HOSTEL_DEVICES $HOSTEL_PLATFORM"; cat .env; test ! -e ignored.txt`)
-	if !regexp.MustCompile(`^repo-value machine-value phone-[a-z0-9]+ phone fakedevice\nSECRET=1\n$`).MatchString(r.stdout) {
+	r = f.e.mustHostel("run", "--", `echo "$REPO_VAR $MACHINE_VAR $FAKE_SCREEN_ID $HOSTEL_TOOLS"; cat .env; test ! -e ignored.txt`)
+	if !regexp.MustCompile(`^repo-value machine-value option-a-[a-z0-9]+ fake-screen:option-a\nSECRET=1\n$`).MatchString(r.stdout) {
 		t.Fatalf("lease environment: %q", r.stdout)
 	}
 	// The exit code of the remote command passes through, with the last line.
@@ -164,8 +197,8 @@ func TestAcquireRunRelease(t *testing.T) {
 	if f.slotExists() {
 		t.Fatal("the slot directory still exists after cleanup")
 	}
-	if got := f.c.sh("cat /home/hostel/hostel/cache/fakedevice.log"); !strings.Contains(got, "prepare linux") || !strings.Contains(got, "reset linux") {
-		t.Fatalf("platform scripts: %q, want prepare and reset", got)
+	if got := f.c.sh("cat /home/hostel/hostel/cache/fake-screen.log"); !strings.Contains(got, "start linux") || !strings.Contains(got, "stop linux") {
+		t.Fatalf("tool scripts: %q, want start and stop", got)
 	}
 	if r := f.e.hostel("run", "--", "true"); r.code != 1 || !strings.Contains(r.stderr, "no active lease") {
 		t.Fatalf("run after release: %s", r)

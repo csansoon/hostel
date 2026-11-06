@@ -10,13 +10,14 @@ admin (`hostel-users`). Each change applies at once.
 
 ```sh
 hostel config providers        # NAME, KIND, MACHINES
-hostel config rooms            # MACHINE, KIND, OS, PLATFORMS, LABELS, ROOMS
+hostel config rooms            # MACHINE, KIND, OS, TOOLS, ROOMS
 hostel config edit             # change the TOML in $EDITOR
 ```
 
 A machine is named `<provider>/<machine>`, or only `<machine>` when the name is
-unique. Names match `^[a-z][a-z0-9-]*$`. Platform requirements (Xcode, Android
-SDK, KVM, desktop) are in `hostel-platforms`.
+unique. Names match `^[a-z][a-z0-9-]*$`. Each machine lists the tools that it
+gives (`tools`). What each tool needs on the machine (Xcode, KVM, a desktop
+session) is in `hostel-tools`.
 
 ## A machine behind NAT (it joins the server)
 
@@ -27,11 +28,11 @@ SSH from the internet.
 1. On your computer, make a machine code (24 hours, works once):
 
    ```sh
-   hostel config rooms add mac-mini --platform ios --label xcode-26.5 --label desktop
-   hostel config rooms add win-pc --label desktop
+   hostel config rooms add mac-mini --tool xcode --tool ios-simulator --tool macos-desktop
+   hostel config rooms add win-pc --tool windows-desktop --tool dotnet:9
    ```
 
-   `--platform` and `--label` can repeat. `--provider` selects the static
+   `--tool` (`name` or `name:option`) can repeat. `--provider` selects the static
    provider (default `home`; the server adds it if it is missing). In the app:
    Front desk › Add a room.
 
@@ -58,10 +59,10 @@ command to run yourself (`--server <url> --token-file <file> [--server-key k]
 
 3. Do the steps that `join` prints and that only a person can do:
    - macOS: System Settings › General › Sharing › Remote Login on, for `hostel`;
-     Xcode for iOS; for `desktop`, automatic login of `hostel` and no password
+     Xcode for `xcode` and `ios-simulator`; for `macos-desktop`, automatic login of `hostel` and no password
      after the screen saver.
    - Windows: OpenSSH Server runs and starts automatically
-     (`Get-Service sshd`); for `desktop`, the "Hostel desktop" task.
+     (`Get-Service sshd`); for `windows-desktop`, the "Hostel desktop" task.
    - Linux: the SSH server runs on port 22 and allows key login for `hostel`.
 
 4. Check: `hostel status` shows the room within a minute.
@@ -104,28 +105,28 @@ kind = "static"
 [providers.home.machines.mac-mini]
 address = "hostel@mac-mini.local"    # user@host[:port]; default user hostel, port 22
 os = "macos"                         # required: linux, macos, or windows
-platforms = ["ios", "android"]       # device platforms; the OS platform is automatic
-labels = ["xcode-26.5", "desktop"]
-tools = { java = "21" }              # machine-level mise tools
+tools = ["xcode", "ios-simulator", "android-emulator", "jdk:21", "macos-desktop"]   # android-sdk comes with android-emulator
 env = { HOSTEL_IOS_RUNTIME = "26.5" }
 # slots = [{ name = "a" }, { name = "b" }]   # two leases at a time (default: one slot "a")
 ```
 
 - `slots`: each slot `n` gets the ports `7500 + 10n` to `7509 + 10n` for
   tunnels. A slot can set `ports`, `env`, and its own OS `user`.
-- `env` and `tools` on the provider apply to all its machines; machine keys
-  replace keys with the same name.
+- `tools`: defined tools (`hostel-tools`) and mise tools with their version
+  (`jdk:21`, `node:22`). The tools that a tool needs are added.
+- `env` and `tools` on the provider apply to all its machines. A machine's
+  `env` keys replace keys with the same name; a machine's `tools` list replaces
+  the provider's list.
 - The server pins the machine's SSH host key at the first connection.
 - Windows by hand: `docs/static-room-setup.md`, section "Windows" (the user,
   and the access rules of `authorized_keys` that OpenSSH requires).
 - For a public address: allow inbound SSH only from the server, or use
   `connect = true` (the join flow) and close inbound SSH.
 
-Change one key without the editor (`platforms` and `labels` are comma lists):
+Change one key without the editor (`tools` is a comma list):
 
 ```sh
-hostel config rooms set mac-mini labels=xcode-26.5,desktop
-hostel config rooms set mac-mini platforms=ios
+hostel config rooms set mac-mini tools=xcode,ios-simulator,jdk:21
 ```
 
 ## Namespace (on-demand cloud machines)
@@ -160,17 +161,15 @@ max_rooms = 3                        # all machines of this provider together
 
 [providers.ns.machines.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
-platforms = ["ios"]
-labels = ["xcode-26.5", "desktop"]
+tools = ["xcode", "ios-simulator", "macos-desktop"]
+# tahoe-slim has several Xcode versions; select one (the xcode check then reports 26.5).
 env = { DEVELOPER_DIR = "/Applications/Xcode_26.5.app/Contents/Developer", HOSTEL_IOS_RUNTIME = "26.5" }
 max_rooms = 1
 max_lifetime = "3h"                  # required for a devbox: the plan's maximum duration
 
 [providers.ns.machines.linux]
 spec = { product = "instance", machine_type = "linux/amd64:8x16" }   # optional: image (default ubuntu:24.04)
-platforms = ["android"]
-labels = ["kvm"]
-tools = { java = "21" }
+tools = ["android-sdk", "android-emulator", "jdk:21"]
 max_rooms = 2
 ```
 

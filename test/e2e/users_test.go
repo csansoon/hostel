@@ -283,7 +283,7 @@ func TestQueueLanes(t *testing.T) {
 	ids := map[string]string{}
 	for _, q := range []struct{ name, prio string }{{"low1", "low"}, {"normal1", "normal"}, {"high1", "high"}, {"normal2", "normal"}} {
 		f.e.newRepoNamed(q.name, defaultRepoFiles())
-		r := f.e.hostel("acquire", "fakedevice", "--task", q.name, "--priority", q.prio, "--wait", "1s")
+		r := f.e.hostel("acquire", "fake-screen", "--task", q.name, "--priority", q.prio, "--wait", "1s")
 		m := queuedRE.FindStringSubmatch(r.stdout + r.stderr)
 		if r.code != 75 || m == nil {
 			t.Fatalf("queue %s: %s", q.name, r)

@@ -707,7 +707,7 @@ func (p *portProc) writeLeaseEnv(ctx context.Context, tunnels map[string]*Tunnel
 		return err
 	}
 	defer conn.Close()
-	return conn.Helper(ctx, []string{"set-env"}, map[string]any{"env": leaseEnv(p.st.Platform, rc, tunnelPorts(tunnels))}, nil)
+	return conn.Helper(ctx, []string{"set-env"}, map[string]any{"env": leaseEnv(p.st.leaseTools(), rc, tunnelPorts(tunnels))}, nil)
 }
 
 // addForward listens on the guest's 127.0.0.1 and sends each connection

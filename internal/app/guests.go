@@ -255,10 +255,10 @@ func askRemove(m *model, u protocol.User) {
 	})
 }
 
-// addMachine makes a machine code (admins): the name, the platforms, and the
-// labels of the machine, then the commands to run on it.
+// addMachine makes a machine code (admins): the name and the tools of the
+// machine, then the commands to run on it.
 type addMachine struct {
-	step   int // 0: name, 1: platforms, 2: labels, 3: working, 4: done
+	step   int // 0: name, 1: tools, 2: working, 3: done
 	field  textinput.Model
 	req    protocol.MachineInviteRequest
 	resp   protocol.MachineInviteResponse
@@ -281,30 +281,24 @@ func newAddMachine() *addMachine {
 
 func (p *addMachine) title() string { return "Add a room" }
 
-func (p *addMachine) typing() bool { return p.step <= 2 }
+func (p *addMachine) typing() bool { return p.step <= 1 }
 
 func (p *addMachine) body(m *model) string {
 	w := contentWidth(m)
 	var b strings.Builder
 	b.WriteString(head("Add a room", "Connect a new machine to this server", ""))
-	if p.step <= 2 {
-		b.WriteString(section(fmt.Sprintf("Step %d of 3", p.step+1), w, false))
+	if p.step <= 1 {
+		b.WriteString(section(fmt.Sprintf("Step %d of 2", p.step+1), w, false))
 		if p.step > 0 {
-			b.WriteString(line(field("Name", clean(p.req.Name))))
+			b.WriteString(line(field("Name", clean(p.req.Name))) + "\n")
 		}
-		if p.step > 1 {
-			b.WriteString(line(field("Platforms", clean(strings.Join(p.req.Platforms, ", ")))))
-		}
-		if p.step > 0 {
-			b.WriteString("\n")
-		}
-		q := []string{"The name of the new machine (for example macbook or win-pc):", "Its platforms besides its OS, separated by commas:", "Its labels, separated by commas:"}[p.step]
+		q := []string{"The name of the new machine (for example macbook or win-pc):", "Its tools, separated by commas:"}[p.step]
 		b.WriteString(line(q) + "\n" + line(p.field.View()))
 	}
 	switch p.step {
-	case 3:
+	case 2:
 		b.WriteString(note("Making the machine code …"))
-	case 4:
+	case 3:
 		b.WriteString(section("Machine code", w, false))
 		b.WriteString(line("Run one of these on the machine "+boldStyle.Render(clean(p.resp.Machine))+", as an administrator.") + "\n")
 		b.WriteString(note("macOS or Linux"))
@@ -337,9 +331,7 @@ func (p *addMachine) hint(m *model) string {
 	case 0:
 		return "A short name for the machine: letters, digits, and dashes. The room is then home/<name>."
 	case 1:
-		return "For example android, or empty when the machine runs only its OS."
-	case 2:
-		return "Labels select machines, for example desktop for apps with a desktop."
+		return "For example xcode, ios-simulator, android-emulator, jdk:21; empty when it gives only its OS."
 	}
 	return ""
 }
@@ -365,7 +357,7 @@ func (p *addMachine) key(m *model, k tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		p.step, p.errMsg = p.step-1, ""
-		p.field.SetValue(map[int]string{0: p.req.Name, 1: strings.Join(p.req.Platforms, ", ")}[p.step])
+		p.field.SetValue(map[int]string{0: p.req.Name, 1: strings.Join(p.req.Tools, ", ")}[p.step])
 		p.field.CursorEnd()
 		return nil
 	case tea.KeyEnter:
@@ -378,10 +370,8 @@ func (p *addMachine) key(m *model, k tea.KeyMsg) tea.Cmd {
 			}
 			p.req.Name = v
 		case 1:
-			p.req.Platforms = split(v)
-		case 2:
-			p.req.Labels = split(v)
-			p.step, p.errMsg = 3, ""
+			p.req.Tools = split(v)
+			p.step, p.errMsg = 2, ""
 			c, gen, req := m.c, m.gen, p.req
 			return func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
@@ -408,7 +398,7 @@ func (p *addMachine) done(r machineInviteMsg) {
 		p.field.SetValue(p.req.Name)
 		return
 	}
-	p.step, p.resp = 4, r.resp
+	p.step, p.resp = 3, r.resp
 }
 
 func (p *addMachine) other(m *model, msg tea.Msg) tea.Cmd {

@@ -184,24 +184,24 @@ func (r *Room) Info(ctx context.Context) (protocol.HelperInfo, error) {
 	var info protocol.HelperInfo
 	err := r.Helper(ctx, []string{"info"}, nil, &info)
 	if errors.Is(err, ErrNoHelper) {
-		return protocol.HelperInfo{Hashes: protocol.HelperHashes{Platforms: map[string]string{}}}, nil
+		return protocol.HelperInfo{Hashes: protocol.HelperHashes{Tools: map[string]string{}}}, nil
 	}
 	return info, err
 }
 
-// Platform is a platform directory to upload: platform.toml and the scripts for
-// the room's OS.
-type Platform struct {
+// Tool is a tool directory to upload: tool.toml and the scripts for the
+// room's OS.
+type Tool struct {
 	Dir   string
 	Files []string
 	Hash  string
 }
 
-// PlatformUpload selects the files of a platform directory for an OS and
-// computes their hash. A platform without files has the empty hash. The hash
-// of a Windows room has no file modes: Windows has none.
-func PlatformUpload(dir string, files []string, osName string) (Platform, error) {
-	p := Platform{Dir: dir, Files: files}
+// ToolUpload selects the files of a tool directory for an OS and computes
+// their hash. A tool without files has the empty hash. The hash of a Windows
+// room has no file modes: Windows has none.
+func ToolUpload(dir string, files []string, osName string) (Tool, error) {
+	p := Tool{Dir: dir, Files: files}
 	if len(files) == 0 {
 		return p, nil
 	}
@@ -211,7 +211,7 @@ func PlatformUpload(dir string, files []string, osName string) (Platform, error)
 	}
 	entries, err := hashes.DirEntries(dir, func(n string) bool { return set[n] }, osName != config.OSWindows)
 	if err != nil {
-		return p, fmt.Errorf("read platform directory %s: %w", dir, err)
+		return p, fmt.Errorf("read tool directory %s: %w", dir, err)
 	}
 	p.Hash = hashes.Dir(entries)
 	return p, nil
@@ -223,7 +223,7 @@ type Upload struct {
 	MiseFile   string
 	MiseConfig []byte
 	RoomEnv    []byte
-	Platforms  map[string]Platform
+	Tools      map[string]Tool
 }
 
 // Sync uploads each item whose hash differs from the room (design, section 8).
@@ -271,8 +271,16 @@ func (r *Room) Sync(ctx context.Context, u Upload) (string, error) {
 			}
 		}
 	}
-	for name, p := range u.Platforms {
-		have := info.Hashes.Platforms[name]
+	// A tool that the machine no longer lists leaves the room.
+	for name := range info.Hashes.Tools {
+		if _, ok := u.Tools[name]; !ok && config.ValidName(name) {
+			if err := r.uploadTool(ctx, name, Tool{Hash: hashes.Dir(nil)}); err != nil {
+				return "", err
+			}
+		}
+	}
+	for name, p := range u.Tools {
+		have := info.Hashes.Tools[name]
 		if have == p.Hash {
 			continue
 		}
@@ -280,7 +288,7 @@ func (r *Room) Sync(ctx context.Context, u Upload) (string, error) {
 			// Remove the files of an earlier version with an empty upload.
 			p.Hash = hashes.Dir(nil)
 		}
-		if err := r.uploadPlatform(ctx, name, p); err != nil {
+		if err := r.uploadTool(ctx, name, p); err != nil {
 			return "", err
 		}
 	}
@@ -405,7 +413,7 @@ func (r *Room) uploadMise(ctx context.Context, file, sum string) error {
 	return err
 }
 
-func (r *Room) uploadPlatform(ctx context.Context, name string, p Platform) error {
+func (r *Room) uploadTool(ctx context.Context, name string, p Tool) error {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, f := range p.Files {
@@ -428,12 +436,12 @@ func (r *Room) uploadPlatform(ctx context.Context, name string, p Platform) erro
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	return r.Helper(ctx, []string{"install", "platform", name, "--sha256", p.Hash}, &buf, nil)
+	return r.Helper(ctx, []string{"install", "tool", name, "--sha256", p.Hash}, &buf, nil)
 }
 
-// RunScript runs a platform script step.
-func (r *Room) RunScript(ctx context.Context, platform, step, slot string, req protocol.RunScriptRequest) (protocol.RunScriptResponse, error) {
-	args := []string{"run-script", platform, step}
+// RunScript runs a tool script step.
+func (r *Room) RunScript(ctx context.Context, tool, step, slot string, req protocol.RunScriptRequest) (protocol.RunScriptResponse, error) {
+	args := []string{"run-script", tool, step}
 	if slot != "" {
 		args = append(args, "--slot", slot)
 	}

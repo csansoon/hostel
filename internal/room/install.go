@@ -25,7 +25,7 @@ import (
 //	install mise --sha256 H          gzip stream of the mise binary
 //	install mise-config --sha256 H   hostel/mise/config.toml
 //	install room-env --sha256 H      hostel/room-env.json
-//	install platform NAME --sha256 H tar stream of the platform directory
+//	install tool NAME --sha256 H     tar stream of the tool directory
 func (h *helper) install(args []string, stdin io.Reader) (struct{}, error) {
 	fs := cli.NewFlagSet("hostel room install", io.Discard)
 	sum := fs.String("sha256", "", "expected SHA-256")
@@ -47,8 +47,8 @@ func (h *helper) install(args []string, stdin io.Reader) (struct{}, error) {
 		return struct{}{}, writeVerified(h.miseConfigPath(), stdin, *sum, 0o644)
 	case pos[0] == "room-env" && len(pos) == 1:
 		return struct{}{}, writeVerified(h.roomEnvPath(), stdin, *sum, 0o600)
-	case pos[0] == "platform" && len(pos) == 2 && config.ValidName(pos[1]):
-		return struct{}{}, h.installPlatform(pos[1], stdin, *sum)
+	case pos[0] == "tool" && len(pos) == 2 && config.ValidName(pos[1]):
+		return struct{}{}, h.installTool(pos[1], stdin, *sum)
 	}
 	return struct{}{}, fmt.Errorf("%w: unknown install item %q", cli.ErrUsage, strings.Join(pos, " "))
 }
@@ -99,11 +99,11 @@ func replaceFile(src, dst string) error {
 	return os.Rename(src, dst)
 }
 
-func (h *helper) installPlatform(name string, r io.Reader, want string) error {
-	if err := os.MkdirAll(h.platformsDir(), 0o755); err != nil {
+func (h *helper) installTool(name string, r io.Reader, want string) error {
+	if err := os.MkdirAll(h.toolsDir(), 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.MkdirTemp(h.platformsDir(), "."+name+".tmp-")
+	tmp, err := os.MkdirTemp(h.toolsDir(), "."+name+".tmp-")
 	if err != nil {
 		return err
 	}
@@ -115,11 +115,11 @@ func (h *helper) installPlatform(name string, r io.Reader, want string) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("read the platform stream: %w", err)
+			return fmt.Errorf("read the tool stream: %w", err)
 		}
-		// Platform directories are flat: only regular files without a path.
+		// Tool directories are flat: only regular files without a path.
 		if hdr.Typeflag != tar.TypeReg || hdr.Name != filepath.Base(hdr.Name) || strings.HasPrefix(hdr.Name, ".") {
-			return fmt.Errorf("platform %s: unexpected entry %q", name, hdr.Name)
+			return fmt.Errorf("tool %s: unexpected entry %q", name, hdr.Name)
 		}
 		f, err := os.OpenFile(filepath.Join(tmp, hdr.Name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
@@ -141,14 +141,14 @@ func (h *helper) installPlatform(name string, r io.Reader, want string) error {
 		return err
 	}
 	if got := hashes.Dir(entries); got != want {
-		return fmt.Errorf("install platform %s: hash mismatch: got %s, want %s", name, got, want)
+		return fmt.Errorf("install tool %s: hash mismatch: got %s, want %s", name, got, want)
 	}
-	dst := h.platformDir(name)
+	dst := h.toolDir(name)
 	if len(entries) == 0 {
-		// The platform has no files for this OS: remove the old ones.
+		// The tool has no files for this OS: remove the old ones.
 		return os.RemoveAll(dst)
 	}
-	old := filepath.Join(h.platformsDir(), "."+name+".old-"+randHex())
+	old := filepath.Join(h.toolsDir(), "."+name+".old-"+randHex())
 	if err := os.Rename(dst, old); err != nil && !os.IsNotExist(err) {
 		return err
 	}

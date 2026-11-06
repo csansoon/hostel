@@ -13,10 +13,10 @@ Agents on a computer use that computer's connection: they are not users.
 
 | Action | member | admin |
 |---|---|---|
-| See status, rooms, queues, platforms, users, configuration | yes | yes |
+| See status, rooms, the waiting line, tools, users, configuration | yes | yes |
 | Acquire and use leases; release their own lease | yes | yes |
 | Release, move, or change the priority of another user's lease | no | yes |
-| Change platforms, rooms, providers, settings | no | yes |
+| Change tools, rooms, providers, settings | no | yes |
 | Invite, change, or remove users | no | yes |
 
 - Members see the configuration with secret values (`env`, `command_env`,

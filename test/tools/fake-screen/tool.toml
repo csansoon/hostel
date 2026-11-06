@@ -1,0 +1,5 @@
+description = "Simulated screen for the E2E tests"
+needs = ["fake-sdk"]
+screen = true
+options = ["option-a", "option-b", "option-c"]
+max_options = 2

@@ -89,17 +89,17 @@ type model struct {
 	// gen counts connections: answers for an older connection are dropped.
 	gen int
 
-	st        protocol.Status
-	loaded    bool
-	platforms []protocol.Platform
-	// platformsRead is true after the first answer of GET /v1/platforms;
-	// platformsErr is the error of the last one.
-	platformsRead bool
-	platformsErr  string
-	// platformsSeq numbers the platform reads: only the answer to the last
+	st     protocol.Status
+	loaded bool
+	tools  []protocol.Tool
+	// toolsRead is true after the first answer of GET /v1/tools;
+	// toolsErr is the error of the last one.
+	toolsRead bool
+	toolsErr  string
+	// toolsSeq numbers the tool reads: only the answer to the last
 	// one counts (an older answer can come later).
-	platformsSeq int
-	info         protocol.Info
+	toolsSeq int
+	info     protocol.Info
 	// latest is the tag of the latest release (the background check);
 	// updated is true after the app's Update installed it.
 	latest  string
@@ -166,8 +166,8 @@ func (m *model) useGuest(g *config.Guest) {
 	}
 	m.guest, m.c = g, c
 	m.gen++
-	m.st, m.loaded, m.platforms, m.info = protocol.Status{}, false, nil, protocol.Info{}
-	m.platformsRead, m.platformsErr = false, ""
+	m.st, m.loaded, m.tools, m.info = protocol.Status{}, false, nil, protocol.Info{}
+	m.toolsRead, m.toolsErr = false, ""
 }
 
 // checkOut forgets the connection and shows Check in.
@@ -211,9 +211,9 @@ type (
 		st  protocol.Status
 		err error
 	}
-	platformsMsg struct {
+	toolsMsg struct {
 		gen, seq int
-		p        []protocol.Platform
+		p        []protocol.Tool
 		err      error
 	}
 	infoMsg struct {
@@ -224,8 +224,8 @@ type (
 		gen int
 		rev string
 	}
-	// platformsRetryMsg reads the platforms again after an error.
-	platformsRetryMsg struct{ gen int }
+	// toolsRetryMsg reads the tools again after an error.
+	toolsRetryMsg struct{ gen int }
 	// actionMsg is the result of a change (an admin action, an invite).
 	actionMsg struct {
 		gen  int
@@ -272,7 +272,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, ms := range msg.st.Machines {
 			m.note("m:"+ms.Key, machineState(msg.st, ms, now).word)
 		}
-		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readPlatforms(), m.frame()}
+		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readTools(), m.frame()}
 		// The server info, until a read of it works.
 		if m.info.Version == "" || reconnected {
 			cmds = append(cmds, m.readInfo())
@@ -286,26 +286,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.pollStatus(msg.rev)
-	case platformsMsg:
-		if msg.gen != m.gen || msg.seq != m.platformsSeq {
+	case toolsMsg:
+		if msg.gen != m.gen || msg.seq != m.toolsSeq {
 			return m, nil
 		}
-		m.platformsErr = ""
+		m.toolsErr = ""
 		if msg.err != nil {
-			m.platformsErr = msg.err.Error()
+			m.toolsErr = msg.err.Error()
 			gen := m.gen
-			return m, tea.Tick(retryAfter, func(time.Time) tea.Msg { return platformsRetryMsg{gen: gen} })
+			return m, tea.Tick(retryAfter, func(time.Time) tea.Msg { return toolsRetryMsg{gen: gen} })
 		}
-		m.platforms, m.platformsRead = msg.p, true
-		for _, pl := range m.platforms {
-			m.note("p:"+pl.Name, fmt.Sprint(freeMachines(m, pl), pl.Queue))
+		m.tools, m.toolsRead = msg.p, true
+		for _, t := range m.tools {
+			m.note("t:"+t.Name, fmt.Sprint(freeMachines(m, t), t.Waiting))
 		}
 		return m, m.frame()
-	case platformsRetryMsg:
+	case toolsRetryMsg:
 		if msg.gen != m.gen {
 			return m, nil
 		}
-		return m, m.readPlatforms()
+		return m, m.readTools()
 	case inviteMsg:
 		// Handled here: the code is made once, also when the user left the
 		// page.
@@ -474,15 +474,15 @@ func (m *model) pollStatus(rev string) tea.Cmd {
 	}
 }
 
-func (m *model) readPlatforms() tea.Cmd {
-	m.platformsSeq++
-	c, gen, seq := m.c, m.gen, m.platformsSeq
+func (m *model) readTools() tea.Cmd {
+	m.toolsSeq++
+	c, gen, seq := m.c, m.gen, m.toolsSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		var p []protocol.Platform
-		err := c.Do(ctx, "GET", "/v1/platforms", nil, &p)
-		return platformsMsg{gen: gen, seq: seq, p: p, err: err}
+		var list protocol.Tools
+		err := c.Do(ctx, "GET", "/v1/tools", nil, &list)
+		return toolsMsg{gen: gen, seq: seq, p: list.Tools, err: err}
 	}
 }
 

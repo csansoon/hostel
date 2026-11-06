@@ -23,7 +23,7 @@ func TestDirtySlotStaysDirty(t *testing.T) {
 	e.init()
 	first := e.startStaticRoom("first")
 	second := e.startStaticRoom("second")
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader() + `
 [providers.home]
 kind = "static"
@@ -31,12 +31,12 @@ kind = "static"
 [providers.home.machines.first]
 address = "` + first.address() + `"
 os = "linux"
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 
 [providers.home.machines.second]
 address = "` + second.address() + `"
 os = "linux"
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	s.waitRoom("home/first", protocol.RoomRunning, roomReady)
@@ -46,25 +46,25 @@ platforms = ["fakedevice"]
 	// the tested lease starts on "second".
 	f := &fixture{e: e, s: s, c: second}
 	e.newRepoNamed("holder", defaultRepoFiles())
-	if r := e.mustHostel("acquire", "fakedevice", "--task", "holder"); !strings.Contains(r.stderr, "on home/first") {
+	if r := e.mustHostel("acquire", "fake-screen", "--task", "holder"); !strings.Contains(r.stderr, "on home/first") {
 		t.Fatalf("holder: %s", r)
 	}
 	e.newRepo(defaultRepoFiles())
-	f.marker("slow-prepare", true)
-	if r := e.hostel("acquire", "fakedevice", "--task", "moves", "--wait", "3s"); r.code != 75 || !strings.Contains(r.stderr, "preparing on home/second") {
+	f.marker("slow-start", true)
+	if r := e.hostel("acquire", "fake-screen", "--task", "moves", "--wait", "3s"); r.code != 75 || !strings.Contains(r.stderr, "preparing on home/second") {
 		t.Fatalf("acquire: %s", r)
 	}
-	// The lease began (the server sets began_at before prepare runs), so the
+	// The lease began (the server sets began_at before start runs), so the
 	// slot becomes dirty when the room is gone.
-	prepare := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 20 $' || true"
-	f.e.waitFor("the slow prepare", time.Minute, func() bool { return second.sh(prepare) == "1" })
+	start := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 20 $' || true"
+	f.e.waitFor("the slow start", time.Minute, func() bool { return second.sh(start) == "1" })
 	second.stop()
 	f.e.waitFor("dirty slot", time.Minute, func() bool { return s.room("home/second").Slots[0].State == protocol.SlotDirty })
 	// The holder releases; the lease moves to the first room.
 	f.useRepo("holder")
 	e.mustHostel("release")
 	f.useRepo("repo")
-	if r := e.mustHostel("acquire", "fakedevice", "--task", "moves"); !strings.Contains(r.stderr, "on home/first") {
+	if r := e.mustHostel("acquire", "fake-screen", "--task", "moves"); !strings.Contains(r.stderr, "on home/first") {
 		t.Fatalf("the lease is not on home/first: %s", r)
 	}
 	e.mustHostel("release")
@@ -73,13 +73,18 @@ platforms = ["fakedevice"]
 		t.Fatalf("the dirty slot is %s after the lease ended on another room", st)
 	}
 	second.start()
-	f.marker("slow-prepare", false)
+	f.marker("slow-start", false)
 	f.e.waitFor("room back with a clean slot", 2*time.Minute, func() bool {
 		r := s.room("home/second")
 		return r.State == protocol.RoomRunning && r.Slots[0].State == protocol.SlotFree
 	})
-	if got := second.sh("grep -c '^reset linux' " + cacheDir + "/fakedevice.log"); got != "1" {
-		t.Fatalf("resets on the dirty room: %s, want 1", got)
+	// The cleanup of the dirty slot ran: the slot directory is gone. The stop
+	// ran too: the start of fake-screen did not finish and can leave processes.
+	if got := second.sh("test -e /home/hostel/hostel/slots/a && echo exists || echo removed"); got != "removed" {
+		t.Fatalf("the slot directory of the dirty slot: %s", got)
+	}
+	if got := second.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log || true"); got != "1" {
+		t.Fatalf("stops on the dirty room: %s, want 1", got)
 	}
 }
 
@@ -117,7 +122,7 @@ func TestBrokenCloudRoomDestroyed(t *testing.T) {
 	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
 	f.acquire()
 	room := f.cloudRooms()[0].Name
-	f.roomSh(room, "touch "+cacheDir+"/fail-reset")
+	f.roomSh(room, "touch "+cacheDir+"/fail-stop")
 	f.e.mustHostel("release")
 	f.waitNoCloudRooms()
 }
@@ -133,7 +138,7 @@ func TestTunnelsBeforeCreation(t *testing.T) {
 		fmt.Fprintf(&cfg, "[tunnels.p%d]\nlocal_port = 3000\n", i)
 	}
 	f.e.newRepoNamed("tunnels", map[string]string{"hostel.toml": cfg.String()})
-	r := f.e.hostel("acquire", "fakedevice", "--task", "x", "--wait", "30s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "x", "--wait", "30s")
 	if r.code != 1 || !strings.Contains(r.stderr, "no free pool port") {
 		t.Fatalf("acquire: %s", r)
 	}
@@ -151,7 +156,7 @@ func TestDuplicateFixedPorts(t *testing.T) {
 	f := newFixture(t, &fixtureOpts{files: map[string]string{
 		"hostel.toml": "[tunnels.a]\nlocal_port = 3000\nroom_port = 7600\n[tunnels.b]\nlocal_port = 3001\nroom_port = 7600\n",
 	}})
-	r := f.e.hostel("acquire", "fakedevice", "--task", "x")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "x")
 	if r.code != 1 || !strings.Contains(r.stderr, "room port 7600 is also the room port of tunnel a") {
 		t.Fatalf("acquire: %s", r)
 	}
@@ -161,7 +166,7 @@ func TestDuplicateFixedPorts(t *testing.T) {
 	if code := f.s.put("/v1/leases/"+id+"/tunnels", f.e.vars["HOSTEL_TOKEN"], body); code != 400 {
 		t.Fatalf("PUT tunnels with a duplicate fixed port: HTTP %d, want 400", code)
 	}
-	create, err := json.Marshal(protocol.CreateLeaseRequest{Platform: "fakedevice", Task: "x",
+	create, err := json.Marshal(protocol.CreateLeaseRequest{Tools: []string{"fake-screen"}, Task: "x",
 		PublicKey: string(ssh.MarshalAuthorizedKey(f.leaseKey().PublicKey())),
 		Tunnels:   []protocol.TunnelRequest{{Name: "a", RoomPort: 7600}, {Name: "b", RoomPort: 7600}}})
 	if err != nil {

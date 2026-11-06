@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,19 +24,16 @@ import (
 // stopWait is the time between SIGTERM and SIGKILL in cleanup.
 const stopWait = 10 * time.Second
 
-// platformInfo reads the devices and the script timeouts of an installed
-// platform directory. An OS platform can have no platform.toml.
-func (h *helper) platformInfo(name string) (config.Platform, error) {
-	p := config.Platform{Name: name}
-	data, err := os.ReadFile(filepath.Join(h.platformDir(name), "platform.toml"))
-	if errors.Is(err, os.ErrNotExist) {
-		return p, nil
-	}
+// toolInfo reads the options and the script timeouts of an installed tool
+// directory.
+func (h *helper) toolInfo(name string) (config.Tool, error) {
+	t := config.Tool{Name: name}
+	data, err := os.ReadFile(filepath.Join(h.toolDir(name), config.ToolFile))
 	if err != nil {
-		return p, err
+		return t, err
 	}
-	err = toml.NewDecoder(bytes.NewReader(data)).Decode(&p)
-	return p, err
+	err = toml.NewDecoder(bytes.NewReader(data)).Decode(&t)
+	return t, err
 }
 
 // cleanup deletes everything a lease left (design, section 17). Each step runs
@@ -50,8 +48,8 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
 	}
-	if !config.ValidName(req.Platform) || req.LeaseID == "" {
-		return resp, errors.New("cleanup needs lease_id and platform")
+	if req.LeaseID == "" || slices.ContainsFunc(req.Started, func(st protocol.StartedTool) bool { return !config.ValidName(st.Name) }) {
+		return resp, errors.New("cleanup needs lease_id and valid tool names")
 	}
 	step := func(name string, fn func() error) {
 		st := protocol.CleanupStep{Name: name}
@@ -69,7 +67,7 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		return os.WriteFile(h.leaseEndedFile(slot), nil, 0o644)
 	})
 	step("stop processes", func() error { return h.stopLeaseProcesses(slot, req.LeaseID) })
-	step("reset", func() error { return h.resetSlot(slot, req) })
+	step("stop screen tools", func() error { return h.stopTools(slot, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
 	step("check", func() error { return h.checkClean(slot, req.LeaseID, req.Ports) })
 	step("delete slot", func() error {
@@ -84,7 +82,11 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		}
 		return os.RemoveAll(h.slotDir(slot))
 	})
-	step("health", func() error { return h.health(req.Health) })
+	step("check tools", func() error {
+		var err error
+		resp.Checks, err = h.check(req.Check)
+		return err
+	})
 	return resp, nil
 }
 
@@ -131,27 +133,43 @@ func (h *helper) stopLeaseProcesses(slot, leaseID string) error {
 	return nil
 }
 
-func (h *helper) resetSlot(slot string, req protocol.CleanupRequest) error {
-	// A repeated cleanup after "delete slot" finds no slot directory; reset
+// stopTools runs the stop scripts of the screen tools that started for the
+// lease, in reverse order of their start. Each one runs, also after a failure
+// of another.
+func (h *helper) stopTools(slot string, req protocol.CleanupRequest) error {
+	if len(req.Started) == 0 {
+		return nil
+	}
+	// A repeated cleanup after "delete slot" finds no slot directory; stop
 	// then runs in an empty one and must do nothing.
 	if err := os.MkdirAll(h.slotDir(slot), 0o755); err != nil {
 		return err
 	}
-	p, err := h.platformInfo(req.Platform)
-	if err != nil {
-		return err
+	var failed []string
+	for i := len(req.Started) - 1; i >= 0; i-- {
+		st := req.Started[i]
+		t, err := h.toolInfo(st.Name)
+		if err != nil {
+			failed = append(failed, st.Name+": "+err.Error())
+			continue
+		}
+		resp, err := h.script(st.Name, config.StepStop, slot, nil, map[string]string{
+			"HOSTEL_LEASE_ID":     req.LeaseID,
+			"HOSTEL_TOOL_OPTIONS": strings.Join(st.Options, ","),
+			"HOSTEL_TOOLS":        strings.Join(req.Tools, ","),
+			"HOSTEL_EXCLUSIVE":    exclusiveEnv(req.Exclusive),
+		}, t.ScriptTimeout(config.StepStop))
+		if err == nil {
+			err = scriptError(resp)
+		}
+		if err != nil {
+			failed = append(failed, st.Name+": "+err.Error())
+		}
 	}
-	resp, err := h.script(req.Platform, config.StepReset, slot, nil, map[string]string{
-		"HOSTEL_PLATFORM":         req.Platform,
-		"HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
-		"HOSTEL_LEASE_ID":         req.LeaseID,
-		"HOSTEL_DEVICES":          strings.Join(req.Devices, ","),
-		"HOSTEL_EXCLUSIVE":        exclusiveEnv(req.Exclusive),
-	}, p.ScriptTimeout(config.StepReset))
-	if err != nil {
-		return err
+	if len(failed) > 0 {
+		return errors.New(strings.Join(failed, "; "))
 	}
-	return scriptError(resp)
+	return nil
 }
 
 func scriptError(resp protocol.RunScriptResponse) error {
@@ -223,31 +241,33 @@ func (h *helper) checkClean(slot, leaseID string, ports []int) error {
 	}
 }
 
-// health runs the health script of each platform in names.
-func (h *helper) health(names []string) error {
+// check runs the check script of each tool in names and returns the option
+// that each one reports.
+func (h *helper) check(names []string) ([]protocol.ToolCheck, error) {
 	var failed []string
+	var out []protocol.ToolCheck
 	for _, name := range names {
 		if !config.ValidName(name) {
-			failed = append(failed, fmt.Sprintf("invalid platform name %q", name))
+			failed = append(failed, fmt.Sprintf("invalid tool name %q", name))
 			continue
 		}
-		p, err := h.platformInfo(name)
-		if err != nil {
-			failed = append(failed, name+": "+err.Error())
-			continue
-		}
-		resp, err := h.script(name, config.StepHealth, "", nil, map[string]string{
-			"HOSTEL_PLATFORM": name, "HOSTEL_PLATFORM_DEVICES": strings.Join(p.Devices, ","),
-		}, p.ScriptTimeout(config.StepHealth))
+		c := protocol.ToolCheck{Tool: name}
+		t, err := h.toolInfo(name)
 		if err == nil {
-			err = scriptError(resp)
+			var resp protocol.RunScriptResponse
+			if resp, err = h.script(name, config.StepCheck, "", nil, nil, t.ScriptTimeout(config.StepCheck)); err == nil {
+				err = scriptError(resp)
+				c.Option = resp.LastLine
+			}
 		}
 		if err != nil {
+			c.Error = err.Error()
 			failed = append(failed, name+": "+err.Error())
 		}
+		out = append(out, c)
 	}
 	if len(failed) > 0 {
-		return errors.New(strings.Join(failed, "; "))
+		return out, errors.New(strings.Join(failed, "; "))
 	}
-	return nil
+	return out, nil
 }

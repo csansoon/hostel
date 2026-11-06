@@ -1,12 +1,12 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,11 +59,6 @@ func newLeaseID() string {
 	return hex.EncodeToString(b)
 }
 
-// exclusive reports whether a lease takes all slots of a room (design, section 5).
-func exclusive(p *config.Platform, labels []string) bool {
-	return p.Exclusive || slices.Contains(labels, "desktop")
-}
-
 func poolTunnels(tunnels []protocol.TunnelRequest) int {
 	n := 0
 	for _, t := range tunnels {
@@ -79,17 +74,12 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	// A configuration or platform change takes schedMu for its checks and its
+	// A configuration or tool change takes schedMu for its checks and its
 	// swap: the checks of the lease and its insert see one configuration.
 	s.schedMu.Lock()
 	defer s.schedMu.Unlock()
-	p := s.config().Platforms[req.Platform]
-	if p == nil {
-		writeError(w, http.StatusUnprocessableEntity, protocol.CodeUnknownPlatform,
-			fmt.Sprintf("unknown platform %q; run \"hostel platforms\" for the list", req.Platform))
-		return
-	}
-	devices, code, msg := checkDevices(p, req.Devices)
+	cfg := s.config()
+	tools, code, msg := checkLeaseTools(cfg, req.Tools)
 	if code != "" {
 		writeError(w, http.StatusUnprocessableEntity, code, msg)
 		return
@@ -115,20 +105,23 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", msg)
 		return
 	}
-	labels := mergeLabels(p.Requires, req.RequiredLabels)
-	sreq := scheduler.Request{Platform: p.Name, PlatformOS: p.Kind == config.KindOS, Labels: labels,
-		PoolTunnels: poolTunnels(req.Tunnels), Fresh: req.Fresh, Exclusive: exclusive(p, labels)}
-	if len(scheduler.Candidates(s.schedMachines(), sreq)) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine, noMachineMessage(sreq))
-		return
-	}
-	now := time.Now()
-	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Platform: p.Name, Devices: devices, Task: req.Task,
-		Priority: priority, RequiredLabels: labels, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
+	l := store.Lease{ID: newLeaseID(), TokenID: requestToken(r).ID, Tools: tools, Task: req.Task,
+		Priority: priority, Tunnels: req.Tunnels, Fresh: req.Fresh, PublicKey: strings.TrimSpace(req.PublicKey),
 		GuestHost: req.GuestHost, Repo: req.Repo, Worktree: req.Worktree, Branch: req.Branch}
 	if l.Tunnels == nil {
 		l.Tunnels = []protocol.TunnelRequest{}
 	}
+	view, err := s.loadToolView(r.Context())
+	if err != nil {
+		s.internalError(w, "read rooms", err)
+		return
+	}
+	machines := view.schedMachines()
+	if sreq := leaseRequest(cfg, l); len(scheduler.Candidates(machines, sreq)) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine, noMachineMessage(machines, sreq))
+		return
+	}
+	now := time.Now()
 	if err := s.store.InsertLease(r.Context(), l, now); err != nil {
 		s.internalError(w, "create lease", err)
 		return
@@ -140,31 +133,6 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.apiLease(r, stored))
-}
-
-func checkDevices(p *config.Platform, devices []string) ([]string, string, string) {
-	if p.Kind == config.KindOS {
-		if len(devices) > 0 {
-			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("platform %s has no devices", p.Name)
-		}
-		return []string{}, "", ""
-	}
-	if len(devices) == 0 {
-		return []string{p.Devices[0]}, "", ""
-	}
-	var out []string
-	for _, d := range devices {
-		if !slices.Contains(p.Devices, d) {
-			return nil, protocol.CodeUnknownDevice, fmt.Sprintf("platform %s has no device %q; devices: %s", p.Name, d, strings.Join(p.Devices, ", "))
-		}
-		if !slices.Contains(out, d) {
-			out = append(out, d)
-		}
-	}
-	if len(out) > p.MaxDevices {
-		return nil, protocol.CodeTooManyDevices, fmt.Sprintf("platform %s allows at most %d devices in one lease", p.Name, p.MaxDevices)
-	}
-	return out, "", ""
 }
 
 func checkTunnels(tunnels []protocol.TunnelRequest) string {
@@ -189,32 +157,6 @@ func checkTunnels(tunnels []protocol.TunnelRequest) string {
 		}
 	}
 	return ""
-}
-
-func mergeLabels(lists ...[]string) []string {
-	out := []string{}
-	for _, l := range lists {
-		for _, v := range l {
-			if !slices.Contains(out, v) {
-				out = append(out, v)
-			}
-		}
-	}
-	return out
-}
-
-func noMachineMessage(r scheduler.Request) string {
-	msg := "no machine can serve platform " + r.Platform
-	if len(r.Labels) > 0 {
-		msg += " with the labels " + strings.Join(r.Labels, ", ")
-	}
-	if r.PoolTunnels > 0 {
-		msg += fmt.Sprintf(" and %d tunnel ports", r.PoolTunnels)
-	}
-	if r.Fresh {
-		msg += " on an on-demand machine (--fresh)"
-	}
-	return msg + "; run \"hostel platforms\" to see what exists"
 }
 
 // leaseFor reads a lease and checks that the token may use it.
@@ -339,11 +281,11 @@ func endState(l store.Lease) string {
 // the lease is ready.
 func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	out := protocol.Lease{ID: l.ID, State: l.State, Revision: l.Revision, Position: l.Position, Reason: l.Reason,
-		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority),
+		Tools: nonNil(l.Tools), Started: nonNilStarted(l.Started), Task: l.Task, Priority: protocol.PriorityName(l.Priority),
 		Provider: l.Provider, Machine: l.Machine, CreatedAt: l.CreatedAt, EndReason: l.EndReason,
 		PollTimeoutMS: s.config().PollTimeout.D().Milliseconds(), IdleTimeoutMS: s.config().IdleTimeout.D().Milliseconds()}
 	if l.State == protocol.LeaseQueued {
-		out.EstimatedWaitSeconds = s.leaseWait(r.Context(), l)
+		out.EstimatedWaitSeconds, out.WaitingBehind = s.leaseWait(r.Context(), l)
 	}
 	if l.State != protocol.LeaseReady {
 		return out
@@ -375,5 +317,24 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 		ExpiresAt:          l.ExpiresAt,
 		IdleExpiresAt:      l.LastActivityAt.Add(s.config().IdleTimeout.D()),
 	}
+	out.Access.Hardware, out.Access.Tools = s.roomFacts(r.Context(), room)
+	out.Access.LeaseTools = leaseToolNames(s.config(), l.Tools)
 	return out
+}
+
+func nonNilStarted(v []protocol.StartedTool) []protocol.StartedTool {
+	if v == nil {
+		return []protocol.StartedTool{}
+	}
+	return v
+}
+
+// roomFacts returns the hardware and the inventory of a room.
+func (s *Server) roomFacts(ctx context.Context, room store.Room) (*protocol.Hardware, []protocol.InventoryTool) {
+	rts, err := s.store.RoomTools(ctx)
+	if err != nil {
+		return nil, []protocol.InventoryTool{}
+	}
+	rs := roomStatus(s.config(), room, nil, rts)
+	return rs.Hardware, rs.Tools
 }

@@ -19,7 +19,7 @@ import (
 const instanceMachine = `
 [providers.ns.machines.box]
 spec = { product = "instance", machine_type = "linux/amd64:4x16", image = "ubuntu:24.04" }
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 `
 
 // useFakeNsc puts the fake nsc CLI (test/fakeprovider under the name "nsc")
@@ -79,7 +79,7 @@ func newInstanceFixture(t *testing.T, serverKeys, providerKeys string, vars map[
 	t.Helper()
 	e := newEnv(t)
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	state := e.useFakeNsc(vars)
 	e.writeConfig(serverHeader() + serverKeys + "[providers.ns]\nkind = \"namespace\"\n" + providerKeys + instanceMachine)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
@@ -213,7 +213,7 @@ func TestNamespaceInstanceLimit(t *testing.T) {
 	var r result
 	// The create deadline is 2 minutes.
 	f.e.waitFor("the provider limit", 4*time.Minute, func() bool {
-		r = f.e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "5s")
+		r = f.e.hostel("acquire", "fake-screen", "--task", "limited", "--wait", "5s")
 		if r.code != 75 {
 			t.Fatalf("acquire at the plan limit: %s", r)
 		}
@@ -229,8 +229,7 @@ func TestNamespaceInstanceLogin(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.useFakeNsc(map[string]string{"FAKE_LOGGED_OUT": "1"})
-	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + instanceMachine)
-	e.usePlatform("fakedevice")
+	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + strings.Replace(instanceMachine, "tools = [\"fake-screen\"]\n", "", 1))
 	r := e.hostel("server", "run")
 	if r.code != 1 || !strings.Contains(r.stderr, `providers.ns: the nsc CLI is not ready (install it and run "nsc login" as the server user)`) ||
 		!strings.Contains(r.stderr, "You are not logged in") {

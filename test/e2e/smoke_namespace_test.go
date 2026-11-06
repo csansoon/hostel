@@ -31,14 +31,14 @@ func TestSmokeNamespace(t *testing.T) {
 	e, s, prefix := namespaceDevboxSmoke(t, `warm_running = "1m"`, `
 [providers.ns.machines.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
-labels = ["desktop"]
+tools = ["macos-desktop"]
 max_lifetime = "3h"
 `, false)
 	e.newRepo(defaultRepoFiles())
 
 	start := time.Now()
 	for {
-		r := e.hostel("acquire", "macos", "--require", "desktop", "--task", "smoke test", "--wait", "1m")
+		r := e.hostel("acquire", "macos-desktop", "--task", "smoke test", "--wait", "1m")
 		if r.code == 0 {
 			break
 		}
@@ -92,10 +92,6 @@ func namespaceDevboxSmoke(t *testing.T, providerKeys, machines string, agentDevi
 	if err != nil {
 		t.Fatal(err)
 	}
-	platforms, err := filepath.Abs("../../platforms")
-	if err != nil {
-		t.Fatal(err)
-	}
 	e := newEnv(t)
 	// The CLI keeps its login in the real home; the key files go to the test
 	// home.
@@ -125,13 +121,12 @@ func namespaceDevboxSmoke(t *testing.T, providerKeys, machines string, agentDevi
 listen = "127.0.0.1:0"
 gateway_listen = "127.0.0.1:0"
 helper_dir = %q
-platforms_dir = %q
 mise = { agent_device = %t }
 
 [providers.ns]
 kind = "namespace"
 %s
-%s`, id, dist, platforms, agentDevice, providerKeys, machines))
+%s`, id, dist, agentDevice, providerKeys, machines))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
 	return e, s, prefix
@@ -238,7 +233,7 @@ spec = { product = "instance", machine_type = "linux/amd64:2x4" }
 
 	start := time.Now()
 	for {
-		r := e.hostel("acquire", "linux", "--task", "smoke test", "--wait", "1m")
+		r := e.hostel("acquire", "--task", "smoke test", "--wait", "1m")
 		if r.code == 0 {
 			break
 		}

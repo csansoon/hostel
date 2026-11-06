@@ -26,7 +26,7 @@ func TestMachineJoin(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader())
 	s := e.startServer("")
 
@@ -52,7 +52,7 @@ func TestMachineJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := e.adminHostel("config", "rooms", "add", "box2", "--platform", "fakedevice", "--label", "joined")
+	r := e.adminHostel("config", "rooms", "add", "box2", "--tool", "fake-screen")
 	m := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(r.stdout)
 	if r.code != 0 || m == nil || !strings.Contains(r.stdout, "--pinnedpubkey sha256//") || !strings.Contains(r.stdout, "/v1/install.sh | sudo sh -s -- ") {
 		t.Fatalf("config rooms add: %s", r)
@@ -94,7 +94,7 @@ func TestMachineJoin(t *testing.T) {
 		t.Fatalf("room token: %s", got)
 	}
 	doc := s.configDoc().Document
-	for _, want := range []string{"[providers.home.machines.box2]", `connect = true`, `os = "linux"`, `labels = ["joined"]`} {
+	for _, want := range []string{"[providers.home.machines.box2]", `connect = true`, `os = "linux"`, `tools = ["fake-screen"]`} {
 		if !strings.Contains(doc, want) {
 			t.Fatalf("the document after the join has no %s:\n%s", want, doc)
 		}
@@ -108,7 +108,7 @@ func TestMachineJoin(t *testing.T) {
 
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
-	r = e.mustHostel("acquire", "fakedevice", "--task", "joined", "--require", "joined")
+	r = e.mustHostel("acquire", "fake-screen", "--task", "joined")
 	if !strings.Contains(r.stdout, "is ready") {
 		t.Fatalf("acquire on the joined machine: %s", r)
 	}
@@ -147,7 +147,7 @@ func TestMachineJoin(t *testing.T) {
 		t.Fatalf("the room token after the removal: HTTP %d, want 401", code)
 	}
 	rootSh("pkill -f '[h]ostel machine connect' || true; rm -f /etc/ssh/ssh_host_*; ssh-keygen -A")
-	code3 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "rooms", "add", "box2", "--platform", "fakedevice").stdout)[1]
+	code3 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "rooms", "add", "box2", "--tool", "fake-screen").stdout)[1]
 	out, err = join(code3)
 	if err != nil || !strings.Contains(out, "added the machine home/box2") {
 		t.Fatalf("join again with a new code: %v\n%s", err, out)

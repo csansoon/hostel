@@ -29,7 +29,7 @@ const configUsage = `hostel: usage:
   hostel config settings [set <key>=<value> ...]
   hostel config rooms [set|remove|drain|undrain|repair]
   hostel config providers [add|remove]
-  hostel config platforms [new|pull|push|reset|remove]
+  hostel config tools [new|pull|push|reset|remove]
   hostel config users [invite|code|set|remove]`
 
 // configCmd is "hostel config": the server configuration (multiplayer.md,
@@ -42,8 +42,8 @@ func configCmd(args []string, stdout, stderr io.Writer) int {
 	switch sub {
 	case "users":
 		return usersCmd(args, stdout, stderr)
-	case "platforms":
-		return platformsCmd(args, stdout, stderr)
+	case "tools":
+		return toolsCmd(args, stdout, stderr)
 	case "rooms":
 		return roomsCmd(args, stdout, stderr)
 	case "providers":

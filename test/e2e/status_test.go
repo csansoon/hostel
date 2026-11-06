@@ -107,13 +107,13 @@ func TestRoomDetails(t *testing.T) {
 
 // TestStatusPlain (M10): "hostel status" in a pipe prints the plain layout: the
 // header, a free room, an on-demand machine without rooms, a room in use with
-// the user and the task, and a queue with its next lease. "hostel status
-// <room>" and "hostel status <platform>" print the details.
+// the user and the task, and the waiting line. "hostel status <room>" and
+// "hostel status <tool>" print the details.
 func TestStatusPlain(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	f := newFixtureWithEnv(t, e, &fixtureOpts{machineKeys: "labels = [\"x\\ty\\u001b[31m\"]\n" + e.externalProvider("cloud", "", nil, `
+	f := newFixtureWithEnv(t, e, &fixtureOpts{machineKeys: e.externalProvider("cloud", "", nil, `
 [providers.cloud.machines.small]
 os = "linux"
 spec = { image = "room" }
@@ -129,11 +129,11 @@ max_rooms = 2
 	}
 	match(f.e.mustHostel("status"),
 		`(?m)^\S+ · 1 room \(0 in use\) · 0 waiting · you: guest \(member\)$`,
-		`(?m)^ROOM\s+PLATFORMS\s+STATE\s+USER\s+TASK\s+TIME\s+LEASE$`,
-		`(?m)^home/box\s+fakedevice, linux\s+free$`,
+		`(?m)^ROOM\s+TOOLS\s+STATE\s+USER\s+TASK\s+TIME\s+LEASE$`,
+		`(?m)^home/box\s+fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2\s+free$`,
 		`(?m)^cloud/small\s+linux\s+none\s+\(on demand, up to 2\)$`,
-		`(?m)^Details: hostel status <room> .* or hostel status <platform> \(its queue\)\.$`,
-		`(?m)^To get a room: hostel acquire <platform> --task "\.\.\."`)
+		`(?m)^Details: hostel status <room> .* or hostel status <tool> \(the leases that wait for it\)\.$`,
+		`(?m)^To get a room: hostel acquire \[<tool>\.\.\.\] --task "\.\.\."`)
 	// Without a terminal, "hostel" alone prints the help (the app needs a
 	// terminal).
 	if r := f.e.hostel(); r.code != 2 || !strings.Contains(r.stderr, "Usage: hostel <command>") {
@@ -144,32 +144,34 @@ max_rooms = 2
 	f.e.vars["HOSTEL_TOKEN"] = f.e.newUser("ana", "member")
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
 	queued := f.queued()
+	// A new lease shows "-" until the next scheduler pass gives it a place.
+	f.e.waitFor("the place in the queue", 30*time.Second, func() bool { return f.lease(queued).Position > 0 })
 	for _, cmd := range []string{"status", "ls", "rooms"} {
 		match(f.e.mustHostel(cmd, "--plain"),
 			`(?m)^\S+ · 1 room \(1 in use\) · 1 waiting · you: ana \(member\)$`,
-			`(?m)^home/box\s+fakedevice, linux\s+in use\s+guest\s+e2e test\s+\d+[smh]\S*\s+`+lease+`$`,
-			`(?m)^QUEUE\s+WAITING\s+EST\.\s+NEXT$`,
-			`(?m)^fakedevice\s+1\s+\S+\s+ana · wait \(normal, \d+[smh]\S*\) · lease `+queued+`$`)
+			`(?m)^home/box\s+fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2\s+in use\s+guest\s+e2e test\s+\d+[smh]\S*\s+`+lease+`$`,
+			`(?m)^#\s+USER\s+TASK\s+TOOLS\s+PRIORITY\s+WAITING\s+EST\.\s+LEASE\s+REASON$`,
+			`(?m)^1\s+ana\s+wait\s+fake-screen\s+normal\s+\d+[smh]\S*\s+\S+\s+`+queued+`(\s.*)?$`)
 	}
-	match(f.e.mustHostel("status", "fakedevice"),
-		`(?m)^fakedevice · 1 in use, 0 free · 1 waiting$`,
-		`(?m)^1\s+ana\s+wait\s+normal\s+\d+[smh]\S*\s+\S+\s+`+queued+`(\s.*)?$`)
+	match(f.e.mustHostel("status", "fake-screen"),
+		`(?m)^fake-screen · 1 in use, 0 free · 1 waiting$`,
+		`(?m)^1\s+ana\s+wait\s+fake-screen\s+normal\s+\d+[smh]\S*\s+\S+\s+`+queued+`(\s.*)?$`)
 	match(f.e.mustHostel("status", "home/box"),
 		`(?m)^home/box · room \d+ · static · Debian[^·]*, \S+ · in use$`,
-		`(?m)^Platforms fakedevice, linux · labels x y \[31m · 1 slot$`,
+		`(?m)^Tools fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2 · 1 slot$`,
 		`(?m)^NOW\s+guest · e2e test · lease `+lease+` \(ready, slot \S+\)$`,
-		`(?m)^QUEUE\s+1\. ana · wait · fakedevice · normal · waiting \d+[smh]\S* · \S+ · lease `+queued+`$`)
-	if r := f.e.hostel("status", "nothing"); r.code != 1 || !strings.Contains(r.stderr, `no room or platform "nothing"`) {
+		`(?m)^WAITING\s+1\. ana · wait · fake-screen · normal · waiting \d+[smh]\S* · \S+ · lease `+queued+`$`)
+	if r := f.e.hostel("status", "nothing"); r.code != 1 || !strings.Contains(r.stderr, `no room or tool "nothing"`) {
 		t.Fatalf("status of an unknown name: %s", r)
 	}
 	// Control characters in a task do not add lines or VT sequences.
 	f.e.vars["HOSTEL_TOKEN"] = f.e.newUser("bob", "member")
 	f.e.newRepoNamed("repo3", defaultRepoFiles())
-	if r := f.e.hostel("acquire", "fakedevice", "--task", "line1\nline2\tx\x1b[31m", "--wait", "2s"); r.code != 75 {
+	if r := f.e.hostel("acquire", "fake-screen", "--task", "line1\nline2\tx\x1b[31m", "--wait", "2s"); r.code != 75 {
 		t.Fatalf("acquire with control characters in the task: %s", r)
 	}
-	r := f.e.mustHostel("status", "fakedevice")
-	match(r, `(?m)^2\s+bob\s+line1 line2 x \[31m\s+normal\s`)
+	r := f.e.mustHostel("status", "fake-screen")
+	match(r, `(?m)^2\s+bob\s+line1 line2 x \[31m\s+fake-screen\s+normal\s`)
 	if strings.Contains(r.stdout, "\x1b") {
 		t.Fatalf("the status has an ESC character:\n%q", r.stdout)
 	}
@@ -178,7 +180,7 @@ max_rooms = 2
 	if r := f.e.adminHostel("admin", "room", "drain", "home/box"); r.code != 0 {
 		t.Fatalf("admin room drain by name: %s", r)
 	}
-	match(f.e.mustHostel("status"), `(?m)^home/box\s+fakedevice, linux\s+in use, drained\s+guest\s`)
+	match(f.e.mustHostel("status"), `(?m)^home/box\s+fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2\s+in use, drained\s+guest\s`)
 	if r := f.e.adminHostel("admin", "room", "drain", "home/none"); r.code != 1 || !strings.Contains(r.stderr, `no room "home/none"`) {
 		t.Fatalf("admin room drain of an unknown room: %s", r)
 	}

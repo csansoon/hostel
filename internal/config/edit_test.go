@@ -18,7 +18,7 @@ kind = "static"
 
 [providers.home.machines.mac]
 os = "macos"
-labels = ["a"]
+tools = ["a"]
 
 [providers.home.machines.win]
 os = "windows"
@@ -35,11 +35,11 @@ intervals = { scheduler = "5s" }
 		{"add a top-level key before the tables", []string{"poll_timeout"}, `"1m"`, `poll_timeout = "1m"
 # Home machines.
 `},
-		{"replace a key in a table", []string{"providers", "home", "machines", "mac", "labels"}, `["a", "b"]`, `os = "macos"
-labels = ["a", "b"]
+		{"replace a key in a table", []string{"providers", "home", "machines", "mac", "tools"}, `["a", "b"]`, `os = "macos"
+tools = ["a", "b"]
 `},
-		{"add a key to a table", []string{"providers", "home", "machines", "win", "labels"}, `["x"]`, `os = "windows"
-labels = ["x"]
+		{"add a key to a table", []string{"providers", "home", "machines", "win", "tools"}, `["x"]`, `os = "windows"
+tools = ["x"]
 `},
 		{"add a table at the end", []string{"providers", "home", "machines", "new", "os"}, `"linux"`, `os = "windows"
 

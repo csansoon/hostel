@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -43,12 +44,25 @@ type Slot struct {
 	Home        string
 }
 
-type RoomPlatform struct {
+// RoomTool is a row of the inventory of a room (room_tools).
+type RoomTool struct {
 	RoomID        int64
-	Platform      string
+	Tool          string
 	ScriptsSHA256 string
-	ProvisionedAt time.Time
+	State         string
+	// Option is what the check script reported: a version, or the options
+	// of a screen tool, comma-separated.
+	Option    string
+	Env       []string
+	CheckedAt time.Time
 }
+
+// Room tool states.
+const (
+	ToolInstalling = "installing"
+	ToolReady      = "ready"
+	ToolFailed     = "failed"
+)
 
 const roomColumns = `id, name, provider, machine, provider_ref, state, os, arch, home, shell, ssh_host_key,
 	helper_sha256, config_sha256, hardware, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at, last_seen_at`
@@ -113,7 +127,7 @@ func (s *Store) EnsureSlots(ctx context.Context, roomID int64, slots []string) e
 	return nil
 }
 
-// ResetRetiredRoom forgets the host key and the provisioned platforms of the
+// ResetRetiredRoom forgets the host key and the inventory of the
 // retired room of a machine: a machine that joins again with a code can be a
 // new host (the code proves it).
 func (s *Store) ResetRetiredRoom(ctx context.Context, provider, machine string) error {
@@ -129,7 +143,7 @@ func (s *Store) ResetRetiredRoom(ctx context.Context, provider, machine string) 
 		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET ssh_host_key = '', helper_sha256 = '', config_sha256 = '' WHERE id = ?`, id); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM room_platforms WHERE room_id = ?`, id)
+		_, err = tx.ExecContext(ctx, `DELETE FROM room_tools WHERE room_id = ?`, id)
 		return err
 	})
 }
@@ -289,31 +303,44 @@ func (s *Store) Slots(ctx context.Context) ([]Slot, error) {
 	return out, rows.Err()
 }
 
-// RoomPlatforms returns the room_platforms rows of all rooms.
-func (s *Store) RoomPlatforms(ctx context.Context) ([]RoomPlatform, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT room_id, platform, scripts_sha256, provisioned_at FROM room_platforms ORDER BY room_id, platform`)
+// RoomTools returns the inventory rows of all rooms.
+func (s *Store) RoomTools(ctx context.Context) ([]RoomTool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT room_id, tool, scripts_sha256, state, option, env, checked_at FROM room_tools ORDER BY room_id, tool`)
 	if err != nil {
-		return nil, fmt.Errorf("list room platforms: %w", err)
+		return nil, fmt.Errorf("list room tools: %w", err)
 	}
 	defer rows.Close()
-	var out []RoomPlatform
+	var out []RoomTool
 	for rows.Next() {
-		var rp RoomPlatform
+		var rt RoomTool
+		var env string
 		var at int64
-		if err := rows.Scan(&rp.RoomID, &rp.Platform, &rp.ScriptsSHA256, &at); err != nil {
+		if err := rows.Scan(&rt.RoomID, &rt.Tool, &rt.ScriptsSHA256, &rt.State, &rt.Option, &env, &at); err != nil {
 			return nil, err
 		}
-		rp.ProvisionedAt = time.UnixMilli(at)
-		out = append(out, rp)
+		if err := json.Unmarshal([]byte(env), &rt.Env); err != nil {
+			return nil, fmt.Errorf("room tool %s: env: %w", rt.Tool, err)
+		}
+		rt.CheckedAt = time.UnixMilli(at)
+		out = append(out, rt)
 	}
 	return out, rows.Err()
 }
 
-// SetRoomPlatform records that a room is ready for a platform with these scripts.
-func (s *Store) SetRoomPlatform(ctx context.Context, roomID int64, platform, sum string, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO room_platforms (room_id, platform, scripts_sha256, provisioned_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (room_id, platform) DO UPDATE SET scripts_sha256 = excluded.scripts_sha256, provisioned_at = excluded.provisioned_at`,
-		roomID, platform, sum, now.UnixMilli())
+// SetRoomTool writes the inventory row of a tool on a room.
+func (s *Store) SetRoomTool(ctx context.Context, rt RoomTool) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO room_tools (room_id, tool, scripts_sha256, state, option, env, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (room_id, tool) DO UPDATE SET scripts_sha256 = excluded.scripts_sha256, state = excluded.state,
+		option = excluded.option, env = excluded.env, checked_at = excluded.checked_at`,
+		rt.RoomID, rt.Tool, rt.ScriptsSHA256, rt.State, rt.Option, jsonText(nonNil(rt.Env)), rt.CheckedAt.UnixMilli())
+	return err
+}
+
+// RemoveRoomTools deletes the inventory rows of a room whose tool is not in
+// keep (tools that its machine no longer lists).
+func (s *Store) RemoveRoomTools(ctx context.Context, roomID int64, keep []string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM room_tools WHERE room_id = ? AND tool NOT IN (SELECT value FROM json_each(?))`,
+		roomID, jsonText(nonNil(keep)))
 	return err
 }
 
@@ -355,6 +382,32 @@ func (s *Store) SetProviderDeadline(ctx context.Context, id int64, deadline time
 }
 
 // SetWarmUntil records when an idle room stops or is destroyed (zero: not idle).
+// SetRoomReady records the first time that a room is running.
+func (s *Store) SetRoomReady(ctx context.Context, id int64, t time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET ready_at = ? WHERE id = ? AND ready_at IS NULL`, ms(t), id)
+	return err
+}
+
+// RecentCreationTimes returns the creation times (from the row to the first
+// running state) of the last n rooms of the machines.
+func (s *Store) RecentCreationTimes(ctx context.Context, machines []string, n int) ([]time.Duration, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT ready_at - created_at FROM rooms WHERE ready_at IS NOT NULL
+		AND provider || '/' || machine IN (SELECT value FROM json_each(?)) ORDER BY ready_at DESC LIMIT ?`, jsonText(nonNil(machines)), n)
+	if err != nil {
+		return nil, fmt.Errorf("read room creation times: %w", err)
+	}
+	defer rows.Close()
+	var out []time.Duration
+	for rows.Next() {
+		var d int64
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, time.Duration(d)*time.Millisecond)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetWarmUntil(ctx context.Context, id int64, t time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET warm_until = ? WHERE id = ?`, ms(t), id)
 	return err

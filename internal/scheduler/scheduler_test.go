@@ -13,23 +13,43 @@ import (
 
 var t0 = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 
-func static(key string, labels ...string) Machine {
-	return Machine{Key: key, Provider: "home", OS: "linux", Platforms: []string{"dev"}, Labels: labels,
+// haves gives each tool without known options.
+func haves(tools ...string) map[string]Have {
+	out := map[string]Have{}
+	for _, t := range tools {
+		out[t] = Have{}
+	}
+	return out
+}
+
+func wants(tools ...string) []Want {
+	var out []Want
+	for _, t := range tools {
+		out = append(out, Want{Name: t})
+	}
+	return out
+}
+
+func static(key string, tools ...string) Machine {
+	return Machine{Key: key, Provider: "home", Tools: haves(append([]string{"dev"}, tools...)...),
 		PoolPorts: 10, Slots: []string{"a"}, MaxRooms: 1, MaxLease: 2 * time.Hour}
 }
 
 func onDemand(key, provider string, maxRooms int) Machine {
-	return Machine{Key: key, Provider: provider, OnDemand: true, CanResume: true, OS: "linux",
-		Platforms: []string{"dev"}, PoolPorts: 10, Slots: []string{"a"}, MaxRooms: maxRooms, MaxLease: 2 * time.Hour}
+	return Machine{Key: key, Provider: provider, OnDemand: true, CanResume: true,
+		Tools: haves("dev"), PoolPorts: 10, Slots: []string{"a"}, MaxRooms: maxRooms, MaxLease: 2 * time.Hour}
 }
 
+// running is a room that gives every tool of the tests; ready says whether it
+// has installed them.
 func running(id int64, machine string, ready bool, slotState string) Room {
 	return Room{ID: id, Machine: machine, State: protocol.RoomRunning, CreatedAt: t0.Add(time.Duration(id) * time.Minute),
-		Ready: map[string]bool{"dev": ready, "linux": ready}, Slots: []Slot{{Name: "a", State: slotState, PoolPorts: 10}}}
+		Tools: haves("dev", "other", "solo", "only-a"),
+		Ready: map[string]bool{"dev": ready, "other": ready, "solo": ready, "only-a": ready}, Slots: []Slot{{Name: "a", State: slotState, PoolPorts: 10}}}
 }
 
 func lease(id string, prio int, age time.Duration) Lease {
-	return Lease{ID: id, Request: Request{Platform: "dev"}, Priority: prio, CreatedAt: t0.Add(-age)}
+	return Lease{ID: id, Request: Request{Tools: wants("dev")}, Priority: prio, CreatedAt: t0.Add(-age)}
 }
 
 func placed(l Lease, pos int) Lease {
@@ -105,7 +125,7 @@ func TestOptions(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			c.req.Platform = "dev"
+			c.req.Tools = wants("dev")
 			out := Schedule(Input{Now: t0, Machines: []Machine{m1, m2}, Providers: []Provider{{Name: "p"}},
 				Rooms: c.rooms, Leases: []Lease{{ID: "l", Request: c.req, Priority: 1, CreatedAt: t0}}})
 			a, ok := assigned(out)["l"]
@@ -152,22 +172,22 @@ func TestLifetime(t *testing.T) {
 
 func TestBlockedMachines(t *testing.T) {
 	machines := []Machine{static("home/m1"), static("home/m2")}
-	machines[1].Platforms = []string{"other"}
+	machines[1].Tools = haves("other")
 	rooms := []Room{running(1, "home/m1", true, protocol.SlotLeased), running(2, "home/m2", true, protocol.SlotFree)}
 	first := lease("first", 1, 3*time.Minute)
 	second := lease("second", 1, 2*time.Minute)
 	other := lease("other", 1, time.Minute)
-	other.Platform = "other"
+	other.Tools = wants("other")
 	out := Schedule(Input{Now: t0, Machines: machines, Rooms: rooms, Leases: []Lease{first, second, other}})
 	if a := assigned(out)["other"]; a.RoomID != 2 {
-		t.Fatalf("other platform: assignment = %+v, want room 2", a)
+		t.Fatalf("other tool: assignment = %+v, want room 2", a)
 	}
 	w := waiting(out)
 	if w["first"].Reason != ReasonNoSlot || w["first"].Position != 1 {
 		t.Errorf("first = %+v, want position 1, %q", w["first"], ReasonNoSlot)
 	}
-	if w["second"].Reason != ReasonEarlierLease || w["second"].Position != 2 {
-		t.Errorf("second = %+v, want position 2, %q", w["second"], ReasonEarlierLease)
+	if w["second"].Reason != ReasonEarlierLease || w["second"].Position != 2 || w["second"].Behind != 1 {
+		t.Errorf("second = %+v, want position 2, behind 1, %q", w["second"], ReasonEarlierLease)
 	}
 }
 
@@ -175,11 +195,11 @@ func TestBlockedMachineKeepsLaterLeaseOff(t *testing.T) {
 	// "dev" can use m1 or m2; "solo" only m2. Both rooms are busy, so nothing
 	// is assigned. When m2 is free, the lease that comes first in the order gets it.
 	m1, m2 := static("home/m1"), static("home/m2")
-	m2.Platforms = []string{"dev", "solo"}
+	m2.Tools = haves("dev", "solo")
 	rooms := []Room{running(1, "home/m1", true, protocol.SlotLeased), running(2, "home/m2", true, protocol.SlotLeased)}
 	dev := lease("dev", 1, 2*time.Minute)
 	solo := lease("solo", 2, time.Minute)
-	solo.Platform = "solo"
+	solo.Tools = wants("solo")
 	out := Schedule(Input{Now: t0, Machines: []Machine{m1, m2}, Rooms: rooms, Leases: []Lease{dev, solo}})
 	if len(out.Assignments) != 0 {
 		t.Fatalf("assignments = %+v, want none", out.Assignments)
@@ -203,29 +223,58 @@ func TestBlockedMachineKeepsLaterLeaseOff(t *testing.T) {
 }
 
 func TestCandidates(t *testing.T) {
-	a := static("home/a", "xcode", "desktop")
+	a := static("home/a", "xcode", "macos-desktop")
+	a.Tools["node"] = Have{Options: []string{"22.11.0", "20.18.1"}, Checked: true}
+	a.Tools["screen"] = Have{Screen: true, Options: []string{"phone", "tablet"}}
 	b := static("home/b", "xcode")
 	b.PoolPorts = 1
+	b.Tools["node"] = Have{Options: []string{"22"}}
 	c := onDemand("p/c", "p", 1)
-	c.OS = "macos"
 	machines := []Machine{a, b, c}
 	cases := []struct {
 		name string
 		req  Request
 		want []string
 	}{
-		{"device platform", Request{Platform: "dev"}, []string{"home/a", "home/b", "p/c"}},
-		{"labels", Request{Platform: "dev", Labels: []string{"xcode"}}, []string{"home/a", "home/b"}},
-		{"two labels", Request{Platform: "dev", Labels: []string{"xcode", "desktop"}}, []string{"home/a"}},
-		{"os platform", Request{Platform: "macos", PlatformOS: true}, []string{"p/c"}},
-		{"pool ports", Request{Platform: "dev", PoolTunnels: 2}, []string{"home/a", "p/c"}},
-		{"fresh", Request{Platform: "dev", Fresh: true}, []string{"p/c"}},
-		{"unknown label", Request{Platform: "dev", Labels: []string{"kvm"}}, nil},
+		{"no tools: every machine", Request{}, []string{"home/a", "home/b", "p/c"}},
+		{"tool", Request{Tools: wants("dev")}, []string{"home/a", "home/b", "p/c"}},
+		{"tool of two machines", Request{Tools: wants("xcode")}, []string{"home/a", "home/b"}},
+		{"tools together", Request{Tools: wants("xcode", "macos-desktop")}, []string{"home/a"}},
+		{"a version prefix", Request{Tools: []Want{{"node", "22"}}}, []string{"home/a", "home/b"}},
+		{"a longer version: inventory, and a configured version that can give it", Request{Tools: []Want{{"node", "22.11"}}}, []string{"home/a", "home/b"}},
+		{"a version prefix by parts", Request{Tools: []Want{{"node", "2"}}}, nil},
+		{"two versions", Request{Tools: []Want{{"node", "20"}, {"node", "22"}}}, []string{"home/a"}},
+		{"a screen option", Request{Tools: []Want{{"screen", "tablet"}}}, []string{"home/a"}},
+		{"a screen option matches exactly", Request{Tools: []Want{{"screen", "tab"}}}, nil},
+		{"pool ports", Request{Tools: wants("dev"), PoolTunnels: 2}, []string{"home/a", "p/c"}},
+		{"fresh", Request{Tools: wants("dev"), Fresh: true}, []string{"p/c"}},
+		{"unknown tool", Request{Tools: wants("kvm")}, nil},
 	}
 	for _, c := range cases {
 		if got := Candidates(machines, c.req); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: Candidates = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestRoomTools(t *testing.T) {
+	// The machine says node 22 (configured); the room's inventory has 22.11.0
+	// only, so a lease for node:22.12 cannot use it.
+	m := static("home/m")
+	m.Tools["node"] = Have{Options: []string{"22"}}
+	r := running(1, "home/m", true, protocol.SlotFree)
+	r.Tools["node"] = Have{Options: []string{"22.11.0"}, Checked: true}
+	r.Ready["node"] = true
+	l := lease("l", 1, 0)
+	l.Tools = []Want{{"node", "22.12"}}
+	out := Schedule(Input{Now: t0, Machines: []Machine{m}, Rooms: []Room{r}, Leases: []Lease{l}})
+	if len(out.Assignments) != 0 {
+		t.Fatalf("assignments = %+v, want none", out.Assignments)
+	}
+	l.Tools = []Want{{"node", "22.11"}}
+	out = Schedule(Input{Now: t0, Machines: []Machine{m}, Rooms: []Room{r}, Leases: []Lease{l}})
+	if a := assigned(out)["l"]; a.RoomID != 1 || a.Action != UseRoom {
+		t.Fatalf("assignment = %+v, want room 1", a)
 	}
 }
 
@@ -398,12 +447,12 @@ func TestEvictionNeedsAllLimits(t *testing.T) {
 	// limit. An idle room of p/b frees the provider limit only, so nothing is
 	// evicted; an idle room of p/a frees both.
 	a, b := onDemand("p/a", "p", 1), onDemand("p/b", "p", 1)
-	a.Platforms = []string{"only-a"}
+	a.Tools = haves("only-a")
 	providers := []Provider{{Name: "p", MaxRooms: 2}}
 	busyA := running(1, "p/a", true, protocol.SlotLeased)
 	idleB := running(2, "p/b", true, protocol.SlotFree)
 	l := lease("l", 1, 0)
-	l.Platform = "only-a"
+	l.Tools = wants("only-a")
 	out := Schedule(Input{Now: t0, Machines: []Machine{a, b}, Providers: providers, Rooms: []Room{busyA, idleB}, Leases: []Lease{l}})
 	if len(out.Evict) != 0 {
 		t.Fatalf("evict = %v, want none", out.Evict)
@@ -436,37 +485,42 @@ func TestEvictedRoomIsNotUsed(t *testing.T) {
 	}
 }
 
-func TestPositionsArePerPlatform(t *testing.T) {
+func TestOneWaitingLine(t *testing.T) {
+	// One line for all leases; "behind" counts only the earlier leases that
+	// share a machine.
 	m := static("home/m")
-	m.Platforms = []string{"dev", "other"}
-	rooms := []Room{running(1, "home/m", true, protocol.SlotLeased)}
+	m.Tools = haves("dev", "other")
+	n := static("home/n")
+	n.Tools = haves("solo")
+	rooms := []Room{running(1, "home/m", true, protocol.SlotLeased), running(2, "home/n", true, protocol.SlotLeased)}
 	a, b, c := lease("a", 1, 3*time.Minute), lease("b", 1, 2*time.Minute), lease("c", 1, time.Minute)
-	b.Platform = "other"
-	out := Schedule(Input{Now: t0, Machines: []Machine{m}, Rooms: rooms, Leases: []Lease{a, b, c}})
+	b.Tools = wants("solo")
+	out := Schedule(Input{Now: t0, Machines: []Machine{m, n}, Rooms: rooms, Leases: []Lease{a, b, c}})
 	w := waiting(out)
-	if w["a"].Position != 1 || w["b"].Position != 1 || w["c"].Position != 2 {
-		t.Fatalf("positions = %+v, want a=1, b=1 (other platform), c=2", out.Waiting)
+	if w["a"].Position != 1 || w["b"].Position != 2 || w["c"].Position != 3 {
+		t.Fatalf("positions = %+v, want a=1, b=2, c=3", out.Waiting)
+	}
+	if w["a"].Behind != 0 || w["b"].Behind != 0 || w["c"].Behind != 1 {
+		t.Fatalf("behind = %+v, want a=0, b=0 (another machine), c=1", out.Waiting)
 	}
 }
 
-func TestOrderPlatforms(t *testing.T) {
-	a := func(id, platform string, prio int, age time.Duration, placed int) Lease {
-		return Lease{ID: id, Request: Request{Platform: platform}, Priority: prio, CreatedAt: t0.Add(-age), ManualPosition: placed}
+func TestOrderOneLine(t *testing.T) {
+	a := func(id string, prio int, age time.Duration, placed int) Lease {
+		return Lease{ID: id, Priority: prio, CreatedAt: t0.Add(-age), ManualPosition: placed}
 	}
 	leases := []Lease{
-		a("ios-old", "ios", protocol.PriorityNormal, time.Hour, 0),
-		a("ios-placed", "ios", protocol.PriorityLow, time.Minute, 1),
-		a("mac", "macos", protocol.PriorityNormal, 30*time.Minute, 0),
-		a("mac-high", "macos", protocol.PriorityHigh, time.Second, 0),
+		a("old", protocol.PriorityNormal, time.Hour, 0),
+		a("placed", protocol.PriorityLow, time.Minute, 1),
+		a("normal", protocol.PriorityNormal, 30*time.Minute, 0),
+		a("high", protocol.PriorityHigh, time.Second, 0),
 	}
 	Order(leases)
 	var got []string
 	for _, l := range leases {
 		got = append(got, l.ID)
 	}
-	// Inside ios the placed lease is first; it does not pass the macOS queue,
-	// whose first lease is high.
-	want := []string{"mac-high", "mac", "ios-placed", "ios-old"}
+	want := []string{"placed", "high", "old", "normal"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}

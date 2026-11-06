@@ -8,9 +8,9 @@ description: Find and fix Hostel problems - rooms that are Broken, Offline, Gett
 Start with the facts:
 
 ```sh
-hostel status                  # all rooms, leases, and queues
-hostel status mac-mini         # one room: hardware, leases, jobs, queue, events, room ID
-hostel status ios              # one platform's queue, with the reason of each lease
+hostel status                  # all rooms, leases, and the waiting line
+hostel status mac-mini         # one room: hardware, inventory, leases, jobs, waiting leases, events, room ID
+hostel status ios-simulator    # the waiting leases for one tool, with the reason of each lease
 hostel config rooms            # machines with their rooms and states
 ```
 
@@ -23,7 +23,7 @@ details.
 |---|---|---|---|
 | Vacant | `free` | Ready for a new lease. | Nothing. |
 | Occupied | `in use` | A lease uses it. | Wait, or an admin ends the lease (`hostel release <lease-id>`). |
-| Getting ready | `creating`, `provisioning` | The server creates the room, uploads the helper, installs tools, or runs `provision`. A first Android provision takes up to 30 minutes. | Wait. Read the events with `hostel status <room>`. |
+| Getting ready | `creating`, `provisioning` | The server creates the room, uploads the helper, installs tools, or runs the `install` and `check` scripts. A first Android install takes up to 30 minutes. | Wait. Read the events with `hostel status <room>`. |
 | No new leases | `..., drained` | An admin drained it. Current leases continue. | `hostel config rooms undrain <machine>`. |
 | Broken | `broken` | A script, cleanup, or provisioning failed, or the host key changed. The reason is shown. | Fix the cause, then repair (below). |
 | Offline | `offline (last seen ...)` | A static room did not answer the presence check. | Make the machine reachable. It comes back by itself. |
@@ -44,7 +44,7 @@ hostel config rooms repair mac-mini
 ```
 
 Repair runs cleanup again for each broken or dirty slot, restores
-`authorized_keys`, runs the `health` scripts, and sets the room to running if
+`authorized_keys`, runs the `check` scripts, and sets the room to running if
 all pass.
 
 **Host key changed.** The server pins each room's SSH host key. A new key (a
@@ -78,14 +78,14 @@ provisions it again and it becomes Vacant. Check:
 
 | Symptom | Cause | Do |
 |---|---|---|
-| `acquire` exits 75 | Not finished: queued or preparing. | Run the same command again. |
-| Exit 69, `no machine can serve platform ...` | No machine has the platform, device, labels, tunnel ports, or (with `--fresh`) is on demand. | `hostel platforms`; check `--device`, `--require`, and `requires` in `hostel.toml`. An admin adds a machine or label (`hostel-rooms`). |
+| `acquire` exits 75 | Not finished: waiting or preparing. | Run the same command again. |
+| Exit 69, `no machine has ...` | No machine has the tool, the option, all requested tools together, the tunnel ports, or (with `--fresh`) is on demand. The message names the machines that have each tool. | `hostel tools`; check the tools on the command line and `tools` in `hostel.toml`. An admin adds the tool to a machine (`hostel-rooms`, `hostel-tools`). |
 | Exit 78, `this computer is not connected to a Hostel server` | No connection. | The user runs `hostel connect <invite code>` (`hostel-install`). Agents must not do this. |
-| The lease waits for a long time | All candidate rooms are in use, broken, offline, or drained, or a provider limit is full. | `hostel status <platform>` shows the position and reason. |
+| The lease waits for a long time | All candidate rooms are in use, broken, offline, or drained, or a provider limit is full. | `hostel status <tool>` shows the position and reason. |
 | `acquire` exits 1 after the lease is ready | The setup job (`mise install` or `setup`) failed. The lease stays. | Fix the code; `hostel sync --setup`. |
 | `job <id> is still running` (exit 75) | The command is longer than `--wait`. | `hostel attach <id>`. Never start the job again. |
 | The lease ended | Release, `idle_timeout` (10 min without a `hostel` command), `max_lease` (2 h), an admin, or a room failure. | The guest prints the end reason. Acquire again. |
-| A lease fails after 3 attempts | Provisioning or `prepare` failed 3 times. | Read the events of the room; fix the platform or machine. |
+| A lease fails after 3 attempts | Provisioning or a tool's `start` failed 3 times. | Read the events of the room; fix the tool or machine. |
 
 ## Connection and TLS errors
 
@@ -110,7 +110,12 @@ provisions it again and it becomes Vacant. Check:
 - **`only an admin can change the configuration`**: ask an admin, or an admin
   changes your role (`hostel-users`).
 - **A configuration change is refused**: another revision came first (run
-  `hostel config edit` again), or the error names the invalid key path.
+  `hostel config edit` again), or the error names the invalid key path. The
+  keys before M10e (`platforms`, `labels`, `requires`, a `tools` map) are
+  errors: machines list tools (`hostel-rooms`).
+- **The server runs without providers and machines** after an update: the
+  stored configuration has the form before M10e. `hostel status` shows the
+  warning. Write it again with tools: `hostel config edit`.
 
 ## Namespace
 

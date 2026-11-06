@@ -1,4 +1,0 @@
-description = "iOS Simulator"
-devices = ["iphone-17-pro", "ipad-pro-13"]
-max_devices = 2
-requires = ["xcode-26.5"]

@@ -36,10 +36,6 @@ func windowsSmoke(t *testing.T, agentDevice bool, machineKeys string, files func
 	if err != nil {
 		t.Fatal(err)
 	}
-	platforms, err := filepath.Abs("../../platforms")
-	if err != nil {
-		t.Fatal(err)
-	}
 	e := newEnv(t)
 	e.writeFile(filepath.Join(e.dataDir(), "server_ed25519"), string(key))
 	e.writeFile(filepath.Join(e.dataDir(), "server_ed25519.pub"), string(pub))
@@ -47,15 +43,14 @@ func windowsSmoke(t *testing.T, agentDevice bool, machineKeys string, files func
 		t.Fatal(err)
 	}
 	e.init()
-	e.writeConfig(serverHeaderWith(agentDevice) + fmt.Sprintf(`platforms_dir = %q
-
+	e.writeConfig(serverHeaderWith(agentDevice) + fmt.Sprintf(`
 [providers.home]
 kind = "static"
 
 [providers.home.machines.win]
 address = %q
 os = "windows"
-%s`, platforms, addr, machineKeys))
+%s`, addr, machineKeys))
 	// serverHeader sets helper_dir to the E2E helpers; this test needs dist.
 	cfg, err := os.ReadFile(filepath.Join(e.configDir(), "server.toml"))
 	if err != nil {
@@ -91,7 +86,7 @@ func TestSmokeWindows(t *testing.T) {
 	acquire := func() {
 		start := time.Now()
 		for {
-			r := e.hostel("acquire", "windows", "--task", "windows smoke test", "--wait", "1m")
+			r := e.hostel("acquire", "--task", "windows smoke test", "--wait", "1m")
 			if r.code == 0 {
 				t.Logf("lease ready after %s", time.Since(start).Round(time.Second))
 				return

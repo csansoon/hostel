@@ -2,7 +2,8 @@
 
 Status: approved by the owner (2026-10-30). Milestones M8 to M10 in `plan.md`
 build it; each milestone moves its part into `design.md`. Owner decisions:
-`requirements.md`, section 3, 2026-10-30.
+`requirements.md`, section 3, 2026-10-30. History: since M10e, tools replace the
+platforms of this file (`m10e-implementation.md`); `design.md` is current.
 
 ## 1. Goals
 

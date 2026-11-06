@@ -6,8 +6,8 @@ Hostel exists, how it is typically used, and what was tried before.
 ## Why Hostel exists
 
 Many coding agents can work on the same app at the same time, each in its own git
-worktree. They need builds, UI QA, and device tests on iOS, Android, macOS,
-Windows, and Linux. One developer often works on several apps at the same time.
+worktree. They need builds, UI QA, and tests on simulators, emulators, and desktops for
+iOS, Android, macOS, Windows, and Linux. One developer often works on several apps at the same time.
 
 On one developer machine, these agents share one iOS Simulator, one Android
 emulator or USB device, and the local services. A local lock tool makes them take
@@ -29,11 +29,12 @@ it needs from Hostel:
 
 - **The local API:** each worktree runs its own API on its own port; the app on
   the room reaches it through a tunnel (`hostel.toml`, `[tunnels.api]`).
-- **iOS:** an Xcode build for a simulator (the `ios` platform, with a label for
-  the Xcode version), install, launch, sign-in through the local API, and
-  screenshots.
-- **Android:** a Gradle build with JDK 21 and the Android SDK, and the emulator
-  (the `android` platform).
+- **iOS:** an Xcode build for a simulator (the tools `xcode` and
+  `ios-simulator`, with an option for the Xcode version), install, launch,
+  sign-in through the local API, and screenshots.
+- **Android:** a Gradle build with JDK 21 and the Android SDK (the tools `jdk:21`
+  and `android-sdk`, without an emulator), and QA on the emulator (the tool
+  `android-emulator`).
 
 ## History
 

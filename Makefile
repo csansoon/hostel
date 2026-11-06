@@ -27,11 +27,10 @@ dist:
 release: dist
 	rm -rf dist/release && mkdir dist/release
 	cp dist/hostel-* dist/mise-* dist/release/
-	COPYFILE_DISABLE=1 tar -czf dist/release/hostel-platforms.tar.gz platforms
 	cd dist/release && for f in *; do printf '%s  %s\n' "$$(shasum -a 256 $$f | cut -d' ' -f1)" "$$f"; done > ../SHA256SUMS && mv ../SHA256SUMS .
 	@# The release workflow signs SHA256SUMS (m10d-implementation.md); a local
 	@# release without the key has no signature.
-	if [ -n "$${HOSTEL_RELEASE_KEY:-}" ]; then $(GO) run ./tools/signrelease $(VERSION) dist/release/SHA256SUMS > dist/release/SHA256SUMS.sig; fi
+	if [ -n "$${HOSTEL_RELEASE_KEY:-}" ]; then $(GO) run ./cmd/signrelease $(VERSION) dist/release/SHA256SUMS > dist/release/SHA256SUMS.sig; fi
 
 mise:
 	./build/fetch-mise.sh $(MISE_VERSION) build/mise-checksums.txt dist
@@ -44,7 +43,7 @@ lint:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) vet -tags e2e ./...
 	GOOS=windows $(GO) vet ./...
-	shellcheck install.sh platforms/*/*.sh test/platforms/*/*.sh
+	shellcheck install.sh tools/*/*.sh test/tools/*/*.sh
 
 test-unit:
 	$(GO) test ./...

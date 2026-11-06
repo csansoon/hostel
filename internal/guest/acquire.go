@@ -51,24 +51,27 @@ func notFinished(stderr io.Writer) int {
 	return ExitNotFinished
 }
 
-// Acquire is "hostel acquire <platform> --task ...". It is resumable: each step
-// records its result in the local state, and the same command continues.
+// Acquire is "hostel acquire [<tool[:option]>...] --task ...". It is
+// resumable: each step records its result in the local state, and the same
+// command continues. A worktree has one lease (design, section 10).
 func Acquire(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel acquire", stderr)
 	task := fs.String("task", "", "what the lease is for (required)")
-	var devices, require cli.StringList
-	fs.Var(&devices, "device", "device to use (repeat for several)")
 	priority := fs.String("priority", "normal", "low, normal, or high; change it only when the user asks for it")
-	fs.Var(&require, "require", "label that the machine must have (repeat for several)")
 	fresh := fs.Bool("fresh", false, "use a new room with empty caches")
 	wait := fs.Duration("wait", 100*time.Second, "time to wait before returning; then run the same command again")
-	background := fs.Bool("background", false, "return at once and keep the place in the queue in the background; run the same command again to continue")
+	background := fs.Bool("background", false, "return at once and keep the place in the waiting line in the background; run the same command again to continue")
 	pos, err := cli.Parse(fs, args)
-	if err != nil || len(pos) != 1 {
-		fmt.Fprintln(stderr, "hostel: usage: hostel acquire <platform> --task \"...\" [--device d]... [--priority low|normal|high] [--require label]... [--fresh] [--wait 100s] [--background]")
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel: usage: hostel acquire [<tool[:option]>...] --task \"...\" [--priority low|normal|high] [--fresh] [--wait 100s] [--background]")
 		return ExitUsage
 	}
-	platform := pos[0]
+	for _, raw := range pos {
+		if _, err := config.ParseToolEntry(raw); err != nil {
+			fmt.Fprintln(stderr, "hostel:", err)
+			return ExitUsage
+		}
+	}
 	deadline := time.Now().Add(*wait)
 	ctx := context.Background()
 
@@ -84,23 +87,31 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	st, ok, err := repo.LoadState(platform)
+	st, ok, err := repo.LoadState()
 	if err != nil {
 		return fail(stderr, err)
 	}
+	tools := pos
+	if len(tools) == 0 {
+		tools = rc.Tools
+	}
 	if ok && !st.Final {
-		warnDifferences(st, *task, *priority, devices, require, *fresh, stderr)
+		if len(pos) > 0 && !sameTools(pos, st.Tools) {
+			return fail(stderr, fmt.Errorf("this worktree has the lease %s (%s); release it first (hostel release), or use another worktree (git worktree add)",
+				st.LeaseID, toolsText(st.Tools)))
+		}
+		warnDifferences(st, *task, *priority, *fresh, stderr)
 	} else {
 		if strings.TrimSpace(*task) == "" {
 			fmt.Fprintln(stderr, "hostel: --task is required: describe what the lease is for")
 			return ExitUsage
 		}
-		code, err := createLease(ctx, api, repo, rc, st, platform, *task, *priority, devices, require, *fresh)
+		code, err := createLease(ctx, api, repo, rc, st, tools, *task, *priority, *fresh)
 		if err != nil {
 			fmt.Fprintln(stderr, "hostel:", err)
 			return code
 		}
-		fmt.Fprintf(stderr, "hostel: lease %s created for %s\n", st.LeaseID, platform)
+		fmt.Fprintf(stderr, "hostel: lease %s created for %s\n", st.LeaseID, toolsText(tools))
 	}
 	l := &lease{repo: repo, st: st, api: api, background: *background}
 
@@ -133,7 +144,7 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		{StepPorts, func() (int, error) { return 0, startTunnels(st, rc, deadline) }},
 		{StepSynced, func() (int, error) { _, err := syncFiles(ctx, st, repo, rc, stderr); return 0, err }},
 		{StepSetup, func() (int, error) {
-			return runSetup(ctx, l, setupCommand(rc, platform, st.Access.RoomOS, true), deadline, stderr)
+			return runSetup(ctx, l, setupCommand(rc, st.leaseTools(), st.Access.RoomOS, true), deadline, stderr)
 		}},
 	}
 	order := []string{StepCreated, StepEnv, StepPorts, StepSynced, StepSetup, StepDone}
@@ -163,23 +174,32 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 	if err := st.Save(); err != nil {
 		return fail(stderr, err)
 	}
-	printSummary(st, rc, stdout)
+	printFacts(st, rc, stdout)
 	return 0
 }
 
-func warnDifferences(st *State, task, priority string, devices, require []string, fresh bool, stderr io.Writer) {
+// sameTools reports whether two requests have the same tools (in any order).
+func sameTools(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(slices.Compact(a), slices.Compact(b))
+}
+
+func toolsText(tools []string) string {
+	if len(tools) == 0 {
+		return "any machine"
+	}
+	return strings.Join(tools, " ")
+}
+
+func warnDifferences(st *State, task, priority string, fresh bool, stderr io.Writer) {
 	var diffs []string
 	if task != "" && task != st.Task {
 		diffs = append(diffs, "--task")
 	}
 	if priority != st.Priority {
 		diffs = append(diffs, "--priority")
-	}
-	if len(devices) > 0 && !slices.Equal(devices, st.Devices) {
-		diffs = append(diffs, "--device")
-	}
-	if !slices.Equal(require, st.Require) {
-		diffs = append(diffs, "--require")
 	}
 	if fresh != st.Fresh {
 		diffs = append(diffs, "--fresh")
@@ -190,27 +210,18 @@ func warnDifferences(st *State, task, priority string, devices, require []string
 	}
 }
 
-func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config.Repo, st *State, platform, task, priority string,
-	devices, require []string, fresh bool) (int, error) {
+func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config.Repo, st *State, tools []string, task, priority string,
+	fresh bool) (int, error) {
 	pub, err := st.NewKey()
 	if err != nil {
 		return ExitError, err
-	}
-	rp := rc.Platforms[platform]
-	if rp == nil {
-		rp = &config.RepoPlatform{}
-	}
-	reqDevices := []string(devices)
-	if len(reqDevices) == 0 {
-		reqDevices = rp.Devices
 	}
 	var tunnels []protocol.TunnelRequest
 	for _, name := range rc.TunnelNames() {
 		tunnels = append(tunnels, protocol.TunnelRequest{Name: name, RoomPort: rc.Tunnels[name].RoomPort})
 	}
 	host, _ := os.Hostname()
-	req := protocol.CreateLeaseRequest{Platform: platform, Devices: reqDevices, Task: task, Priority: priority,
-		RequiredLabels: append(slices.Clone(rp.Requires), require...), Tunnels: tunnels, Fresh: fresh, PublicKey: pub,
+	req := protocol.CreateLeaseRequest{Tools: tools, Task: task, Priority: priority, Tunnels: tunnels, Fresh: fresh, PublicKey: pub,
 		GuestHost: host, Repo: filepath.Base(repo.Root), Worktree: repo.Root, Branch: currentBranch(repo.Root)}
 	var l protocol.Lease
 	if err := api.Do(ctx, "POST", "/v1/leases", req, &l); err != nil {
@@ -220,8 +231,8 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 		}
 		return ExitError, err
 	}
-	*st = State{Dir: st.Dir, LeaseID: l.ID, Platform: platform, Root: repo.Root, Task: task, Priority: priority,
-		Devices: devices, Require: require, Fresh: fresh, Step: StepCreated}
+	*st = State{Dir: st.Dir, LeaseID: l.ID, Tools: l.Tools, Root: repo.Root, Task: task, Priority: priority,
+		Fresh: fresh, Step: StepCreated}
 	return 0, st.Save()
 }
 
@@ -290,7 +301,7 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 		}
 		switch {
 		case lease.State == protocol.LeaseReady:
-			l.st.Access = lease.Access
+			l.st.Access, l.st.Started, l.st.Machine = lease.Access, lease.Started, lease.Provider+"/"+lease.Machine
 			if err := l.st.Save(); err != nil {
 				return fail(stderr, err)
 			}
@@ -342,7 +353,7 @@ func describe(l protocol.Lease) string {
 			s += " (" + l.Reason + ")"
 		}
 		if l.Position > 0 {
-			s += ", estimated wait " + FormatWait(l.EstimatedWaitSeconds)
+			s += fmt.Sprintf(", waiting behind %d leases, estimated wait %s", l.WaitingBehind, FormatWait(l.EstimatedWaitSeconds))
 		}
 	}
 	if l.Machine != "" && l.State != protocol.LeaseQueued {
@@ -351,13 +362,11 @@ func describe(l protocol.Lease) string {
 	return s
 }
 
-// leaseEnv computes lease.env: the repository platform env with the tunnel
-// ports, and HOSTEL_TUNNEL_<NAME>_PORT for each tunnel.
-func leaseEnv(platform string, rc *config.Repo, ports map[string]int) map[string]string {
-	env := map[string]string{}
-	if rp := rc.Platforms[platform]; rp != nil {
-		env = config.ExpandEnv(rp.Env, ports)
-	}
+// leaseEnv computes lease.env: the repository env for the lease's tools with
+// the tunnel ports, and HOSTEL_TUNNEL_<NAME>_PORT for each tunnel.
+func leaseEnv(tools []string, rc *config.Repo, ports map[string]int) map[string]string {
+	_, repoEnv := rc.LeaseSetup(tools)
+	env := config.ExpandEnv(repoEnv, ports)
 	for name, port := range ports {
 		env["HOSTEL_TUNNEL_"+strings.ToUpper(strings.ReplaceAll(name, "-", "_"))+"_PORT"] = fmt.Sprint(port)
 	}
@@ -370,7 +379,7 @@ func setLeaseEnv(ctx context.Context, st *State, rc *config.Repo) error {
 		return err
 	}
 	defer conn.Close()
-	return conn.Helper(ctx, []string{"set-env"}, map[string]any{"env": leaseEnv(st.Platform, rc, st.Access.TunnelPorts)}, nil)
+	return conn.Helper(ctx, []string{"set-env"}, map[string]any{"env": leaseEnv(st.leaseTools(), rc, st.Access.TunnelPorts)}, nil)
 }
 
 // miseFiles are the files that make the setup job run "mise install" again.
@@ -378,11 +387,11 @@ var miseFiles = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.lo
 	".nvmrc", ".python-version", ".config/mise.toml", ".config/mise/config.toml", "mise/config.toml", ".mise/config.toml"}
 
 // setupCommand returns the setup job: "mise install" (unless mise = false) and,
-// with full, the repository setup commands of the platform. The first failure
-// stops the job.
-func setupCommand(rc *config.Repo, platform, roomOS string, full bool) string {
+// with full, the repository setup commands for the lease's tools. The first
+// failure stops the job.
+func setupCommand(rc *config.Repo, tools []string, roomOS string, full bool) string {
 	if roomOS == config.OSWindows {
-		return setupCommandPS(rc, platform, full)
+		return setupCommandPS(rc, tools, full)
 	}
 	var parts []string
 	if rc.MiseEnabled() {
@@ -390,8 +399,9 @@ func setupCommand(rc *config.Repo, platform, roomOS string, full bool) string {
 		// have the tools that this "mise install" adds.
 		parts = append(parts, `mise install`, `PATH="$(mise bin-paths | tr '\n' ':')$PATH"`)
 	}
-	if rp := rc.Platforms[platform]; full && rp != nil {
-		for _, c := range rp.Setup {
+	if full {
+		setup, _ := rc.LeaseSetup(tools)
+		for _, c := range setup {
 			parts = append(parts, "("+c+")")
 		}
 	}
@@ -400,14 +410,15 @@ func setupCommand(rc *config.Repo, platform, roomOS string, full bool) string {
 
 // setupCommandPS is setupCommand for PowerShell, which the helper uses on
 // Windows. Windows PowerShell 5.1 has no "&&".
-func setupCommandPS(rc *config.Repo, platform string, full bool) string {
+func setupCommandPS(rc *config.Repo, tools []string, full bool) string {
 	const stop = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
 	var parts []string
 	if rc.MiseEnabled() {
 		parts = append(parts, "mise install"+stop, `$env:PATH = ((mise bin-paths) -join ';') + ';' + $env:PATH`)
 	}
-	if rp := rc.Platforms[platform]; full && rp != nil {
-		for _, c := range rp.Setup {
+	if full {
+		setup, _ := rc.LeaseSetup(tools)
+		for _, c := range setup {
 			parts = append(parts, c+stop)
 		}
 	}
@@ -456,20 +467,56 @@ func runSetup(ctx context.Context, l *lease, cmd string, deadline time.Time, std
 	return 0, nil
 }
 
-func printSummary(st *State, rc *config.Repo, w io.Writer) {
+// printFacts prints the lease facts (design, section 10): the machine, its
+// OS and hardware, all its tools with their options and environment names,
+// the screen tools that started, and the next commands.
+func printFacts(st *State, rc *config.Repo, w io.Writer) {
 	a := st.Access
-	fmt.Fprintf(w, "Lease %s is ready.\n", st.LeaseID)
-	fmt.Fprintf(w, "  platform:   %s", st.Platform)
-	if len(st.Devices) > 0 {
-		fmt.Fprintf(w, " (devices: %s)", strings.Join(st.Devices, ", "))
+	fmt.Fprintf(w, "Lease %s is ready on %s.\n", st.LeaseID, st.Machine)
+	machine := a.RoomOS
+	if a.Hardware != nil && a.Hardware.OSVersion != "" {
+		machine += " " + a.Hardware.OSVersion
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  room:       %s/%s, slot %s\n", a.RoomOS, a.RoomArch, a.Slot)
+	machine += " (" + a.RoomArch + ")"
+	if hw := a.Hardware; hw != nil {
+		if hw.Cores > 0 {
+			machine += fmt.Sprintf(", %d cores", hw.Cores)
+		}
+		if hw.MemoryBytes > 0 {
+			machine += fmt.Sprintf(", %d GB", (hw.MemoryBytes+1<<29)>>30)
+		}
+	}
+	fmt.Fprintf(w, "  machine:    %s\n", machine)
+	var tools, screens []string
+	for _, t := range a.Tools {
+		if t.Screen {
+			screens = append(screens, t.Name)
+			continue
+		}
+		tools = append(tools, toolFact(t.Name, t.Options, t.Env))
+	}
+	if len(tools) == 0 {
+		tools = []string{"-"}
+	}
+	fmt.Fprintf(w, "  tools:      %s\n", strings.Join(tools, " · "))
+	var started []string
+	for _, s := range st.Started {
+		started = append(started, toolFact(s.Name, s.Options, s.Facts))
+	}
+	switch {
+	case len(started) > 0:
+		fmt.Fprintf(w, "  started:    %s\n", strings.Join(started, " · "))
+	case len(screens) > 0:
+		fmt.Fprintf(w, "  started:    -   (no screen tools; add %s to get one)\n", strings.Join(screens, " or "))
+	default:
+		fmt.Fprintf(w, "  started:    -   (this machine has no screen tools)\n")
+	}
+	fmt.Fprintf(w, "  slot:       %s\n", a.Slot)
 	fmt.Fprintf(w, "  work dir:   %s\n", a.WorkDir)
 	fmt.Fprintf(w, "  expires:    %s at the latest; without activity at %s (each hostel command extends it)\n",
 		a.ExpiresAt.Local().Format(time.DateTime), a.IdleExpiresAt.Local().Format(time.DateTime))
 	tunnels, _ := loadTunnels(st)
-	env := leaseEnv(st.Platform, rc, tunnelPorts(tunnels))
+	env := leaseEnv(st.leaseTools(), rc, tunnelPorts(tunnels))
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
 		for k := range env {
@@ -481,5 +528,21 @@ func printSummary(st *State, rc *config.Repo, w io.Writer) {
 			fmt.Fprintf(w, "    %s=%s\n", k, env[k])
 		}
 	}
-	fmt.Fprintln(w, "Next: hostel run -- <command>   hostel sync   hostel screenshot   hostel release")
+	next := "Next: hostel run -- <command>   hostel sync   hostel release"
+	if len(st.Started) > 0 {
+		next = "Next: hostel run -- <command>   hostel sync   hostel screenshot   hostel release"
+	}
+	fmt.Fprintln(w, next)
+}
+
+// toolFact is "name options (environment names)".
+func toolFact(name string, options, env []string) string {
+	s := name
+	if len(options) > 0 {
+		s += " " + strings.Join(options, ", ")
+	}
+	if len(env) > 0 {
+		s += " (" + strings.Join(env, ", ") + ")"
+	}
+	return s
 }

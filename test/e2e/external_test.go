@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ const smallMachine = `
 [providers.cloud.machines.small]
 os = "linux"
 spec = { image = "room" }
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 max_rooms = 2
 `
 
@@ -25,7 +26,7 @@ func newExternalFixture(t *testing.T, serverKeys, providerKeys string, vars map[
 	t.Helper()
 	e := newEnv(t)
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader() + serverKeys + e.externalProvider("cloud", providerKeys, vars, machines))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
@@ -62,8 +63,8 @@ func (f *fixture) waitNoCloudRooms() {
 }
 
 // TestExternalProvider is scenarios 18 and 22 (on-demand): creation on demand,
-// a platform provision only at the first use, warm reuse, provision again after
-// a script change, and the access through a proxy command.
+// the install of a screen tool only at the first use, warm reuse, install
+// again after a script change, and the access through a proxy command.
 func TestExternalProvider(t *testing.T) {
 	t.Parallel()
 	f := newExternalFixture(t, "", `warm_running = "10m"`, map[string]string{"FAKE_PROXY": "1"}, smallMachine)
@@ -81,9 +82,9 @@ func TestExternalProvider(t *testing.T) {
 	if d := time.Until(rooms[0].Deadline); d < 2*time.Hour+19*time.Minute {
 		t.Fatalf("provider deadline in %s, want at least 2h19m", d)
 	}
-	log := "/home/hostel/hostel/cache/fakedevice.log"
-	if got := f.roomSh(room, "grep -c '^provision linux' "+log); got != "1" {
-		t.Fatalf("provision ran %s times, want 1", got)
+	log := "/home/hostel/hostel/cache/fake-screen.log"
+	if got := f.roomSh(room, "grep -c '^install linux' "+log); got != "1" {
+		t.Fatalf("install ran %s times, want 1", got)
 	}
 	f.e.mustHostel("release")
 	f.e.waitFor("warm room", time.Minute, func() bool {
@@ -95,17 +96,17 @@ func TestExternalProvider(t *testing.T) {
 	if rooms := f.cloudRooms(); len(rooms) != 1 || rooms[0].Name != room {
 		t.Fatalf("rooms after the second lease: %+v", rooms)
 	}
-	if got := f.roomSh(room, "grep -c '^provision linux' "+log); got != "1" {
-		t.Fatalf("provision ran %s times after warm reuse, want 1", got)
+	if got := f.roomSh(room, "grep -c '^install linux' "+log); got != "1" {
+		t.Fatalf("install ran %s times after warm reuse, want 1", got)
 	}
 	f.e.mustHostel("release")
 	f.waitSlotFreeOn(room)
-	// Changed platform scripts: provision runs again when the next lease uses the room.
-	f.e.writePlatform("fakedevice", map[string]string{"provision.linux.sh": "#!/bin/sh\necho \"provision linux changed\" >> \"$HOSTEL_CACHE_DIR/fakedevice.log\"\n"})
-	f.e.pushPlatform("fakedevice")
+	// Changed tool scripts: install runs again when the next lease uses the room.
+	f.e.writeTool("fake-screen", map[string]string{"install.linux.sh": "#!/bin/sh\necho \"install linux changed\" >> \"$HOSTEL_CACHE_DIR/fake-screen.log\"\n"})
+	f.e.pushTool("fake-screen")
 	f.acquire()
-	if got := f.roomSh(room, "grep -c '^provision linux changed' "+log); got != "1" {
-		t.Fatalf("provision after a script change ran %s times, want 1", got)
+	if got := f.roomSh(room, "grep -c '^install linux changed' "+log); got != "1" {
+		t.Fatalf("install after a script change ran %s times, want 1", got)
 	}
 	if n := len(f.e.fakeRooms()); n != 1 {
 		t.Fatalf("%d provider rooms, want 1", n)
@@ -130,24 +131,40 @@ func TestExternalMacOS(t *testing.T) {
 	t.Parallel()
 	f := newExternalFixture(t, "", "", nil, strings.Replace(smallMachine, `os = "linux"`, `os = "macos"`, 1))
 	f.acquire()
-	r := f.e.mustHostel("run", "--", "echo $FAKE_DEVICE_OS $HOSTEL_ROOM_OS $(uname -s)")
+	r := f.e.mustHostel("run", "--", "echo $FAKE_SCREEN_OS $HOSTEL_ROOM_OS $(uname -s)")
 	if r.stdout != "macos macos Linux\n" {
 		t.Fatalf("scripts by OS: %q", r.stdout)
 	}
 	room := f.cloudRooms()[0].Name
-	if got := f.roomSh(room, "cat /home/hostel/hostel/cache/fakedevice.log"); !strings.Contains(got, "provision macos") || strings.Contains(got, "linux") {
-		t.Fatalf("platform scripts: %q", got)
+	if got := f.roomSh(room, "cat /home/hostel/hostel/cache/fake-screen.log"); !strings.Contains(got, "install macos") || strings.Contains(got, "linux") {
+		t.Fatalf("tool scripts: %q", got)
 	}
 }
 
 // TestWarmDestroy is scenario 18: a room of a provider that cannot stop is
-// destroyed after warm_running.
+// destroyed after warm_running. The estimated wait for a new room is the
+// median creation time of the machine's rooms (M10e; 5 minutes before the
+// first room).
 func TestWarmDestroy(t *testing.T) {
 	t.Parallel()
 	f := newExternalFixture(t, "", `warm_running = "2s"`, nil, smallMachine)
+	row := regexp.MustCompile(`(?m)^fake-screen\s.*\s-\s+0\s+(.+)$`)
+	wait := func() string {
+		m := row.FindStringSubmatch(f.e.mustHostel("tools").stdout)
+		if m == nil {
+			t.Fatalf("hostel tools has no fake-screen row without free slots")
+		}
+		return m[1]
+	}
+	if w := wait(); w != "~5 min (new room)" {
+		t.Fatalf("estimated wait before the first room: %q", w)
+	}
 	f.acquire()
 	f.e.mustHostel("release")
 	f.waitNoCloudRooms()
+	if w := wait(); !regexp.MustCompile(`^(<1 min|~[1-3] min) \(new room\)$`).MatchString(w) {
+		t.Fatalf("estimated wait after a room: %q, want the creation time of that room", w)
+	}
 }
 
 // TestRemoveOnDemandMachine (M9): an on-demand machine with a room cannot be
@@ -204,13 +221,13 @@ func TestLimitRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.init()
-	e.usePlatform("fakedevice")
+	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader() + "limit_retry = \"3s\"\n" + e.externalProvider("cloud", "", map[string]string{"FAKE_LIMIT": "1"}, smallMachine))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
 	f := &fixture{e: e, s: s}
-	r := e.hostel("acquire", "fakedevice", "--task", "limited", "--wait", "6s")
+	r := e.hostel("acquire", "fake-screen", "--task", "limited", "--wait", "6s")
 	if r.code != 75 || !strings.Contains(r.stderr, "provider limit reached") {
 		t.Fatalf("acquire at the provider limit: %s", r)
 	}
@@ -235,7 +252,7 @@ func TestProviderFailures(t *testing.T) {
 	t.Run("three failures", func(t *testing.T) {
 		t.Parallel()
 		f := newExternalFixture(t, "", "", map[string]string{"FAKE_FAIL": "3"}, smallMachine)
-		r := f.e.hostel("acquire", "fakedevice", "--task", "fails", "--wait", "60s")
+		r := f.e.hostel("acquire", "fake-screen", "--task", "fails", "--wait", "60s")
 		if r.code != 1 || !strings.Contains(r.stderr, "injected failure 3 of 3") {
 			t.Fatalf("acquire with three provider failures: %s", r)
 		}
@@ -271,13 +288,13 @@ func TestLimits(t *testing.T) {
 [providers.cloud.machines.a]
 os = "linux"
 spec = { image = "room" }
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 max_rooms = 2
 
 [providers.cloud.machines.b]
 os = "linux"
 spec = { image = "room" }
-platforms = ["fakedevice"]
+tools = ["fake-screen"]
 max_rooms = 2
 `
 	t.Run("provider max_rooms", func(t *testing.T) {
@@ -287,7 +304,7 @@ max_rooms = 2
 		f.e.newRepoNamed("second", defaultRepoFiles())
 		f.acquire()
 		f.e.newRepoNamed("third", defaultRepoFiles())
-		r := f.e.hostel("acquire", "fakedevice", "--task", "third", "--wait", "3s")
+		r := f.e.hostel("acquire", "fake-screen", "--task", "third", "--wait", "3s")
 		if r.code != 75 || !strings.Contains(r.stderr, "room limit reached") {
 			t.Fatalf("third lease: %s", r)
 		}
@@ -300,7 +317,7 @@ max_rooms = 2
 		f := newExternalFixture(t, "", `limits = [{ machines = ["a"], max_rooms = 1 }]`, nil, two)
 		f.acquire()
 		f.e.newRepoNamed("second", defaultRepoFiles())
-		r := f.e.mustHostel("acquire", "fakedevice", "--task", "second")
+		r := f.e.mustHostel("acquire", "fake-screen", "--task", "second")
 		if !strings.Contains(r.stderr, "on cloud/b") {
 			t.Fatalf("the second lease is not on machine b: %s", r)
 		}

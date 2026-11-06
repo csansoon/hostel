@@ -91,7 +91,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		// alone), so they are calculated only for the answer.
 		for i, l := range leases {
 			if l.State == protocol.LeaseQueued {
-				st.Leases[i].EstimatedWaitSeconds = s.leaseWait(ctx, l)
+				st.Leases[i].EstimatedWaitSeconds, _ = s.leaseWait(ctx, l)
 			}
 		}
 		writeJSON(w, http.StatusOK, st)
@@ -103,7 +103,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // order of the status leases.
 func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Status, []store.Lease, error) {
 	lc := s.live.Load()
-	out := protocol.Status{ServerID: lc.cfg.ServerID, Machines: []protocol.MachineStatus{}, Rooms: []protocol.RoomStatus{}, Leases: []protocol.LeaseStatus{}}
+	out := protocol.Status{ServerID: lc.cfg.ServerID, Machines: []protocol.MachineStatus{}, Rooms: []protocol.RoomStatus{}, Leases: []protocol.LeaseStatus{},
+		Warning: lc.warning}
 	if tok.UserID != 0 {
 		out.User, out.Role = tok.Name, tok.Role
 	}
@@ -122,12 +123,12 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 	if err != nil {
 		return out, nil, err
 	}
-	rps, err := s.store.RoomPlatforms(ctx)
+	rts, err := s.store.RoomTools(ctx)
 	if err != nil {
 		return out, nil, err
 	}
 	for _, room := range rooms {
-		out.Rooms = append(out.Rooms, roomStatus(room, slots, rps))
+		out.Rooms = append(out.Rooms, roomStatus(lc.cfg, room, slots, rts))
 	}
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
@@ -147,22 +148,24 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 }
 
 func machineStatus(m *config.Machine) protocol.MachineStatus {
-	return protocol.MachineStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Platforms: append([]string{}, m.Platforms...),
-		Labels: append([]string{}, m.Labels...), MaxRooms: *m.MaxRooms, Connect: m.Connect}
+	return protocol.MachineStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Tools: append([]string{}, m.Tools...),
+		MaxRooms: *m.MaxRooms, Connect: m.Connect}
 }
 
-func roomStatus(room store.Room, slots []store.Slot, rps []store.RoomPlatform) protocol.RoomStatus {
+func roomStatus(cfg *config.Server, room store.Room, slots []store.Slot, rts []store.RoomTool) protocol.RoomStatus {
 	rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
 		OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
-		Slots: []protocol.SlotStatus{}, Platforms: []string{}, Deadline: room.ProviderDeadline}
+		Slots: []protocol.SlotStatus{}, Tools: []protocol.InventoryTool{}, Deadline: room.ProviderDeadline}
 	for _, sl := range slots {
 		if sl.RoomID == room.ID {
 			rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
 		}
 	}
-	for _, rp := range rps {
-		if rp.RoomID == room.ID {
-			rs.Platforms = append(rs.Platforms, rp.Platform)
+	for _, rt := range rts {
+		if rt.RoomID == room.ID {
+			t := cfg.Tools[rt.Tool]
+			rs.Tools = append(rs.Tools, protocol.InventoryTool{Name: rt.Tool, Options: nonNil(splitOptions(rt.Option)), State: rt.State,
+				Env: nonNil(rt.Env), Screen: t != nil && t.Screen})
 		}
 	}
 	if room.State == protocol.RoomBroken && room.BrokenReason == reasonUnreachable {
@@ -179,7 +182,7 @@ func roomStatus(room store.Room, slots []store.Slot, rps []store.RoomPlatform) p
 
 func leaseStatus(l store.Lease, users map[int64]string) protocol.LeaseStatus {
 	return protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
-		Platform: l.Platform, Devices: l.Devices, Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
+		Tools: nonNil(l.Tools), Started: nonNilStarted(l.Started), Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
 		Repo: l.Repo, Branch: l.Branch, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
 		ReadyAt: l.ReadyAt, ExpiresAt: l.ExpiresAt}
 }

@@ -1,0 +1,3 @@
+description = "The macOS desktop, for Mac apps (the lease takes the whole machine)"
+screen = true
+whole_machine = true

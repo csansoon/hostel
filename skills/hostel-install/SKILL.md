@@ -25,7 +25,7 @@ Options (put them after `sh -s --`):
 |---|---|
 | `--dir DIR` | Install the binary into `DIR` (default `~/.local/bin`). |
 | `--version vX.Y.Z` | Install this release (default: the latest). |
-| `--server DIR` | Also install the room binaries into `DIR/helpers` and the platform scripts into `DIR/platforms`. Only for a server machine. |
+| `--server DIR` | Also install the room binaries into `DIR/helpers`. Only for a server machine (the server uses the tools in its binary). |
 
 Examples:
 
@@ -108,7 +108,8 @@ and `HOSTEL_SERVER_KEY` override the file.
 Run `hostel` with no arguments in a terminal. It opens a full-screen app:
 
 - Not connected: *Check in* (paste the invite code, then your name) or *Leave*.
-- *Lobby*: the platforms, their free machines, the queue, and the wait.
+- *Lobby*: the tools (screen tools first), their free machines, the waiting
+  line, and the wait.
 - *Rooms*: the machines, their state, and who uses them.
 - *Front desk*: the server and you; *Invite a guest* (admins), *Add your other
   computer* (members), *Guest list*, *Add a room* (admins), *Check out*

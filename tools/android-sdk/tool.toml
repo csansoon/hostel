@@ -1,0 +1,6 @@
+description = "Android SDK (build tools, platform tools, emulator binaries)"
+needs = ["jdk"]
+env = { ANDROID_HOME = "{cache}/android-sdk" }
+path = ["{cache}/android-sdk/platform-tools", "{cache}/android-sdk/cmdline-tools/latest/bin", "{cache}/android-sdk/emulator"]
+# A first install downloads about 1 GB.
+script_timeouts = { install = "30m" }

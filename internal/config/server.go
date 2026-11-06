@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/csansoon/hostel/tools"
 )
 
 // Provider kinds.
@@ -28,7 +30,7 @@ var (
 	serverIDRE = regexp.MustCompile(`^[a-z0-9]{1,20}$`)
 )
 
-// ValidName reports whether s is a valid provider, machine, platform, device,
+// ValidName reports whether s is a valid provider, machine, tool, option,
 // slot, or tunnel name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
@@ -70,16 +72,19 @@ func ValidServerID(s string) bool { return serverIDRE.MatchString(s) }
 // Server is server.toml. After LoadServer, all defaults are set and each machine
 // has the values that it inherits from its provider.
 type Server struct {
-	ServerID      string    `toml:"server_id"`
-	Listen        string    `toml:"listen"`
-	GatewayListen string    `toml:"gateway_listen"`
-	GatewayPublic string    `toml:"gateway_public"`
-	TLS           string    `toml:"tls"`
-	PublicURLs    []string  `toml:"public_urls"`
-	DataDir       string    `toml:"data_dir"`
-	HelperDir     string    `toml:"helper_dir"`
-	PlatformsDir  string    `toml:"platforms_dir"`
-	IdleTimeout   *Duration `toml:"idle_timeout"`
+	ServerID      string   `toml:"server_id"`
+	Listen        string   `toml:"listen"`
+	GatewayListen string   `toml:"gateway_listen"`
+	GatewayPublic string   `toml:"gateway_public"`
+	TLS           string   `toml:"tls"`
+	PublicURLs    []string `toml:"public_urls"`
+	DataDir       string   `toml:"data_dir"`
+	HelperDir     string   `toml:"helper_dir"`
+	// PlatformsDir is read only to ignore it: install.sh wrote it before
+	// M10e, and the update must not stop the server (PlatformsDirWarning).
+	// The schema omits it.
+	PlatformsDir string    `toml:"platforms_dir,omitempty" schema:"-"`
+	IdleTimeout  *Duration `toml:"idle_timeout"`
 	// Aging is read only to reject it (removed in M8); the schema omits it.
 	Aging              *Duration            `toml:"aging" schema:"-"`
 	PollTimeout        *Duration            `toml:"poll_timeout"`
@@ -91,10 +96,14 @@ type Server struct {
 
 	File string `toml:"-"`
 	// DocName names the configuration document in errors ("" before M9).
-	DocName       string               `toml:"-"`
-	ProviderOrder []string             `toml:"-"`
-	Platforms     map[string]*Platform `toml:"-"`
+	DocName       string   `toml:"-"`
+	ProviderOrder []string `toml:"-"`
+	// Tools are the defined tools.
+	Tools map[string]*Tool `toml:"-"`
 }
+
+// PlatformsDirWarning is the warning for platforms_dir in server.toml.
+const PlatformsDirWarning = "server.toml has platforms_dir, which M10e removed: the server ignores it and uses the tools in its binary and its database (hostel config tools); delete the key"
 
 // GatewayPath is the gateway (SSH in a WebSocket) on the API listener.
 const GatewayPath = "/v1/gateway"
@@ -125,7 +134,7 @@ type Provider struct {
 	MaxRooms    *int                `toml:"max_rooms,omitempty"`
 	Limits      []Limit             `toml:"limits,omitempty"`
 	MaxLifetime *Duration           `toml:"max_lifetime,omitempty"`
-	Tools       map[string]string   `toml:"tools,omitempty"`
+	Tools       []string            `toml:"tools,omitempty"`
 	Env         map[string]string   `toml:"env,omitempty"`
 	MaxLease    *Duration           `toml:"max_lease"`
 	WarmRunning *Duration           `toml:"warm_running,omitempty"`
@@ -150,13 +159,13 @@ type Timeouts struct {
 }
 
 type Machine struct {
-	Address     string            `toml:"address,omitempty"`
-	Connect     bool              `toml:"connect,omitempty"`
-	OS          string            `toml:"os"`
-	Spec        map[string]any    `toml:"spec,omitempty"`
-	Platforms   []string          `toml:"platforms,omitempty"`
-	Labels      []string          `toml:"labels,omitempty"`
-	Tools       map[string]string `toml:"tools,omitempty"`
+	Address string         `toml:"address,omitempty"`
+	Connect bool           `toml:"connect,omitempty"`
+	OS      string         `toml:"os"`
+	Spec    map[string]any `toml:"spec,omitempty"`
+	// Tools are "name" or "name:option" entries. After LoadServer, they
+	// include the tools that the needs of the listed tools add.
+	Tools       []string          `toml:"tools,omitempty"`
 	Env         map[string]string `toml:"env,omitempty"`
 	Slots       []Slot            `toml:"slots"`
 	MaxRooms    *int              `toml:"max_rooms,omitempty"`
@@ -168,6 +177,9 @@ type Machine struct {
 	Name     string `toml:"-"`
 	Provider string `toml:"-"`
 	Kind     string `toml:"-"`
+	// ToolList is Tools, resolved: each tool with its option, and whether
+	// it is a mise tool or a need.
+	ToolList []MachineTool `toml:"-"`
 }
 
 type Slot struct {
@@ -216,22 +228,12 @@ func DefaultServerPath() (string, error) {
 }
 
 // LoadServer reads and validates a server.toml with all keys (the form before
-// M9) and all platform directories.
+// M9) with the default tools.
 func LoadServer(path string) (*Server, error) { return load(path, nil) }
 
-// LoadServerFile is LoadServer with the platforms of platformsDir, not those of
-// platforms_dir: the import of a server.toml from before M9 checks it with the
-// platforms of the database.
-func LoadServerFile(path, platformsDir string) (*Server, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return loadData(path, data, &Document{PlatformsDir: platformsDir, legacy: true})
-}
-
 // LoadServerDocument validates server.toml (local keys only; data is its
-// content, path its name) with the configuration document from the database.
+// content, path its name) with the configuration document and the tools from
+// the database.
 func LoadServerDocument(path string, data []byte, doc Document) (*Server, error) {
 	return loadData(path, data, &doc)
 }
@@ -246,11 +248,19 @@ func load(path string, doc *Document) (*Server, error) {
 
 func loadData(path string, data []byte, doc *Document) (*Server, error) {
 	s := &Server{}
+	if err := checkOldKeys(path, data, ""); err != nil {
+		return nil, err
+	}
 	if err := decodeData(path, data, s); err != nil {
 		return nil, err
 	}
-	if doc != nil && !doc.legacy {
+	toolSet := DefaultTools()
+	toolsDir := ""
+	if doc != nil {
 		if err := checkParts(path, data, *doc); err != nil {
+			return nil, err
+		}
+		if err := checkOldKeys(path, doc.Data, doc.Name()); err != nil {
 			return nil, err
 		}
 		if err := decodeData(doc.Name(), doc.Data, s); err != nil {
@@ -258,6 +268,10 @@ func loadData(path string, data []byte, doc *Document) (*Server, error) {
 		}
 		data = doc.Data
 		s.DocName = doc.Name()
+		if doc.Tools != nil {
+			toolSet = doc.Tools
+		}
+		toolsDir = doc.ToolsDir
 	}
 	order, err := keyOrder(data)
 	if err != nil {
@@ -270,19 +284,33 @@ func loadData(path string, data []byte, doc *Document) (*Server, error) {
 			p.MachineOrder = childOrder(order, "providers", pn, "machines")
 		}
 	}
-	resolveErr := s.resolve()
-	if doc != nil && doc.PlatformsDir != "" {
-		s.PlatformsDir = doc.PlatformsDir
-	}
-	platforms, err := LoadPlatforms(s.PlatformsDir)
+	tools, err := ParseTools(toolSet)
 	if err != nil {
-		return nil, errors.Join(resolveErr, err)
+		return nil, err
 	}
-	s.Platforms = platforms
-	if err := errors.Join(resolveErr, s.validatePlatforms()); err != nil {
+	for name, t := range tools {
+		if toolsDir != "" {
+			t.Dir = filepath.Join(toolsDir, name)
+		}
+	}
+	s.Tools = tools
+	if err := s.resolve(); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// DefaultTools returns the default tool definitions of this binary: name →
+// file → content.
+func DefaultTools() map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for name, files := range tools.Defaults() {
+		out[name] = map[string]string{}
+		for f, data := range files {
+			out[name][f] = string(data)
+		}
+	}
+	return out
 }
 
 // checkParts reports keys of the document in server.toml and local keys in the
@@ -366,8 +394,6 @@ func (s *Server) resolve() error {
 	s.DataDir = absPath(s.DataDir, base, home)
 	setStr(&s.HelperDir, filepath.Join(s.DataDir, "helpers"))
 	s.HelperDir = absPath(s.HelperDir, base, home)
-	setStr(&s.PlatformsDir, filepath.Join(home, ".config", "hostel", "platforms"))
-	s.PlatformsDir = absPath(s.PlatformsDir, base, home)
 
 	setDur(&s.IdleTimeout, 10*time.Minute)
 	// Queues have no aging since M8 (owner decision, 2026-10-30).
@@ -536,7 +562,9 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 		m.OS = namespaceOS(el, key, m.Spec)
 	}
 
-	m.Tools = mergeMap(p.Tools, m.Tools)
+	if m.Tools == nil {
+		m.Tools = slices.Clone(p.Tools)
+	}
 	m.Env = mergeMap(p.Env, m.Env)
 	inherit(&m.MaxLease, p.MaxLease)
 	if onDemand {
@@ -554,16 +582,7 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 		el.add(key+".max_lifetime", "%s is shorter than max_lease (%s) + 5m; lower max_lease or raise max_lifetime", lt, m.MaxLease.D())
 	}
 
-	for i, l := range m.Labels {
-		if l == "" {
-			el.add(fmt.Sprintf("%s.labels[%d]", key, i), "empty label")
-		}
-	}
-	for tool := range m.Tools {
-		if tool == "" {
-			el.add(key+".tools", "empty tool name")
-		}
-	}
+	s.resolveTools(el, key, m)
 	if len(m.Slots) == 0 {
 		m.Slots = []Slot{{Name: "a"}}
 	}
@@ -641,36 +660,166 @@ func namespaceOS(el *errList, key string, spec map[string]any) string {
 	return ""
 }
 
-func (s *Server) validatePlatforms() error {
-	el := &errList{file: s.File, doc: s.DocName}
-	for _, m := range s.Machines() {
-		key := "providers." + m.Provider + ".machines." + m.Name
-		seen := map[string]bool{}
-		for i, pn := range m.Platforms {
-			pk := fmt.Sprintf("%s.platforms[%d]", key, i)
-			p := s.Platforms[pn]
-			switch {
-			case seen[pn]:
-				el.add(pk, "platform %q is listed twice", pn)
-			case p == nil:
-				if s.DocName != "" {
-					el.add(pk, "unknown platform %q; \"hostel config platforms\" lists the platforms", pn)
-				} else {
-					el.add(pk, "unknown platform %q; platforms_dir %s has no directory with this name", pn, s.PlatformsDir)
-				}
-			case p.Kind == KindOS:
-				el.add(pk, "%q is an OS platform; a machine gets its OS platform automatically, so remove it", pn)
-			case m.OS != "" && p.Script(m.OS, StepPrepare) == "":
-				where := filepath.Join(p.Dir, StepPrepare+"."+m.OS+ScriptExt(m.OS))
-				if s.DocName != "" {
-					where = StepPrepare + "." + m.OS + ScriptExt(m.OS) + " (hostel config platforms push)"
-				}
-				el.add(pk, "platform %q has no prepare script for %s; add %s", pn, m.OS, where)
+// resolveTools checks the tool entries of a machine and adds the tools that
+// their needs name (design, section 8): m.ToolList has each tool once, the
+// listed ones first.
+func (s *Server) resolveTools(el *errList, key string, m *Machine) {
+	var list []MachineTool
+	for i, raw := range m.Tools {
+		tk := fmt.Sprintf("%s.tools[%d]", key, i)
+		e, err := ParseToolEntry(raw)
+		if err != nil {
+			el.add(tk, "%v", err)
+			continue
+		}
+		t := s.Tools[e.Name]
+		switch {
+		case t == nil && isOS(e.Name):
+			el.add(tk, "%q is an OS; a machine has its OS in os, not in tools", e.Name)
+			continue
+		case t == nil && e.Option == "":
+			el.add(tk, "unknown tool %q: not a defined tool (hostel config tools lists them); a mise tool needs its version, for example \"node:22\"", e.Name)
+			continue
+		case t != nil && !t.Screen && e.Option != "":
+			el.add(tk, "%q: %s is a defined software tool; its version is what its check script finds, so remove \":%s\"", raw, e.Name, e.Option)
+			continue
+		case t != nil && t.Screen && e.Option != "" && !slices.Contains(t.Options, e.Option):
+			el.add(tk, "%q: %s has no option %q; options: %s", raw, e.Name, e.Option, strings.Join(t.Options, ", "))
+			continue
+		case t != nil && m.OS != "" && !t.AvailableOn(m.OS):
+			el.add(tk, "%s has no scripts for %s; it works on %s", e.Name, m.OS, strings.Join(toolOSes(t), ", "))
+			continue
+		case slices.ContainsFunc(list, func(o MachineTool) bool { return o.ToolEntry == e }):
+			el.add(tk, "%s is listed twice", raw)
+			continue
+		case t != nil && slices.ContainsFunc(list, func(o MachineTool) bool { return o.Name == e.Name && (o.Option == "") != (e.Option == "") }):
+			el.add(tk, "%s is listed with and without an option; list all its options, or only the name for all of them", e.Name)
+			continue
+		}
+		list = append(list, MachineTool{ToolEntry: e, Mise: t == nil})
+	}
+	for i := 0; i < len(list); i++ {
+		t := s.Tools[list[i].Name]
+		if t == nil {
+			continue
+		}
+		for _, n := range t.Needs {
+			if slices.ContainsFunc(list, func(o MachineTool) bool { return o.Name == n }) {
+				continue
 			}
-			seen[pn] = true
+			nt := s.Tools[n]
+			if nt != nil && m.OS != "" && !nt.AvailableOn(m.OS) {
+				el.add(key+".tools", "%s needs %s, which has no scripts for %s; it works on %s", list[i].Name, n, m.OS, strings.Join(toolOSes(nt), ", "))
+				continue
+			}
+			list = append(list, MachineTool{ToolEntry: ToolEntry{Name: n}, Mise: nt == nil, Need: true})
 		}
 	}
+	m.ToolList = list
+	m.Tools = make([]string, len(list))
+	for i, t := range list {
+		m.Tools[i] = t.String()
+	}
+}
+
+// CheckToolList checks a machine's tool list before the machine's OS is known
+// (a machine invite): the same rules as a machine in the configuration.
+func (s *Server) CheckToolList(tools []string) error {
+	el := &errList{}
+	s.resolveTools(el, "tools", &Machine{Tools: tools})
 	return el.err()
+}
+
+func toolOSes(t *Tool) []string {
+	var out []string
+	for _, o := range OSNames {
+		if t.AvailableOn(o) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// Tool returns the machine's tool with this name, or nil. A screen tool that
+// the machine lists with several options gives the first entry.
+func (m *Machine) Tool(name string) *MachineTool {
+	for i := range m.ToolList {
+		if m.ToolList[i].Name == name {
+			return &m.ToolList[i]
+		}
+	}
+	return nil
+}
+
+// MiseTools returns the mise tools of the machine: name → versions ("latest"
+// for an entry without a version).
+func (m *Machine) MiseTools() map[string][]string {
+	out := map[string][]string{}
+	for _, t := range m.ToolList {
+		if !t.Mise {
+			continue
+		}
+		v := t.Option
+		if v == "" {
+			v = "latest"
+		}
+		out[t.Name] = append(out[t.Name], v)
+	}
+	return out
+}
+
+// checkOldKeys reports the keys of the configuration before M10e with the new
+// form (owner decision, 2026-11-05: no compatibility). doc names the
+// configuration document ("" for server.toml).
+func checkOldKeys(file string, data []byte, doc string) error {
+	order, err := keyOrder(data)
+	if err != nil {
+		return nil // the decoder reports syntax errors with their position
+	}
+	name := file
+	if doc != "" {
+		name = doc
+	}
+	var errs []error
+	add := func(path []string, msg string) {
+		errs = append(errs, fmt.Errorf("%s: %s: %s", name, strings.Join(path, "."), msg))
+	}
+	reported := map[string]bool{}
+	for _, path := range order {
+		switch {
+		case len(path) == 1 && path[0] == "platforms_dir" && doc != "":
+			add(path, "removed in M10e: the default tools are in the binary, and own tools are in the database (hostel config tools); delete the key")
+		case len(path) == 1 && path[0] == "platforms":
+			add(path, "removed in M10e: tools replace platforms; a tool is a directory with tool.toml (hostel config tools); delete the table")
+		case !isMachineOrProvider(path[:len(path)-1]):
+		case path[len(path)-1] == "platforms":
+			add(path, "removed in M10e: list the tools of the machine instead, for example tools = [\"ios-simulator\", \"android-emulator\"]")
+		case path[len(path)-1] == "labels":
+			add(path, "removed in M10e: labels are gone; list tools instead (for example \"xcode\", \"macos-desktop\")")
+		case path[len(path)-1] == "requires":
+			add(path, "removed in M10e: requires is gone; list tools instead")
+		}
+		for i := range path {
+			if path[i] == "tools" && i+1 < len(path) && isMachineOrProvider(path[:i]) {
+				if tk := strings.Join(path[:i+1], "."); !reported[tk] {
+					reported[tk] = true
+					add(path[:i+1], "the map form before M10e; tools is now a list of \"name\" or \"name:version\" entries, for example tools = [\"jdk:21\", \"node:22\"]")
+				}
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// OldForm reports the keys of the configuration before M10e in a
+// configuration document, or nil.
+func OldForm(data []byte) error { return checkOldKeys("", data, "the configuration") }
+
+// isMachineOrProvider reports whether a key path is providers.<p> or
+// providers.<p>.machines.<m>.
+func isMachineOrProvider(path []string) bool {
+	return (len(path) == 2 && path[0] == "providers") ||
+		(len(path) == 4 && path[0] == "providers" && path[2] == "machines")
 }
 
 // ParseAddress parses a static machine address "user@host[:port]". The default
@@ -737,18 +886,49 @@ func absPath(p, base, home string) string {
 	return filepath.Clean(p)
 }
 
-// HasLabels reports whether the machine has all the labels.
-func (m *Machine) HasLabels(labels []string) bool {
-	for _, l := range labels {
-		if !slices.Contains(m.Labels, l) {
-			return false
-		}
-	}
-	return true
-}
-
 // IsWebSocketURL reports whether a gateway address is a WebSocket URL (the
 // gateway's /v1/gateway on the API) instead of a TCP host:port.
 func IsWebSocketURL(addr string) bool {
 	return strings.HasPrefix(addr, "wss://") || strings.HasPrefix(addr, "ws://")
+}
+
+// DefinedTools returns the defined tools of a machine in the order of their
+// needs: each tool after the tools that it needs (the order of install and
+// start).
+func (s *Server) DefinedTools(m *Machine) []*Tool {
+	var out []*Tool
+	var visit func(name string)
+	visit = func(name string) {
+		t := s.Tools[name]
+		if t == nil || slices.Contains(out, t) {
+			return
+		}
+		for _, n := range t.Needs {
+			visit(n)
+		}
+		out = append(out, t)
+	}
+	for _, mt := range m.ToolList {
+		visit(mt.Name)
+	}
+	return out
+}
+
+// ToolClosure returns the defined tool name and the defined tools that it
+// needs, directly or through other tools.
+func (s *Server) ToolClosure(name string) []string {
+	var out []string
+	var visit func(string)
+	visit = func(n string) {
+		t := s.Tools[n]
+		if t == nil || slices.Contains(out, n) {
+			return
+		}
+		out = append(out, n)
+		for _, nn := range t.Needs {
+			visit(nn)
+		}
+	}
+	visit(name)
+	return out
 }
