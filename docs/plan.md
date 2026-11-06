@@ -408,6 +408,8 @@ Linux machine shows "Out of date" and `hostel machine update` fixes it.
 
 ## M10e. Tools
 
+Status: done (2026-11-06), v0.3.0.
+
 Design: `m10e-implementation.md` (owner decision of 2026-11-05).
 
 - Tools replace platforms, devices, and labels: machines list tools, the server

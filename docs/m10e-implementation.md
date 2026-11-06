@@ -381,34 +381,31 @@ later milestone:
 - **The owner's own server** needs a new configuration at the update (section
   8).
 
-## 13. State after phases 5 and 6
+## 13. State at the end of M10e (2026-11-06)
 
-Phases 1 to 6 are built. Phase 5 (guest) added the agent guide from the
-server's tools (`hostel agent-guide` prints the general rule and the commands,
-then the `GUIDE.md` of each tool that a machine of the server lists; without
-a connection, only the general part), the median creation time of a new room
-in the estimated wait (`rooms.ready_at`, migration 012; 5 minutes before the
-first room; `hostel tools` shows "(new room)"), `platforms_dir` in
-`server.toml` ignored with a warning (server log and `hostel admin config
-check`), `install.sh --server` without a copy of the tools (the release has no
-`hostel-tools.tar.gz` now), and the skills, the README, and
-`static-room-setup.md` in the tool model (`skills/hostel-tools` replaces
-`skills/hostel-platforms`). Phase 6 (app) shows the tools in the Lobby (Screens,
-then Software), the tool page (options, machines with their options, the
-waiting leases with their tools, the first paragraph of the guide; no
-"Devices"), the inventory on the machine page (each tool with its options and
-check state), and the demo with real tool names.
+Done. v0.3.0 is released and runs on the owner's server.
 
-What remains (phase 7):
+- **Gate:** 10 of 10 local E2E runs on `6790f67` (owner decision: local, because
+  a billing lock stops GitHub Actions). The release files are built and signed
+  locally for the same reason.
+- **Real machines:** the Windows smoke tests pass. On the owner's server, real
+  leases of `ios-simulator`, `android-emulator`, `macos-desktop` (`ns/mac`), and
+  `windows-desktop` work, with screenshots.
+- **Done-when:** a new agent built, tested, and did QA of the Android app of a
+  real repository in 20 minutes with only the docs. It chose `android-sdk
+  jdk:21` for the build (no emulator) and `android-emulator:pixel-9` for QA. It
+  had none of the problems 1, 2, and 7 of the 2026-11-05 report.
+- **Not tested:** the Namespace smoke tests (the login of the owner's Mac may not
+  create machines); `ns/linux` with tools.
 
-- **Review.** A local review by a subagent of the whole milestone
-  (`.claude/skills/pr-ready/SKILL.md`), and the fixes.
-- **Gates.** The full E2E suite in 10 separate runs in CI (the label `e2e-10`)
-  and one local run on macOS (`make test-e2e`) at a normal load; `make lint`.
-- **Smoke tests on real machines** (they did not run): the static Mac
-  (`xcode`, `ios-simulator`, `macos-desktop`), the Windows room
-  (`windows-desktop`, `dotnet`), and Namespace (`android-sdk`,
-  `android-emulator`; opt-in, costs money). The owner's server needs its
-  configuration in the new form at the update (section 8).
-- **Done when** (section 10): a new agent repeats the Android task of the
-  report with only the README, the skills, and `hostel agent-guide`.
+Follow-ups from the done-when report, for a later milestone:
+
+- A tunnel with an unset local port shows `confirmed` and does not work.
+- `hostel status <machine>` fails for an on-demand machine without a room, and
+  `hostel tools <tool>` does not show the CPU and memory of a machine.
+- `android-sdk` reports 36, but builds install more SDK platforms; the facts of
+  a lease do not show them, or the Java of the repository's mise file.
+- `~/.gradle` stays between leases (it is a cache, section 9); the docs must say
+  so, because other guests can read it.
+- The guide should say that a long build needs `run --detach` and
+  `attach --wait`.
