@@ -256,8 +256,7 @@ restart.
 
 `leases.started` holds the screen tools whose `start` ran (written before the
 script runs, because a failed start can leave processes that cleanup must stop), each with its options
-and the names of its `tool.env` facts; the server adds each one after its
-`start` succeeded. "Waiting behind N" is not a column: the server keeps the
+and, after its `start` succeeded, the names of its `tool.env` facts. "Waiting behind N" is not a column: the server keeps the
 result of the last scheduler pass in memory (a change of it also changes the
 position, so the revision rule below holds).
 
