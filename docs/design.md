@@ -851,7 +851,7 @@ no scripts at all (a tool that only sets `env` and `path`). Steps:
 
 | Step | When | Example for `ios-simulator` |
 |---|---|---|
-| `install` | once for each room, and again when the tool's files or the machine's options of a screen tool change; before it, the `install` of each tool in `needs`, its options on the machine, or the machine `env` change | create one golden simulator for each option |
+| `install` | once for each room, and again when the tool's files, the machine's options of a screen tool, or the machine `env` change; before it, the `install` of each tool in `needs` | create one golden simulator for each option |
 | `check` | after `install`, after each cleanup, at repair, and before a warm room takes a lease; the last line of the output is the tool's version (a software tool) or its options, comma-separated (a screen tool); a non-zero exit code means that the tool does not work. A screen tool whose check reports none of the options that the machine lists fails too (no lease could start it) | Xcode works; the golden simulators exist; enough free disk |
 | `start` | screen tools only: for each lease that asked for the tool, before `ready`, after the `start` of the tools in `needs`; writes facts to `tool.env` | clone the golden simulator of each requested option; boot it |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output path, `$2` the option (default: the first of the lease) | `xcrun simctl io "$udid" screenshot "$1"` |
