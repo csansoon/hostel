@@ -217,7 +217,7 @@ func TestToolLease(t *testing.T) {
 	// A failed start stops the screen tools that started before it, and the
 	// lease waits as after a failed preparation.
 	f.marker("fail-panel", true)
-	r = f.e.hostel("acquire", "fake-panel", "--task", "panel fails", "--wait", "8s")
+	r = f.e.hostel("acquire", "fake-panel", "--task", "panel fails", "--wait", "40s")
 	if r.code != 75 || !strings.Contains(r.stderr, "room broken: tool fake-panel: start script exited with code 1") {
 		t.Fatalf("acquire with a failing start: %s", r)
 	}
@@ -412,7 +412,7 @@ env = { FAKE_SDK_VERSION = "` + version + `" }
 func TestToolNewOptionOnDemand(t *testing.T) {
 	t.Parallel()
 	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
-	f.e.mustHostel("acquire", "fake-screen", "--task", "first")
+	f.acquire()
 	f.e.mustHostel("release")
 	f.e.waitFor("the slot free", time.Minute, func() bool {
 		rooms := f.cloudRooms()

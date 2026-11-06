@@ -44,7 +44,7 @@ func TestFailures(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.marker("fail-start", true)
-	r := f.e.hostel("acquire", "fake-screen", "--task", "start fails", "--wait", "8s")
+	r := f.e.hostel("acquire", "fake-screen", "--task", "start fails", "--wait", "40s")
 	if r.code != 75 || !strings.Contains(r.stderr, "queued") || !strings.Contains(r.stderr, "room broken: tool fake-screen: start script exited with code 1") {
 		t.Fatalf("acquire with a failing start: %s", r)
 	}

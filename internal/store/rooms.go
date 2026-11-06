@@ -211,7 +211,7 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 // ("<provider>/<machine>"), also of a room that is gone: an on-demand machine
 // has no room most of the time.
 func (s *Store) LastHardware(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT provider, machine, hardware FROM rooms WHERE hardware != '' ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, machine, hardware, MAX(id) FROM rooms WHERE hardware != '' GROUP BY provider, machine`)
 	if err != nil {
 		return nil, fmt.Errorf("list room hardware: %w", err)
 	}
@@ -219,7 +219,9 @@ func (s *Store) LastHardware(ctx context.Context) (map[string]string, error) {
 	out := map[string]string{}
 	for rows.Next() {
 		var provider, machine, hw string
-		if err := rows.Scan(&provider, &machine, &hw); err != nil {
+		var id int64
+		// SQLite takes the other columns from the row of MAX(id).
+		if err := rows.Scan(&provider, &machine, &hw, &id); err != nil {
 			return nil, err
 		}
 		out[provider+"/"+machine] = hw
