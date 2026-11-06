@@ -31,7 +31,7 @@ All other terms are plain technical words.
 | **Screen tool** | A tool that the agent looks at and acts on. Hostel starts it for each lease, takes screenshots of it, and cleans it up. |
 | **Tool scripts** | The scripts of a tool (one file for each step and OS) that install, check, start, screenshot, and stop it. |
 | **Inventory** | The tools of a room with their real options, as the server installed and checked them. |
-| **Cleanup** | The steps after a lease that delete everything the lease left. |
+| **Cleanup** | The steps after a lease that delete what the lease left in its slot (work directory, environment, jobs, screens). Caches stay. |
 | **Helper** | The `hostel room` mode of the binary. It runs on rooms. |
 | **Gateway** | The SSH server inside the Hostel server. All guest SSH traffic goes to it, and it connects to rooms. |
 
@@ -85,7 +85,7 @@ All other terms are plain technical words.
 | 2026-10-21 | A guest can select devices of a device platform. The Mac desktop (Mac Catalyst) uses the `macos` platform with a `desktop` label, and takes the whole machine. |
 | 2026-10-20 | Priority has a fixed default. The agent selects another priority only when the user asks for it. |
 | 2026-10-20 | The API under test always runs on the guest's machine and is reached through a tunnel. |
-| 2026-10-20 | Durable changes are made only locally. Changes on a room are temporary and are always deleted. |
+| 2026-10-20 | Durable changes are made only locally. Changes on a room are temporary and are always deleted (caches stay: design, section 9). |
 | 2026-10-20 | On-demand machines (Namespace) are preferred to machines that are always on. |
 
 ## 4. Functional requirements

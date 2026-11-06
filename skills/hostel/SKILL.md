@@ -9,7 +9,7 @@ Hostel gives coding agents short, temporary, exclusive access to remote machines
 for builds, UI QA, and device tests. The agent keeps the code on its own
 computer. When it needs another machine (for Android, iOS, macOS, Windows, or
 Linux), it asks the Hostel server for a lease with the tools that it needs, works on a room over SSH, and releases it.
-At the end of each lease, cleanup deletes everything that the lease left.
+At the end of each lease, cleanup deletes its work directory, jobs, and screens; caches stay.
 
 One Go binary, `hostel`, has all three parts: the server, the guest (the CLI
 that agents and people use), and the helper on rooms.

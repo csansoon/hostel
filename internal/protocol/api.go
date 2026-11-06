@@ -1,6 +1,10 @@
 package protocol
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Roles: users are admins or members (multiplayer.md, section 6); room
 // tokens have RoleRoom.
@@ -61,6 +65,9 @@ type MachineStatus struct {
 	Tools    []string `json:"tools"`
 	MaxRooms int      `json:"max_rooms"`
 	Connect  bool     `json:"connect,omitempty"`
+	// Hardware is from the machine's newest room, or from its configuration
+	// before it had a room; nil when neither says.
+	Hardware *Hardware `json:"hardware,omitempty"`
 	// ConnectVersion is the hostel version of the machine's connect service
 	// while it is connected (M10d; "" before).
 	ConnectVersion string `json:"connect_version,omitempty"`
@@ -74,6 +81,21 @@ type Hardware struct {
 	MemoryBytes   int64  `json:"memory_bytes,omitempty"`
 	DiskFreeBytes int64  `json:"disk_free_bytes,omitempty"`
 	OSVersion     string `json:"os_version,omitempty"`
+}
+
+// Size is "8 cores, 16 GB", or "" when neither is known.
+func (h *Hardware) Size() string {
+	if h == nil {
+		return ""
+	}
+	var parts []string
+	if h.Cores > 0 {
+		parts = append(parts, fmt.Sprintf("%d cores", h.Cores))
+	}
+	if h.MemoryBytes > 0 {
+		parts = append(parts, fmt.Sprintf("%d GB", (h.MemoryBytes+1<<29)>>30))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Usage is the live use of a room (M10b), read when its details open.
@@ -155,6 +177,8 @@ type ToolMachine struct {
 	Options  []string `json:"options"`
 	OnDemand bool     `json:"on_demand,omitempty"`
 	Online   bool     `json:"online"`
+	// Hardware: see MachineStatus.
+	Hardware *Hardware `json:"hardware,omitempty"`
 }
 
 // InventoryTool is a tool of a room's inventory.

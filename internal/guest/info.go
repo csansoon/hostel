@@ -140,6 +140,9 @@ func printTool(w io.Writer, t protocol.Tool) {
 		if len(m.Options) > 0 {
 			desc = strings.Join(m.Options, ", ") + ", " + desc
 		}
+		if size := m.Hardware.Size(); size != "" {
+			desc += ", " + size
+		}
 		if m.OnDemand {
 			desc += "; on demand"
 		}
@@ -275,6 +278,17 @@ Work
   hostel diff                   changes on the room since the last sync
   hostel jobs | hostel attach <job> | hostel stop <job>
 
+Long commands
+  run and attach wait 100 seconds, then return; the job goes on. Keep each
+  hostel command shorter than the time limit of your own shell tool, and give
+  the wait of a long build yourself:
+    hostel run --detach -- "./gradlew build"   prints the job ID at once
+    hostel attach <job> --wait 9m              shows the output until the job
+                                               ends or the wait ends
+  Run attach again until the job ends. A running job alone does not keep the
+  lease: each hostel command does, so keep the wait shorter than the time
+  without activity that acquire prints (10 minutes by default).
+
 Exit codes of run and attach
   The last line on stderr says what happened. Always read it:
     "job <id> exited with code N"   the command ended; N is also the exit code
@@ -294,6 +308,10 @@ End
   hostel release                when you are done. A lease also ends after
                                 10 minutes without a hostel command.
 Changes on the room are temporary. Make durable changes in your local files.
+Cleanup deletes the work directory and the lease's files, but not the caches
+outside it (mise tools, $HOSTEL_CACHE_DIR, ~/.gradle, and other files in the
+home directory). The next lease on the room, also of another user, can read
+them. They make builds faster; never write a secret there.
 If a command says 'run "hostel update"', tell the user; do not update hostel
 yourself (other agents on this computer use the same binary).
 `

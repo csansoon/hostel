@@ -116,7 +116,7 @@ func TestStatusPlain(t *testing.T) {
 	f := newFixtureWithEnv(t, e, &fixtureOpts{machineKeys: e.externalProvider("cloud", "", nil, `
 [providers.cloud.machines.small]
 os = "linux"
-spec = { image = "room" }
+spec = { image = "room", machine_type = "linux/amd64:4x16" }
 max_rooms = 2
 `)})
 	match := func(r result, patterns ...string) {
@@ -132,8 +132,12 @@ max_rooms = 2
 		`(?m)^ROOM\s+TOOLS\s+STATE\s+USER\s+TASK\s+TIME\s+LEASE$`,
 		`(?m)^home/box\s+fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2\s+free$`,
 		`(?m)^cloud/small\s+linux\s+none\s+\(on demand, up to 2\)$`,
-		`(?m)^Details: hostel status <room> .* or hostel status <tool> \(the leases that wait for it\)\.$`,
+		`(?m)^Details: hostel status <room or machine> .* or hostel status <tool> \(the leases that wait for it\)\.$`,
 		`(?m)^To get a room: hostel acquire \[<tool>\.\.\.\] --task "\.\.\."`)
+	// The row of a machine without a room has details too.
+	match(f.e.mustHostel("status", "cloud/small"),
+		`(?m)^cloud/small · on demand, up to 2 rooms · linux · 4 cores, 16 GB$`,
+		`(?m)^No room now: the next lease that needs this machine gets one\.$`)
 	// Without a terminal, "hostel" alone prints the help (the app needs a
 	// terminal).
 	if r := f.e.hostel(); r.code != 2 || !strings.Contains(r.stderr, "Usage: hostel <command>") {

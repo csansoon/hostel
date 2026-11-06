@@ -121,13 +121,19 @@ Exit codes of `acquire`:
 
 ## Work
 
+`run` and `attach` wait 100 seconds and return with code 75 while the job goes
+on. For a long build, keep each command shorter than the time limit of your own
+shell tool: start it with `hostel run --detach`, then run
+`hostel attach <job> --wait 9m` until the job ends. A running job alone does not
+keep the lease, so keep the wait below `idle_timeout`.
+
 ```sh
 hostel info                                # the machine facts of the lease again
 hostel run -- "make test"                 # one argument: runs with sh -c (PowerShell on Windows)
 hostel run -- xcodebuild -version          # several arguments: no shell
 hostel run --detach -- "npm run dev"       # start a job, print its ID
 hostel jobs
-hostel attach <job>
+hostel attach <job> --wait 9m              # the output until the job ends or the wait ends
 hostel stop <job>
 hostel sync                                # send local changes again (after each edit)
 hostel sync --setup                        # run the repository setup again
@@ -163,7 +169,7 @@ A tunnel makes a local server reachable on the room at
 during a lease:
 
 ```sh
-hostel tunnel list
+hostel tunnel list                                # each tunnel: confirmed, or what is missing
 hostel tunnel add api --local-port-env PORT       # or --local-port 3000; [--room-port P]
 hostel tunnel set api --local-port 3001
 hostel tunnel remove api
@@ -230,7 +236,10 @@ hostel release
 
 A lease also ends after 10 minutes without a `hostel` command (`idle_timeout`),
 and at `max_lease` (default 2 hours). Changes on the room are temporary: make
-durable changes in local files. `hostel release <lease-id>` ends another lease
+durable changes in local files. Cleanup does not delete the caches: mise tools,
+`$HOSTEL_CACHE_DIR`, `~/.gradle`, and other files in the home directory of the
+room stay, and the next lease can read them, also of another user. Never write a
+secret there. `hostel release <lease-id>` ends another lease
 of yours (admins: any lease).
 
 If a command prints `run "hostel update"`, tell the user. Do not update

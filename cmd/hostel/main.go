@@ -43,7 +43,7 @@ var commands = []command{
 	{name: "ssh-config", summary: "Write an ssh_config file for the lease", run: guest.SSHConfig},
 	{name: "tunnel", summary: "List or change tunnels from the room to this machine", run: guest.Tunnel},
 	{name: "forward", summary: "Forward a local port to a port on the room", run: guest.Forward},
-	{name: "status", summary: "Show the rooms, leases, and the waiting line; \"hostel status <room|tool>\" shows details", run: statusCmd},
+	{name: "status", summary: "Show the rooms, leases, and the waiting line; \"hostel status <room|machine|tool>\" shows details", run: statusCmd},
 	{name: "ls", hidden: true, run: statusCmd},
 	{name: "rooms", hidden: true, run: statusCmd},
 	{name: "release", summary: "End the lease", run: guest.Release},

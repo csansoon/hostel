@@ -760,6 +760,7 @@ success; else stdout has `{"error": "..."}`.
 | `run-script <tool> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "last_line", "missing", "timed_out"}`; `missing` when the tool has no script for this step and OS; `last_line` is the version that a `check` prints |
 | `cleanup` | server | `{"lease_id", "started", "ports", "check"}` (from the database, so a repeated cleanup does not need `lease.json`; `started` are the screen tools of the lease with their options, stopped in reverse order; the server sets `check` at the time of the cleanup: the tools that the room has installed) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
+| `mise-current` | guest | — | `[{"name", "version"}]`: the tools that the mise files in the work directory select now (for the lease facts). |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
 | `sync-apply <plan-id>` | guest | a `tar` stream (not JSON) | `{"written", "deleted"}` |
 | `diff` | guest | — | unified diff text (not JSON) |
@@ -852,7 +853,7 @@ no scripts at all (a tool that only sets `env` and `path`). Steps:
 | Step | When | Example for `ios-simulator` |
 |---|---|---|
 | `install` | once for each room, and again when the tool's files, the machine's options of a screen tool, or the machine `env` change; before it, the `install` of each tool in `needs` | create one golden simulator for each option |
-| `check` | after `install`, after each cleanup, at repair, and before a warm room takes a lease; the last line of the output is the tool's version (a software tool) or its options, comma-separated (a screen tool); a non-zero exit code means that the tool does not work. A screen tool whose check reports none of the options that the machine lists fails too (no lease could start it) | Xcode works; the golden simulators exist; enough free disk |
+| `check` | after `install`, after each cleanup, at repair, and before a warm room takes a lease; the last line of the output is the tool's versions (a software tool: all that it has now, also what builds added to the cache) or its options (a screen tool), comma-separated; a non-zero exit code means that the tool does not work. A screen tool whose check reports none of the options that the machine lists fails too (no lease could start it) | Xcode works; the golden simulators exist; enough free disk |
 | `start` | screen tools only: for each lease that asked for the tool, before `ready`, after the `start` of the tools in `needs`; writes facts to `tool.env` | clone the golden simulator of each requested option; boot it |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output path, `$2` the option (default: the first of the lease) | `xcrun simctl io "$udid" screenshot "$1"` |
 | `stop` | screen tools only: cleanup of a lease that started the tool, in reverse order of `start` | stop the processes that use the slot's clones (by UDID), then shut down and delete the clones |
@@ -1187,7 +1188,9 @@ env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 - `hostel admin config check --repo hostel.toml` validates a repository file.
 
 **Caches.** mise installs, package stores, DerivedData, and Gradle caches are outside
-`slots/<slot>/work`. Cleanup does not delete them.
+`slots/<slot>/work`. Cleanup does not delete them: all files outside `slots/<slot>/`
+(`hostel/cache`, `~/.gradle`, and the rest of the room user's home directory) stay for
+the next lease, also of another user. The agent guide says so: no secrets there.
 
 ### The Mac desktop (`macos-desktop`)
 
@@ -1389,8 +1392,9 @@ The command is resumable. Each step records its result in the local state.
    name), its OS with version and architecture, its hardware, all tools of the
    machine with their options and environment names (also the ones that the lease
    did not ask for), the screen tools that started for the lease with their
-   options and facts (`ANDROID_SERIAL`, `SIMULATOR_UDID`), the work directory, the
-   tunnels, and the expiry:
+   options and facts (`ANDROID_SERIAL`, `SIMULATOR_UDID`), the tools that the
+   repository's mise files select now (they come first in jobs), the work
+   directory, the tunnels with what is missing on the guest side, and the expiry:
 
    ```
    lease l-4f2a is ready on ns/linux
@@ -1431,7 +1435,7 @@ a fixed `room_port` get ports from the slot's pool in name order.
 
 | Command | Effect |
 |---|---|
-| `hostel tools [<tool>] [--json]` | Each tool: its options (from the inventories), whether it is a screen tool, the machines that have it, free slots, waiting leases, and the estimated wait (R1); a last line names the repository's mise tools, which work on every machine. With a name: the description, the needs, the environment names, the machines with their options and OS, and the tool's `GUIDE.md`. |
+| `hostel tools [<tool>] [--json]` | Each tool: its options (from the inventories), whether it is a screen tool, the machines that have it, free slots, waiting leases, and the estimated wait (R1); a last line names the repository's mise tools, which work on every machine. With a name: the description, the needs, the environment names, the machines with their options, OS, and size (from the machine's newest room, else from its configuration), and the tool's `GUIDE.md`. |
 | `hostel acquire [<tool[:option]>...] --task ... [--priority low\|normal\|high] [--fresh] [--wait 100s] [--background]` | Creates or continues a lease. The lease ID is in the worktree (`$(git rev-parse --git-dir)/hostel/lease/lease.json`), so the same command continues the same lease and its place. When it returns with code 75 for a waiting lease, it says how long the server keeps the place without it (`poll_timeout`). With `--background`, a lease that is not ready makes it return at once and start a detached `hostel keep-place --dir <state dir>` that polls the lease until it is ready or ends (one keeper for each lease: `keeper.json` holds its ID, the lease ID, its process ID, and its heartbeat; it also stops when the worktree has another lease, after 1 h without an answer, and after 24 h; it removes its heartbeat when it stops; server errors and network errors do not stop it). |
 | `hostel sync [--setup]` | Sends the changed files again. `--setup` runs the setup job again. |
 | `hostel run [--detach] [--wait 100s] [--json] -- <command>` | Starts a job in the work directory and streams its output. One argument runs with `sh -c` (`hostel run -- "make && make test"`); several arguments run without a shell. The command is found in the job's PATH (with the mise tools). |
@@ -1442,10 +1446,10 @@ a fixed `room_port` get ports from the slot's pool in name order.
 | `hostel diff` | Shows the temporary changes against the last baseline commit. |
 | `hostel ssh [-- command]` | Interactive shell, or one command, with the system `ssh` client and the file of `ssh-config`. |
 | `hostel ssh-config` | Writes an `ssh_config` file for `ssh -F` (gateway address, lease user, lease key, pinned gateway host key) and prints its path. |
-| `hostel tunnel list` | Lists the tunnels with their local and room ports. |
+| `hostel tunnel list` | Lists the tunnels with their local and room ports and their state: `confirmed` only when the room listens and a local server answers, else what is missing. |
 | `hostel tunnel add <name> (--local-port N \| --local-port-env VAR) [--room-port P]` / `tunnel set <name> [--local-port N] [--room-port P]` / `tunnel remove <name>` | Changes tunnels during a lease (section 14). |
 | `hostel forward <room-port> [--local-port N]` / `forward list` / `forward stop <room-port>` | Guest → room forwards (section 14). |
-| `hostel status [room \| tool]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, tools, time, lease ID) and their inventory, the machines without rooms, and the waiting line. `hostel status <room>` prints the details of a room (hardware, inventory, leases with jobs, the waiting leases that it can serve, events, room ID); `hostel status <tool>` prints the waiting leases that asked for that tool (position, user, task, tools, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
+| `hostel status [room \| machine \| tool]` (aliases `ls`, `rooms`) | Plain text for agents and scripts (people use the app, below): the rooms with their leases (user, task, tools, time, lease ID) and their inventory, the machines without rooms, and the waiting line. `hostel status <room>` prints the details of a room (hardware, inventory, leases with jobs, the waiting leases that it can serve, events, room ID); `hostel status <machine>` prints a machine without a room of that name (kind, OS, size, tools, its rooms now); `hostel status <tool>` prints the waiting leases that asked for that tool (position, user, task, tools, priority, wait, estimate, lease ID, reason). Control characters from users (tasks, commands) are removed. |
 | `hostel release` | Ends the lease (or cancels it if it is still queued) and stops the port process. |
 | `hostel agent-guide` | Prints short usage instructions for coding agents: the general rule ("ask for the tools you need; ask for a screen tool only when you need to see the app"; the software of the machine is always usable; one lease per worktree; read the machine facts at ready), the commands, then the `GUIDE.md` of each tool that a machine of the server lists (from `GET /v1/tools`). Without a connection, it prints the general part and says that the tool guides come from the server. |
 | `hostel update [--check] [--version v]` | Replaces this binary with a newer release (section 2, "Releases and updates"). |
@@ -1912,6 +1916,10 @@ handles all tunnels and forwards of the lease.
   example a room service already uses a fixed port), the command fails with that
   message and the server registration is undone. `hostel acquire` waits until all
   tunnels of `hostel.toml` are confirmed; a refused tunnel makes it exit with code 1.
+  The room side alone does not make a tunnel work. The `check` request also finds the
+  local port and connects to it, for `hostel tunnel`, the lease facts, and no other
+  use. A missing local server does not stop a lease: it can start later, and a build
+  may not need it.
 - **Lease state.** Every `tunnel_check` (a value in the lease data) it reads the
   lease with `GET /v1/leases/{id}`. It never calls `touch`. It exits when the lease
   is no longer `ready`. `hostel release` stops it at once.

@@ -69,10 +69,13 @@ func TestTools(t *testing.T) {
 	}
 	r = f.e.mustHostel("tools", "fake-sdk")
 	for _, want := range []string{"fake-sdk 1.4.2: Simulated SDK for the E2E tests", "environment  FAKE_SDK_HOME, PATH",
-		"machines     home/a (1.4.2, linux)", "A simulated SDK for the E2E tests. Commands get FAKE_SDK_HOME."} {
+		"A simulated SDK for the E2E tests. Commands get FAKE_SDK_HOME."} {
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("hostel tools fake-sdk has no %q:\n%s", want, r.stdout)
 		}
+	}
+	if !regexp.MustCompile(`(?m)^  machines     home/a \(1\.4\.2, linux, \d+ cores, \d+ GB\)$`).MatchString(r.stdout) {
+		t.Fatalf("hostel tools fake-sdk has no machine size:\n%s", r.stdout)
 	}
 	if r := f.e.mustHostel("tools", "fake-screen"); !strings.Contains(r.stdout, "needs        fake-sdk") || !strings.Contains(r.stdout, "screen       a screen") {
 		t.Fatalf("hostel tools fake-screen:\n%s", r.stdout)
@@ -316,6 +319,18 @@ func TestToolStaleInventory(t *testing.T) {
 	f.e.newRepoNamed("old", defaultRepoFiles())
 	if r := f.e.hostel("acquire", "jq:1.7", "--task", "old version", "--wait", "5s"); r.code != 69 {
 		t.Fatalf("acquire of the old version: %s, want exit code 69", r)
+	}
+}
+
+// TestToolSeveralVersions: a check can report several versions (what the
+// install gave and what builds added to the cache), and a lease can ask for any
+// of them.
+func TestToolSeveralVersions(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{tools: map[string]map[string]string{
+		"fake-sdk": {"check.linux.sh": "#!/bin/sh\necho 1.4.2,2.0.1\n"}}})
+	if r := f.e.mustHostel("acquire", "fake-sdk:2", "--task", "several"); !strings.Contains(r.stdout, "fake-sdk 1.4.2, 2.0.1") {
+		t.Fatalf("facts with several versions:\n%s", r.stdout)
 	}
 }
 

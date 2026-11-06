@@ -29,9 +29,9 @@ func apiClient() (*client.Client, error) {
 	return client.New(g)
 }
 
-// statusCmd is "hostel status [room | tool]" (aliases ls, rooms): the
-// overview, the details of a room, or the waiting leases that asked for a
-// tool.
+// statusCmd is "hostel status [room | machine | tool]" (aliases ls, rooms): the
+// overview, the details of a room or a machine, or the waiting leases that
+// asked for a tool.
 func statusCmd(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel status", stderr)
 	fs.Bool("plain", false, "print plain text (the only output; people use the app: \"hostel\")")
@@ -40,7 +40,7 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if len(rest) > 1 {
-		fmt.Fprintln(stderr, "hostel status: too many arguments; usage: hostel status [room | tool]")
+		fmt.Fprintln(stderr, "hostel status: too many arguments; usage: hostel status [room | machine | tool]")
 		return 2
 	}
 	c, err := apiClient()
@@ -66,6 +66,10 @@ func statusCmd(args []string, stdout, stderr io.Writer) int {
 			}
 			cleanDetails(&d)
 			printRoomDetails(stdout, d, now)
+			return 0
+		}
+		if i := slices.IndexFunc(st.Machines, func(m protocol.MachineStatus) bool { return m.Key == rest[0] }); i >= 0 {
+			printMachine(stdout, st, st.Machines[i])
 			return 0
 		}
 		if err := printQueue(stdout, st, rest[0], now); err != nil {
@@ -139,8 +143,39 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 		printWaiting(w, q, now)
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Details: hostel status <room> (its leases, jobs, events) or hostel status <tool> (the leases that wait for it).")
+	fmt.Fprintln(w, "Details: hostel status <room or machine> (its leases, jobs, events) or hostel status <tool> (the leases that wait for it).")
 	fmt.Fprintln(w, "To get a room: hostel acquire [<tool>...] --task \"...\" (\"hostel tools\" lists the tools).")
+}
+
+// printMachine prints a machine that has no room of that name: an on-demand
+// machine, with or without rooms now.
+func printMachine(w io.Writer, st protocol.Status, m protocol.MachineStatus) {
+	head := []string{m.Key}
+	if m.Kind == "static" {
+		head = append(head, "static")
+	} else {
+		head = append(head, "on demand, up to "+plural(m.MaxRooms, "room"))
+	}
+	head = append(head, m.OS)
+	if size := m.Hardware.Size(); size != "" {
+		head = append(head, size)
+	}
+	fmt.Fprintln(w, strings.Join(head, " · "))
+	fmt.Fprintf(w, "Tools %s\n\n", strings.Join(m.Tools, ", "))
+	tw := newTable(w)
+	fmt.Fprintln(tw, "ROOM\tSTATE")
+	n := 0
+	for _, r := range st.Rooms {
+		if r.Provider+"/"+r.Machine == m.Key {
+			fmt.Fprintf(tw, "%s\t%s\n", r.Name, roomState(r, len(roomLeases(st, r.ID))))
+			n++
+		}
+	}
+	if n > 0 {
+		tw.flush()
+		return
+	}
+	fmt.Fprintln(w, "No room now: the next lease that needs this machine gets one.")
 }
 
 // printWaiting prints waiting leases in the order of the waiting line.

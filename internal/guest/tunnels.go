@@ -64,6 +64,8 @@ func printTunnels(w io.Writer, resp portResponse) {
 			state = t.Error
 		case !t.Confirmed:
 			state = "connecting"
+		case t.Problem != "":
+			state = t.Problem
 		}
 		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", t.Name, t.RoomPort, t.Local, state)
 	}
@@ -95,7 +97,7 @@ func Tunnel(args []string, stdout, stderr io.Writer) int {
 		if len(pos) != 0 {
 			return usage()
 		}
-		req.Op = "status"
+		req.Op = "check"
 	case "add":
 		if len(pos) != 1 || set["local-port"] == set["local-port-env"] {
 			return usage()

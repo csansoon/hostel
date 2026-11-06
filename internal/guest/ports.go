@@ -113,6 +113,9 @@ type tunnelStatus struct {
 	Local     string `json:"local"`
 	Confirmed bool   `json:"confirmed"`
 	Error     string `json:"error,omitempty"`
+	// Problem says why the guest side does not work now; only the "check"
+	// request looks at that side.
+	Problem string `json:"problem,omitempty"`
 }
 
 type forwardStatus struct {
@@ -433,6 +436,10 @@ func (p *portProc) dialLocal(name string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return dialPort(port)
+}
+
+func dialPort(port int) (net.Conn, error) {
 	// A local server can listen on either loopback address.
 	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 5*time.Second)
 	if err == nil {
@@ -442,7 +449,30 @@ func (p *portProc) dialLocal(name string) (net.Conn, error) {
 	if err6 == nil {
 		return c, nil
 	}
-	return nil, fmt.Errorf("local port %d: %v", port, err)
+	return nil, fmt.Errorf("nothing listens on local port %d: %v", port, err)
+}
+
+// checkLocal adds the state of the guest side to a status: the room side alone
+// does not make a tunnel work. It is outside status, which acquire polls.
+func (p *portProc) checkLocal(resp portResponse) portResponse {
+	for i := range resp.Tunnels {
+		t := &resp.Tunnels[i]
+		port, err := p.localPort(t.Name)
+		if err != nil {
+			t.Problem = err.Error()
+			continue
+		}
+		if strings.HasPrefix(t.Local, "$") {
+			t.Local = fmt.Sprintf("%s (%d)", t.Local, port)
+		}
+		c, err := dialPort(port)
+		if err != nil {
+			t.Problem = fmt.Sprintf("nothing listens on local port %d", port)
+			continue
+		}
+		c.Close()
+	}
+	return resp
 }
 
 // readDotEnv reads KEY=VALUE lines (with optional "export " and quotes).
@@ -558,11 +588,17 @@ func (p *portProc) handle(ctx context.Context, req portRequest) (portResponse, e
 		return portResponse{}, nil
 	case "status":
 		return p.status(), nil
+	case "check":
+		return p.checkLocal(p.status()), nil
 	case "stop":
 		p.stop()
 		return portResponse{}, nil
 	case "tunnel_add", "tunnel_set", "tunnel_remove":
-		return p.changeTunnel(ctx, req)
+		resp, err := p.changeTunnel(ctx, req)
+		if err != nil {
+			return resp, err
+		}
+		return p.checkLocal(resp), nil
 	case "forward_add":
 		return p.addForward(req)
 	case "forward_stop":

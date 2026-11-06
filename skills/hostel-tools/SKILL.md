@@ -139,7 +139,7 @@ it has no scripts at all (a tool that only sets `env` and `path`).
 | Step | When | Runs in |
 |---|---|---|
 | `install` | once for each room, and again when the tool's files or the machine's options of a screen tool change (after the `install` of its needs) | `hostel/` |
-| `check` | after install, after each cleanup, at repair, before a warm room takes a lease: exit non-zero if the tool does not work; print the version (or the options of a screen tool, comma-separated) on the last line | `hostel/` |
+| `check` | after install, after each cleanup, at repair, before a warm room takes a lease: exit non-zero if the tool does not work; print the version (or several versions, or the options of a screen tool, comma-separated) on the last line | `hostel/` |
 | `start` | screen tools only: each lease that asks for the tool, before it is ready, after the `start` of its needs; write the facts to `tool.env` | `slots/<slot>/` |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output PNG path, `$2` the option | `slots/<slot>/` |
 | `stop` | screen tools only: at cleanup, in reverse order of `start`; stop and delete what `start` started | `slots/<slot>/` |

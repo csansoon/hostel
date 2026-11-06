@@ -128,7 +128,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 			}
 			cands = append(cands, m.Key())
 			entry.Machines = append(entry.Machines, protocol.ToolMachine{Key: m.Key(), OS: m.OS, Options: nonNil(h.Options),
-				OnDemand: m.OnDemand(), Online: online(m, view.rooms)})
+				OnDemand: m.OnDemand(), Online: online(m, view.rooms), Hardware: machineHardware(m, view.rooms)})
 			for _, o := range h.Options {
 				if !slices.Contains(entry.Options, o) {
 					entry.Options = append(entry.Options, o)

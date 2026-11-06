@@ -81,8 +81,24 @@ func TestTunnels(t *testing.T) {
 	if r := f.e.mustHostel("run", "--", "echo $API_URL $HOSTEL_TUNNEL_API_PORT"); r.stdout != "http://localhost:7500 7500\n" {
 		t.Fatalf("tunnel environment: %q", r.stdout)
 	}
+	// The room side alone does not make a tunnel work: the state and the
+	// facts say what is missing, and the lease goes on.
+	nothing := fmt.Sprintf("nothing listens on local port %d", free)
+	if r := f.e.mustHostel("tunnel", "list"); !strings.Contains(r.stdout, nothing) || strings.Contains(r.stdout, "confirmed") {
+		t.Fatalf("tunnel list without a local server:\n%s", r.stdout)
+	}
+	if r := f.e.mustHostel("info"); !strings.Contains(r.stdout, fmt.Sprintf("api: room port 7500 → local $PORT (%d): %s", free, nothing)) {
+		t.Fatalf("facts without a local server:\n%s", r.stdout)
+	}
+	if r := f.e.mustHostel("tunnel", "add", "ghost", "--local-port-env", "HOSTEL_NOT_SET"); !strings.Contains(r.stdout, "no local port: HOSTEL_NOT_SET is not set") {
+		t.Fatalf("tunnel add with an unset variable:\n%s", r.stdout)
+	}
+	f.e.mustHostel("tunnel", "remove", "ghost")
 	// The local server starts after the tunnel, on the port from .env.
 	localHTTP(t, fmt.Sprintf("127.0.0.1:%d", free), "first")
+	if r := f.e.mustHostel("tunnel", "list"); !strings.Contains(r.stdout, "confirmed") {
+		t.Fatalf("tunnel list with a local server:\n%s", r.stdout)
+	}
 	if r := f.roomGet("$HOSTEL_TUNNEL_API_PORT", "/a"); !strings.Contains(r.stdout, "hello from first /a") {
 		t.Fatalf("tunnel: %s", r)
 	}
