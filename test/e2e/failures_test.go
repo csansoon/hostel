@@ -72,11 +72,11 @@ func TestFailures(t *testing.T) {
 	f.marker("fail-stop", false)
 	f.admin("admin", "room", "repair", f.roomID())
 	f.e.mustHostel("acquire", "fake-screen", "--task", "next")
-	// One successful stop: the repair after the failed stop (a failing stop
-	// writes no log line). The cleanup after the failed start runs no stop:
-	// fake-screen did not start.
-	if got := f.c.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log"); got != "1" {
-		t.Fatalf("successful stops: %s, want 1", got)
+	// Two successful stops: the cleanup after the failed start (the tool can
+	// leave processes), and the repair after the failed stop (a failing stop
+	// writes no log line).
+	if got := f.c.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log"); got != "2" {
+		t.Fatalf("successful stops: %s, want 2", got)
 	}
 }
 

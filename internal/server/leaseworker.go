@@ -336,6 +336,12 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 		if t == nil || t.Script(m.OS, config.StepStart) == "" {
 			continue
 		}
+		// Recorded first: a start that fails can leave processes, and cleanup
+		// must stop them (stop scripts are idempotent).
+		started = withStarted(started, st)
+		if err := s.store.SetStarted(ctx, l.ID, started); err != nil {
+			return err
+		}
 		timeout := t.ScriptTimeout(config.StepStart)
 		env := map[string]string{"HOSTEL_LEASE_ID": l.ID, "HOSTEL_TOOL_OPTIONS": strings.Join(st.Options, ",")}
 		resp, err := room.RunScript(ctx, t.Name, config.StepStart, l.SlotName,
@@ -352,8 +358,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 			return fmt.Errorf("tool %s: start script exited with code %d", t.Name, resp.ExitCode)
 		}
 		st.Facts = resp.Facts
-		started = slices.DeleteFunc(started, func(o protocol.StartedTool) bool { return o.Name == st.Name })
-		started = append(started, st)
+		started = withStarted(started, st)
 		if err := s.store.SetStarted(ctx, l.ID, started); err != nil {
 			return err
 		}
@@ -365,6 +370,12 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	}
 	s.extendDeadline(ctx, r, m, now)
 	return s.store.SetSlots(ctx, l.ID, protocol.SlotLeased)
+}
+
+// withStarted puts st last in started, in place of its earlier entry.
+func withStarted(started []protocol.StartedTool, st protocol.StartedTool) []protocol.StartedTool {
+	out := slices.DeleteFunc(slices.Clone(started), func(o protocol.StartedTool) bool { return o.Name == st.Name })
+	return append(out, st)
 }
 
 // extendDeadline moves the provider deadline of a machine that cannot stop to

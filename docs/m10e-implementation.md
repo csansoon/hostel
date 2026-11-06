@@ -374,7 +374,8 @@ later milestone:
   each part of the model.
 - **Several tools in one lease.** Their `start` steps run in the order of needs
   and `stop` in reverse order; a failed `start` stops the ones that already
-  started, then the lease fails as a `prepare` failure does today.
+  started and the one that failed (it can leave processes; `stop` scripts are
+  idempotent), then the lease fails as a `prepare` failure does today.
 - **Two heavy screens on one machine** (two emulators on an 8 GB Mac). The slots
   of the machine limit it, as today; the admin sets the slots.
 - **The owner's own server** needs a new configuration at the update (section

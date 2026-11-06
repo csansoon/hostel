@@ -254,7 +254,8 @@ during network I/O: read the state, do the I/O, then write the result with a
 compare-and-set. Each worker step is idempotent, so a worker can repeat it after a
 restart.
 
-`leases.started` holds the screen tools that started, each with its options
+`leases.started` holds the screen tools whose `start` ran (written before the
+script runs, because a failed start can leave processes that cleanup must stop), each with its options
 and the names of its `tool.env` facts; the server adds each one after its
 `start` succeeded. "Waiting behind N" is not a column: the server keeps the
 result of the last scheduler pass in memory (a change of it also changes the
@@ -436,7 +437,8 @@ for android-sdk on a Linux machine.
 - Room rows are never deleted. `rooms.id` uses SQLite `AUTOINCREMENT`, so an ID and
   its provider name are never used twice.
 
-**Estimated wait.** For each waiting lease: the number of leases before it in the
+**Estimated wait.** A whole-machine request counts rooms with all slots free, not
+slots. For each waiting lease: the number of leases before it in the
 order that share one of its candidate machines, plus one for the lease itself, ×
 the median lease duration on its candidate machines (from the last 50 leases) ÷
 the number of slots on its candidate machines. When the candidates have no free
@@ -456,7 +458,7 @@ estimate, with "waiting behind N leases"; `hostel tools` adds "(new room)".
 | Room provisioning fails (probe, upload, mise tools) | The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
 | SSH connection to a room fails (dial or handshake), in any step | Not a script failure. A static room becomes `broken` with reason "unreachable"; its slot becomes `dirty` if the lease had called `begin` (section 4, slot states); the room recovers by itself when a later probe succeeds (each reconcile) and its dirty slots are cleaned; the lease returns to `queued` (not an attempt). An on-demand room is destroyed; the lease returns to `queued`, and this **is** an attempt, so a machine with a bad SSH setup cannot create rooms without limit. A lease that was `ready` fails with "room unreachable". |
 | A tool's `install` script fails, or its first `check` fails | The tool is `failed` in the room's inventory; the room becomes `broken`. The lease returns to `queued`. This is an attempt. |
-| A screen tool's `start` script fails | Run the `stop` scripts of the screen tools that already started, in reverse order, and cleanup for the slot. The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
+| A screen tool's `start` script fails | Run the `stop` scripts of the screen tools that already started and of the tool that failed, in reverse order, and cleanup for the slot. The room becomes `broken`. The lease returns to `queued`. This is an attempt. |
 | A lease reaches 3 attempts | The lease fails with the last error message. |
 | Cleanup fails | Slot and room become `broken` (R24). |
 | `mise install` or repository setup fails (guest side) | The lease stays `ready`. `acquire` exits with code 1 and prints the job ID and the end of its output. The agent can fix the code and run `hostel sync --setup`. |

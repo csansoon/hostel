@@ -16,9 +16,10 @@ import (
 // repoToolsNote is the note of GET /v1/tools about the repository's tools.
 const repoToolsNote = "The tools of the repository's mise files (mise.toml, .tool-versions) are set up for each lease on every machine; do not ask for them."
 
-// capacity counts the free slots and all slots of the candidate machines, and
-// whether one of them can create a new room now.
-func (s *Server) capacity(cands []string, rooms []store.Room, slots []store.Slot) (free, total int, newRoom bool) {
+// capacity counts what the candidate machines can take: free and all slots,
+// or, for a whole-machine request, rooms with all slots free and all rooms. It
+// also says whether one of the machines can create a new room now.
+func (s *Server) capacity(cands []string, rooms []store.Room, slots []store.Slot, whole bool) (free, total int, newRoom bool) {
 	perMachine := map[string]int{}
 	for _, r := range rooms {
 		key := r.Provider + "/" + r.Machine
@@ -26,12 +27,23 @@ func (s *Server) capacity(cands []string, rooms []store.Room, slots []store.Slot
 			continue
 		}
 		perMachine[key]++
+		usable := r.State == protocol.RoomRunning && !r.Drained
+		roomSlots, roomFree := 0, 0
 		for _, sl := range slots {
 			if sl.RoomID != r.ID {
 				continue
 			}
+			roomSlots++
+			if sl.State == protocol.SlotFree && usable {
+				roomFree++
+			}
+		}
+		switch {
+		case !whole:
+			total, free = total+roomSlots, free+roomFree
+		case roomSlots > 0:
 			total++
-			if sl.State == protocol.SlotFree && r.State == protocol.RoomRunning && !r.Drained {
+			if roomFree == roomSlots {
 				free++
 			}
 		}
@@ -40,7 +52,11 @@ func (s *Server) capacity(cands []string, rooms []store.Room, slots []store.Slot
 		m := s.config().Machine(key)
 		if m != nil && m.OnDemand() && perMachine[key] < *m.MaxRooms {
 			newRoom = true
-			total += len(m.Slots)
+			if whole {
+				total++
+			} else {
+				total += len(m.Slots)
+			}
 		}
 	}
 	return free, total, newRoom
@@ -129,7 +145,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 			}
 			entry.Options = nonNil(ordered)
 		}
-		free, total, newRoom := s.capacity(cands, view.rooms, slots)
+		free, total, newRoom := s.capacity(cands, view.rooms, slots, leaseRequest(view.lc.cfg, store.Lease{Tools: []string{name}}).Exclusive)
 		for _, l := range leases {
 			if l.State == protocol.LeaseQueued && slices.Contains(toolNamesOf(l.Tools), name) {
 				entry.Waiting++
@@ -172,8 +188,9 @@ func (s *Server) leaseWait(ctx context.Context, l store.Lease) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	cands := scheduler.Candidates(view.schedMachines(), leaseRequest(view.lc.cfg, l))
-	free, total, newRoom := s.capacity(cands, view.rooms, slots)
+	req := leaseRequest(view.lc.cfg, l)
+	cands := scheduler.Candidates(view.schedMachines(), req)
+	free, total, newRoom := s.capacity(cands, view.rooms, slots, req.Exclusive)
 	behind := s.waitingOf(l.ID).Behind
 	return int(s.estimatedWait(ctx, cands, behind, total, newRoom && free == 0).Seconds()), behind
 }

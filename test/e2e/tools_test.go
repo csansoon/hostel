@@ -219,7 +219,8 @@ func TestToolLease(t *testing.T) {
 		t.Fatalf("acquire with a failing start: %s", r)
 	}
 	failed := createdID(t, r)
-	if !strings.Contains(log(), "stop linux "+failed+" option-a") || strings.Contains(log(), "stop panel "+failed) {
+	// The tool whose start failed stops too: it can leave processes.
+	if !regexp.MustCompile(`stop panel ` + failed + ` \n(.*\n)*stop linux ` + failed + ` option-a`).MatchString(log()) {
 		t.Fatalf("stops after the failed start:\n%s", log())
 	}
 	// The waiting lease has no started tools: they were on the old slot.
@@ -329,6 +330,30 @@ func TestToolMiseNeed(t *testing.T) {
 	f.e.mustHostel("acquire", "fake-needs-jq", "--task", "need")
 	if r := f.e.mustHostel("run", "--", "echo $JQ_SECTION"); r.stdout != "on\n" {
 		t.Fatalf("the env of [tool.jq]: %q", r.stdout)
+	}
+}
+
+// TestToolWholeMachineCapacity (M10e): a whole-machine tool counts rooms with
+// all slots free, not free slots: a machine with two free slots gives one, and
+// a lease on one slot leaves none.
+func TestToolWholeMachineCapacity(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{machineKeys: "slots = [{ name = \"a\" }, { name = \"b\" }]\n",
+		machineTools: []string{"fake-screen", "fake-desktop"}})
+	free := func() int {
+		t.Helper()
+		var one protocol.Tool
+		if err := json.Unmarshal([]byte(f.e.mustHostel("tools", "fake-desktop", "--json").stdout), &one); err != nil {
+			t.Fatal(err)
+		}
+		return one.FreeSlots
+	}
+	if got := free(); got != 1 {
+		t.Fatalf("free capacity of the whole machine, all slots free: %d, want 1", got)
+	}
+	f.acquire()
+	if got := free(); got != 0 {
+		t.Fatalf("free capacity of the whole machine, one slot in use: %d, want 0", got)
 	}
 }
 

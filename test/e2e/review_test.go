@@ -78,13 +78,13 @@ tools = ["fake-screen"]
 		r := s.room("home/second")
 		return r.State == protocol.RoomRunning && r.Slots[0].State == protocol.SlotFree
 	})
-	// The cleanup of the dirty slot ran: the slot directory is gone. No stop
-	// ran: the start of fake-screen did not finish.
+	// The cleanup of the dirty slot ran: the slot directory is gone. The stop
+	// ran too: the start of fake-screen did not finish and can leave processes.
 	if got := second.sh("test -e /home/hostel/hostel/slots/a && echo exists || echo removed"); got != "removed" {
 		t.Fatalf("the slot directory of the dirty slot: %s", got)
 	}
-	if got := second.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log || true"); got != "0" {
-		t.Fatalf("stops on the dirty room: %s, want 0", got)
+	if got := second.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log || true"); got != "1" {
+		t.Fatalf("stops on the dirty room: %s, want 1", got)
 	}
 }
 

@@ -136,7 +136,8 @@ type Tool struct {
 	Env      []string      `json:"env"`
 	Guide    string        `json:"guide,omitempty"`
 	Machines []ToolMachine `json:"machines"`
-	// FreeSlots counts free slots in running rooms. NewRoom is true when an
+	// FreeSlots counts free slots in running rooms (for a whole-machine tool:
+	// rooms with all slots free). NewRoom is true when an
 	// on-demand machine can create a room now.
 	FreeSlots            int  `json:"free_slots"`
 	NewRoom              bool `json:"new_room"`
