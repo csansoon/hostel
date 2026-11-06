@@ -722,6 +722,14 @@ func (s *Server) resolveTools(el *errList, key string, m *Machine) {
 	}
 }
 
+// CheckToolList checks a machine's tool list before the machine's OS is known
+// (a machine invite): the same rules as a machine in the configuration.
+func (s *Server) CheckToolList(tools []string) error {
+	el := &errList{}
+	s.resolveTools(el, "tools", &Machine{Tools: tools})
+	return el.err()
+}
+
 func toolOSes(t *Tool) []string {
 	var out []string
 	for _, o := range OSNames {

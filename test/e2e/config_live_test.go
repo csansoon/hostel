@@ -240,6 +240,10 @@ func TestConfigRooms(t *testing.T) {
 	f := newFixture(t, nil)
 	e, s := f.e, f.s
 
+	// A tool that the server cannot give fails at the invite, not at the join.
+	if r := e.adminHostel("config", "rooms", "add", "typo", "--tool", "andriod-sdk"); r.code != 1 || !strings.Contains(r.stderr, `unknown tool "andriod-sdk"`) {
+		t.Fatalf("an invite with an unknown tool: %s", r)
+	}
 	r := e.hostel("config", "rooms")
 	if r.code != 0 || !regexp.MustCompile(`home/box\s+static\s+linux\s+fake-screen\S*\s+home/box \(running\)`).MatchString(r.stdout) {
 		t.Fatalf("config rooms: %s", r)

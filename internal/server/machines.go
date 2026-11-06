@@ -52,11 +52,9 @@ func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "", fmt.Sprintf("the machine %s/%s exists already", m.Provider, m.Name))
 		return
 	}
-	for _, t := range m.Tools {
-		if _, err := config.ParseToolEntry(t); err != nil {
-			writeError(w, http.StatusBadRequest, "", err.Error())
-			return
-		}
+	if err := cfg.CheckToolList(m.Tools); err != nil {
+		writeError(w, http.StatusBadRequest, "", err.Error())
+		return
 	}
 	data, _ := json.Marshal(m)
 	now := time.Now()
