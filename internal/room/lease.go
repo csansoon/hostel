@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -234,6 +235,62 @@ func (h *helper) miseEnv(dir string, env map[string]string, warn io.Writer) map[
 		return nil
 	}
 	return m
+}
+
+// miseCurrent returns the tools that the mise files of the work directory
+// select, in the job environment. The machine's own mise tools have their
+// source outside the work directory.
+func (h *helper) miseCurrent(args []string) ([]protocol.MiseTool, error) {
+	slot, _, err := slotFlag("mise-current", args)
+	if err != nil {
+		return nil, err
+	}
+	out := []protocol.MiseTool{}
+	if _, err := os.Stat(h.misePath()); err != nil {
+		return out, nil
+	}
+	env, err := h.leaseEnv(slot, io.Discard)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), miseEnvTimeout)
+	defer cancel()
+	work := h.workDir(slot)
+	cmd := exec.CommandContext(ctx, h.misePath(), "ls", "--current", "--json")
+	cmd.Dir = work
+	cmd.Env = env
+	data, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("mise ls: %w", err)
+	}
+	var list map[string][]struct {
+		Version string `json:"version"`
+		Source  struct {
+			Path string `json:"path"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("read the output of mise ls: %w", err)
+	}
+	if real, err := filepath.EvalSymlinks(work); err == nil {
+		work = real
+	}
+	for name, versions := range list {
+		if len(versions) == 0 {
+			continue
+		}
+		rel, err := filepath.Rel(work, versions[0].Source.Path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		var all []string
+		for _, v := range versions {
+			all = append(all, v.Version)
+		}
+		out = append(out, protocol.MiseTool{Name: name, Version: strings.Join(all, "/")})
+	}
+	slices.SortFunc(out, func(a, b protocol.MiseTool) int { return strings.Compare(a.Name, b.Name) })
+	return out, nil
 }
 
 // execCommand runs a guest command (from the gateway) with the lease

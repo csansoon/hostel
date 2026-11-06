@@ -195,6 +195,23 @@ func (m *Machine) Key() string { return m.Provider + "/" + m.Name }
 // OnDemand reports whether the provider creates rooms of this machine when needed.
 func (m *Machine) OnDemand() bool { return m.Kind != ProviderStatic }
 
+// DeclaredSize is the CPU and memory (in GB) that the machine's spec states
+// ("<os>/<arch>:<cpu>x<mem>"); zero when it states none.
+func (m *Machine) DeclaredSize() (cores, memoryGB int) {
+	mt, _ := m.Spec["machine_type"].(string)
+	_, size, ok := strings.Cut(mt, ":")
+	if !ok {
+		return 0, 0
+	}
+	c, g, ok := strings.Cut(size, "x")
+	if !ok {
+		return 0, 0
+	}
+	cores, _ = strconv.Atoi(c)
+	memoryGB, _ = strconv.Atoi(g)
+	return cores, memoryGB
+}
+
 // Machines returns all machines in file order (providers in file order, then
 // machines in file order).
 func (s *Server) Machines() []*Machine {

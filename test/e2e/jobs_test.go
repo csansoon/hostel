@@ -65,12 +65,15 @@ func TestJobs(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		long = f.e.hostel("run", "--wait", "90s", "--", "echo before; sleep 6; echo after")
+		long = f.e.hostel("run", "--wait", "3m", "--", "echo before; until [ -f go ]; do sleep 0.2; done; echo after")
 	}()
+	// The job waits for the test: under load, one "hostel jobs" can take longer
+	// than a job of fixed length.
 	f.e.waitFor("job started", roomReady, func() bool {
 		return strings.Contains(f.e.hostel("jobs").stdout, "running")
 	})
 	f.s = f.s.restart()
+	f.work("touch go")
 	wg.Wait()
 	if long.code != 0 || long.stdout != "before\nafter\n" {
 		t.Fatalf("job across a server restart: %s", long)

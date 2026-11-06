@@ -69,10 +69,13 @@ func TestTools(t *testing.T) {
 	}
 	r = f.e.mustHostel("tools", "fake-sdk")
 	for _, want := range []string{"fake-sdk 1.4.2: Simulated SDK for the E2E tests", "environment  FAKE_SDK_HOME, PATH",
-		"machines     home/a (1.4.2, linux)", "A simulated SDK for the E2E tests. Commands get FAKE_SDK_HOME."} {
+		"A simulated SDK for the E2E tests. Commands get FAKE_SDK_HOME."} {
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("hostel tools fake-sdk has no %q:\n%s", want, r.stdout)
 		}
+	}
+	if !regexp.MustCompile(`(?m)^  machines     home/a \(1\.4\.2, linux, \d+ cores, \d+ GB\)$`).MatchString(r.stdout) {
+		t.Fatalf("hostel tools fake-sdk has no machine size:\n%s", r.stdout)
 	}
 	if r := f.e.mustHostel("tools", "fake-screen"); !strings.Contains(r.stdout, "needs        fake-sdk") || !strings.Contains(r.stdout, "screen       a screen") {
 		t.Fatalf("hostel tools fake-screen:\n%s", r.stdout)
@@ -214,7 +217,7 @@ func TestToolLease(t *testing.T) {
 	// A failed start stops the screen tools that started before it, and the
 	// lease waits as after a failed preparation.
 	f.marker("fail-panel", true)
-	r = f.e.hostel("acquire", "fake-panel", "--task", "panel fails", "--wait", "8s")
+	r = f.e.hostel("acquire", "fake-panel", "--task", "panel fails", "--wait", "40s")
 	if r.code != 75 || !strings.Contains(r.stderr, "room broken: tool fake-panel: start script exited with code 1") {
 		t.Fatalf("acquire with a failing start: %s", r)
 	}
@@ -319,6 +322,18 @@ func TestToolStaleInventory(t *testing.T) {
 	}
 }
 
+// TestToolSeveralVersions: a check can report several versions (what the
+// install gave and what builds added to the cache), and a lease can ask for any
+// of them.
+func TestToolSeveralVersions(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{tools: map[string]map[string]string{
+		"fake-sdk": {"check.linux.sh": "#!/bin/sh\necho 1.4.2,2.0.1\n"}}})
+	if r := f.e.mustHostel("acquire", "fake-sdk:2", "--task", "several"); !strings.Contains(r.stdout, "fake-sdk 1.4.2, 2.0.1") {
+		t.Fatalf("facts with several versions:\n%s", r.stdout)
+	}
+}
+
 // TestToolMiseNeed (M10e): the [tool.<name>] of hostel.toml also applies to a
 // mise tool that came only as a need of a requested tool.
 func TestToolMiseNeed(t *testing.T) {
@@ -397,7 +412,7 @@ env = { FAKE_SDK_VERSION = "` + version + `" }
 func TestToolNewOptionOnDemand(t *testing.T) {
 	t.Parallel()
 	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
-	f.e.mustHostel("acquire", "fake-screen", "--task", "first")
+	f.acquire()
 	f.e.mustHostel("release")
 	f.e.waitFor("the slot free", time.Minute, func() bool {
 		rooms := f.cloudRooms()

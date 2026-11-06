@@ -10,6 +10,7 @@ Start with the facts:
 ```sh
 hostel status                  # all rooms, leases, and the waiting line
 hostel status mac-mini         # one room: hardware, inventory, leases, jobs, waiting leases, events, room ID
+hostel status ns/linux         # one on-demand machine: size, tools, rooms now
 hostel status ios-simulator    # the waiting leases for one tool, with the reason of each lease
 hostel config rooms            # machines with their rooms and states
 ```
@@ -83,6 +84,7 @@ provisions it again and it becomes Vacant. Check:
 | Exit 78, `this computer is not connected to a Hostel server` | No connection. | The user runs `hostel connect <invite code>` (`hostel-install`). Agents must not do this. |
 | The lease waits for a long time | All candidate rooms are in use, broken, offline, or drained, or a provider limit is full. | `hostel status <tool>` shows the position and reason. |
 | `acquire` exits 1 after the lease is ready | The setup job (`mise install` or `setup`) failed. The lease stays. | Fix the code; `hostel sync --setup`. |
+| A tunnel fails with `no local port` or `nothing listens on local port` (`hostel tunnel list`, `hostel info`) | The room side works, but the guest side does not: the variable is unset, or the local server is not running. | Set the port in `.env`, or start the server. No restart of the lease is necessary. |
 | `job <id> is still running` (exit 75) | The command is longer than `--wait`. | `hostel attach <id>`. Never start the job again. |
 | The lease ended | Release, `idle_timeout` (10 min without a `hostel` command), `max_lease` (2 h), an admin, or a room failure. | The guest prints the end reason. Acquire again. |
 | A lease fails after 3 attempts | Provisioning or a tool's `start` failed 3 times. | Read the events of the room; fix the tool or machine. |

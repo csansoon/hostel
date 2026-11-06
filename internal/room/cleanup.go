@@ -36,7 +36,7 @@ func (h *helper) toolInfo(name string) (config.Tool, error) {
 	return t, err
 }
 
-// cleanup deletes everything a lease left (design, section 17). Each step runs
+// cleanup deletes what a lease left in its slot (design, section 17). Each step runs
 // even if an earlier step failed.
 func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupResponse, error) {
 	var resp protocol.CleanupResponse

@@ -9,8 +9,8 @@ build, a UI check, or a device test (an Android SDK, an iOS simulator, an Androi
 emulator, a macOS or Windows desktop app, Linux), they ask Hostel for a **lease**
 with the **tools** that they need. The Hostel server keeps one waiting line,
 gives the agent a **room** (one of your
-machines, or an on-demand cloud machine), and deletes everything that the lease
-left when it ends. The agent's code stays local: Hostel sends the changed files.
+machines, or an on-demand cloud machine), and cleans the room when the lease ends
+(caches stay, so the next build is fast). The agent's code stays local: Hostel sends the changed files.
 
 - Many agents, many people, few machines: leases are exclusive and wait in line, with
   priorities and wait estimates.

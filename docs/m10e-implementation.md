@@ -398,7 +398,7 @@ Done. v0.3.0 is released and runs on the owner's server.
 - **Not tested:** the Namespace smoke tests (the login of the owner's Mac may not
   create machines); `ns/linux` with tools.
 
-Follow-ups from the done-when report, for a later milestone:
+Follow-ups from the done-when report, done in M10f (`plan.md`):
 
 - A tunnel with an unset local port shows `confirmed` and does not work.
 - `hostel status <machine>` fails for an on-demand machine without a room, and

@@ -58,16 +58,22 @@ func printTunnels(w io.Writer, resp portResponse) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "TUNNEL\tROOM PORT\tLOCAL\tSTATE")
 	for _, t := range resp.Tunnels {
-		state := "confirmed"
-		switch {
-		case t.Error != "":
-			state = t.Error
-		case !t.Confirmed:
-			state = "connecting"
-		}
-		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", t.Name, t.RoomPort, t.Local, state)
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", t.Name, t.RoomPort, t.Local, t.state())
 	}
 	tw.Flush()
+}
+
+// state is what a tunnel needs now, or "confirmed": both sides work.
+func (t tunnelStatus) state() string {
+	switch {
+	case t.Error != "":
+		return t.Error
+	case t.Problem != "":
+		return t.Problem
+	case !t.Confirmed:
+		return "connecting"
+	}
+	return "confirmed"
 }
 
 // Tunnel is "hostel tunnel list|add|set|remove".
@@ -95,7 +101,7 @@ func Tunnel(args []string, stdout, stderr io.Writer) int {
 		if len(pos) != 0 {
 			return usage()
 		}
-		req.Op = "status"
+		req.Op = "check"
 	case "add":
 		if len(pos) != 1 || set["local-port"] == set["local-port-env"] {
 			return usage()

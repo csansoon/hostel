@@ -425,6 +425,19 @@ builds without an emulator, emulator QA with screenshots) with only the README,
 the skills, and the agent guide, without the problems 1, 2, and 7 of that
 report; the iOS and Windows desktop smoke tests pass with tools.
 
+## M10f. Agent follow-ups
+
+The five follow-ups of the M10e done-when report, in one pull request:
+
+- A tunnel is `confirmed` only when both sides work; `hostel tunnel`, `hostel
+  info`, and `acquire` say what is missing on the guest side.
+- `hostel status <machine>` works for each machine, and `hostel tools <tool>`
+  shows the CPU and memory of each machine.
+- The lease facts show the tools that the repository's mise files select, and a
+  software tool's check can report all its versions (`android-sdk`).
+- The docs say what cleanup keeps, and who can read it.
+- The agent guide explains long builds (`run --detach`, `attach --wait`).
+
 ## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor

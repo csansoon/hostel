@@ -26,6 +26,9 @@ const pollWait = 50 * time.Second
 // backgroundLook bounds the look of acquire --background at the lease.
 const backgroundLook = 5 * time.Second
 
+// factsTimeout bounds the look at the room for the lease facts.
+const factsTimeout = 40 * time.Second
+
 // maxPollRetry is the longest pause before a poll after a network error.
 const maxPollRetry = 10 * time.Second
 
@@ -478,13 +481,8 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 		machine += " " + a.Hardware.OSVersion
 	}
 	machine += " (" + a.RoomArch + ")"
-	if hw := a.Hardware; hw != nil {
-		if hw.Cores > 0 {
-			machine += fmt.Sprintf(", %d cores", hw.Cores)
-		}
-		if hw.MemoryBytes > 0 {
-			machine += fmt.Sprintf(", %d GB", (hw.MemoryBytes+1<<29)>>30)
-		}
+	if size := a.Hardware.Size(); size != "" {
+		machine += ", " + size
 	}
 	fmt.Fprintf(w, "  machine:    %s\n", machine)
 	var tools, screens []string
@@ -499,6 +497,9 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 		tools = []string{"-"}
 	}
 	fmt.Fprintf(w, "  tools:      %s\n", strings.Join(tools, " · "))
+	if repo := repositoryTools(st, rc); len(repo) > 0 {
+		fmt.Fprintf(w, "  repository: %s   (your mise files; jobs use these first)\n", strings.Join(repo, " · "))
+	}
 	var started []string
 	for _, s := range st.Started {
 		started = append(started, toolFact(s.Name, s.Options, s.Facts))
@@ -516,6 +517,14 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 	fmt.Fprintf(w, "  expires:    %s at the latest; without activity at %s (each hostel command extends it)\n",
 		a.ExpiresAt.Local().Format(time.DateTime), a.IdleExpiresAt.Local().Format(time.DateTime))
 	tunnels, _ := loadTunnels(st)
+	if len(tunnels) > 0 {
+		if resp, err := callPorts(st, portRequest{Op: "check"}); err == nil {
+			fmt.Fprintln(w, "  tunnels:")
+			for _, t := range resp.Tunnels {
+				fmt.Fprintf(w, "    %s: room port %d → local %s: %s\n", t.Name, t.RoomPort, t.Local, t.state())
+			}
+		}
+	}
 	env := leaseEnv(st.leaseTools(), rc, tunnelPorts(tunnels))
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
@@ -533,6 +542,30 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 		next = "Next: hostel run -- <command>   hostel sync   hostel screenshot   hostel release"
 	}
 	fmt.Fprintln(w, next)
+}
+
+// repositoryTools returns the tools that the repository's mise files select in
+// the work directory, now. The facts come first: an error only omits the line.
+func repositoryTools(st *State, rc *config.Repo) []string {
+	if !rc.MiseEnabled() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), factsTimeout)
+	defer cancel()
+	conn, err := Dial(ctx, st, "cmd")
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+	var tools []protocol.MiseTool
+	if err := conn.Helper(ctx, []string{"mise-current"}, nil, &tools); err != nil {
+		return nil
+	}
+	var out []string
+	for _, t := range tools {
+		out = append(out, t.Name+" "+t.Version)
+	}
+	return out
 }
 
 // toolFact is "name options (environment names)".

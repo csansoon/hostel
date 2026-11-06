@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +63,10 @@ func TestMise(t *testing.T) {
 	}
 	if got := f.work("cat setup-rg.txt"); !strings.HasPrefix(got, "ripgrep 14.1.1") {
 		t.Fatalf("tool in the setup: %q", got)
+	}
+	// The facts name what the repository selects, not only the machine's tools.
+	if r := f.e.mustHostel("info"); !regexp.MustCompile(`(?m)^  repository: ripgrep 14\.1\.1 `).MatchString(r.stdout) {
+		t.Fatalf("repository tools in the facts:\n%s", r.stdout)
 	}
 	// agent-device is on each room, with its own Node; the job PATH has no Node.
 	if r := f.e.mustHostel("run", "--", "agent-device --version; echo $AGENT_DEVICE_STATE_DIR; command -v node || echo no-node"); r.stdout != "0.21.25\n/home/hostel/hostel/slots/a/agent-device\nno-node\n" {

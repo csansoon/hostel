@@ -10,6 +10,12 @@ type HelperInfo struct {
 	Hashes  HelperHashes `json:"hashes"`
 }
 
+// MiseTool is a tool that the mise files of the work directory select.
+type MiseTool struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
 // HelperHashes has the SHA-256 of each item that the server uploads. A missing
 // item has an empty hash.
 type HelperHashes struct {

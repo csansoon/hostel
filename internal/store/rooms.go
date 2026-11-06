@@ -207,6 +207,28 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 	return out, rows.Err()
 }
 
+// LastHardware returns the hardware of the newest room of each machine
+// ("<provider>/<machine>"), also of a room that is gone: an on-demand machine
+// has no room most of the time.
+func (s *Store) LastHardware(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, machine, hardware, MAX(id) FROM rooms WHERE hardware != '' GROUP BY provider, machine`)
+	if err != nil {
+		return nil, fmt.Errorf("list room hardware: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var provider, machine, hw string
+		var id int64
+		// SQLite takes the other columns from the row of MAX(id).
+		if err := rows.Scan(&provider, &machine, &hw, &id); err != nil {
+			return nil, err
+		}
+		out[provider+"/"+machine] = hw
+	}
+	return out, rows.Err()
+}
+
 // SetRoomState changes the state if it is one of from (compare-and-set). It
 // reports whether the row changed, and records an event.
 func (s *Store) SetRoomState(ctx context.Context, id int64, from []string, to, reason string, now time.Time) (bool, error) {
