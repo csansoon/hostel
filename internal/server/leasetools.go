@@ -90,9 +90,11 @@ func withInventory(h scheduler.Have, reported []string) (scheduler.Have, bool) {
 	return h, true
 }
 
-func (v *toolView) inventory(roomID int64, tool string) []string {
+// inventory is what a room reports for a tool. A row from another install
+// (the tool or its options changed) says nothing: the room installs again.
+func (v *toolView) inventory(m *config.Machine, roomID int64, tool string) []string {
 	for _, rt := range v.rts {
-		if rt.RoomID == roomID && rt.Tool == tool && rt.State == store.ToolReady {
+		if rt.RoomID == roomID && rt.Tool == tool && rt.State == store.ToolReady && rt.ScriptsSHA256 == installHash(v.lc, m, tool) {
 			return splitOptions(rt.Option)
 		}
 	}
@@ -114,7 +116,7 @@ func (v *toolView) current(r store.Room, m *config.Machine) bool {
 func (v *toolView) roomHaves(m *config.Machine, roomID int64) map[string]scheduler.Have {
 	out := configuredHaves(v.lc.cfg, m)
 	for name, h := range out {
-		if h, ok := withInventory(h, v.inventory(roomID, name)); ok {
+		if h, ok := withInventory(h, v.inventory(m, roomID, name)); ok {
 			out[name] = h
 		} else {
 			delete(out, name)
@@ -133,7 +135,7 @@ func (v *toolView) machineHaves(m *config.Machine) map[string]scheduler.Have {
 			if r.Provider+"/"+r.Machine != m.Key() || !v.current(r, m) {
 				continue
 			}
-			for _, o := range v.inventory(r.ID, name) {
+			for _, o := range v.inventory(m, r.ID, name) {
 				if !slices.Contains(reported, o) {
 					reported = append(reported, o)
 				}

@@ -357,6 +357,64 @@ func TestToolWholeMachineCapacity(t *testing.T) {
 	}
 }
 
+// TestToolEnvInstall (M10e): a change of the machine env installs the tools
+// of the machine again: install scripts read it.
+func TestToolEnvInstall(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.useTools("fake-sdk")
+	e.writeTool("fake-sdk", map[string]string{"install.linux.sh": "#!/bin/sh\nset -e\nmkdir -p \"$HOSTEL_CACHE_DIR/fake-sdk/bin\"\n" +
+		"echo \"${FAKE_SDK_VERSION:-1.4.2}\" > \"$HOSTEL_CACHE_DIR/fake-sdk/version\"\n"})
+	e.init()
+	a := e.startStaticRoom("a")
+	doc := func(version string) string {
+		return `
+[providers.home]
+kind = "static"
+
+[providers.home.machines.a]
+address = "` + a.address() + `"
+os = "linux"
+tools = ["fake-sdk"]
+env = { FAKE_SDK_VERSION = "` + version + `" }
+`
+	}
+	e.writeConfig(serverHeader() + doc("2.0.1"))
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	s.waitRoom("home/a", protocol.RoomRunning, roomReady)
+	if r := e.applyDoc(doc("3.0.0")); r.code != 0 {
+		t.Fatalf("change the machine env: %s", r)
+	}
+	e.waitFor("the new version on home/a", 2*time.Minute, func() bool {
+		inv := inventoryOf(s.room("home/a"), "fake-sdk")
+		return inv != nil && slices.Equal(inv.Options, []string{"3.0.0"})
+	})
+}
+
+// TestToolNewOptionOnDemand (M10e): an on-demand room installs a screen tool
+// at its first lease. A new option of the tool passes the request check while
+// the room still has the old install, and the lease gets it.
+func TestToolNewOptionOnDemand(t *testing.T) {
+	t.Parallel()
+	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
+	f.e.mustHostel("acquire", "fake-screen", "--task", "first")
+	f.e.mustHostel("release")
+	f.e.waitFor("the slot free", time.Minute, func() bool {
+		rooms := f.cloudRooms()
+		return len(rooms) == 1 && rooms[0].Slots[0].State == protocol.SlotFree
+	})
+	toml, err := os.ReadFile(filepath.Join(f.e.toolDir("fake-screen"), "tool.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.e.writeTool("fake-screen", map[string]string{"tool.toml": strings.Replace(string(toml), `"option-c"]`, `"option-c", "option-d"]`, 1)})
+	f.e.pushTool("fake-screen")
+	f.e.newRepoNamed("new-option", defaultRepoFiles())
+	if r := f.e.hostel("acquire", "fake-screen:option-d", "--task", "new option", "--wait", "1m"); r.code != 0 {
+		t.Fatalf("acquire of the new option: %s", r)
+	}
+}
+
 // twoMachinesIn is twoMachines in an environment that has tool changes.
 func twoMachinesIn(t *testing.T, e *env, toolsA, toolsB, envB string) *fixture {
 	t.Helper()

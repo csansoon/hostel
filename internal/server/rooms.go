@@ -324,15 +324,21 @@ func (s *Server) slotHome(ctx context.Context, r store.Room, slot string) (strin
 }
 
 // installHash identifies the install of a tool on a machine: the hash of the
-// tool's files for the machine's OS and, for a screen tool, the options that
-// the machine lists (HOSTEL_TOOL_ALL_OPTIONS). A change of either makes the
-// room install the tool again.
+// tool's files for the machine's OS, the machine's env (install scripts read it,
+// for example HOSTEL_ANDROID_API) and, for a screen tool, the options that the
+// machine lists (HOSTEL_TOOL_ALL_OPTIONS). A change of one makes the room
+// install the tool again.
 func installHash(lc *liveConfig, m *config.Machine, name string) string {
 	sum := lc.uploads[name][m.OS].Hash
-	if t := lc.cfg.Tools[name]; sum == "" || t == nil || !t.Screen {
+	if sum == "" {
 		return sum
 	}
-	h := sha256.Sum256([]byte(sum + "\n" + strings.Join(configuredHaves(lc.cfg, m)[name].Options, ",")))
+	options := ""
+	if t := lc.cfg.Tools[name]; t != nil && t.Screen {
+		options = strings.Join(configuredHaves(lc.cfg, m)[name].Options, ",")
+	}
+	env, _ := json.Marshal(m.Env)
+	h := sha256.Sum256([]byte(sum + "\n" + options + "\n" + string(env)))
 	return hex.EncodeToString(h[:])
 }
 
