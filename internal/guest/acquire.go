@@ -521,11 +521,7 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 		if resp, err := callPorts(st, portRequest{Op: "check"}); err == nil {
 			fmt.Fprintln(w, "  tunnels:")
 			for _, t := range resp.Tunnels {
-				line := fmt.Sprintf("    %s: room port %d → local %s", t.Name, t.RoomPort, t.Local)
-				if t.Problem != "" {
-					line += ": " + t.Problem
-				}
-				fmt.Fprintln(w, line)
+				fmt.Fprintf(w, "    %s: room port %d → local %s: %s\n", t.Name, t.RoomPort, t.Local, t.state())
 			}
 		}
 	}

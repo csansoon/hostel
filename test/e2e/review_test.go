@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,10 @@ func TestBrokenCloudRoomDestroyed(t *testing.T) {
 	f.roomSh(room, "touch "+cacheDir+"/fail-stop")
 	f.e.mustHostel("release")
 	f.waitNoCloudRooms()
+	// A machine without a room keeps the size that its last room measured.
+	if r := f.e.mustHostel("status", "cloud/small"); !regexp.MustCompile(`(?m)^cloud/small · on demand, up to \d+ rooms? · linux · \d+ cores, \d+ GB$`).MatchString(r.stdout) {
+		t.Fatalf("status of a machine whose room is gone:\n%s", r.stdout)
+	}
 }
 
 // TestTunnelsBeforeCreation: a lease whose tunnels cannot be placed fails

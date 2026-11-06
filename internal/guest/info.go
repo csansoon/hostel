@@ -286,8 +286,8 @@ Long commands
     hostel attach <job> --wait 9m              shows the output until the job
                                                ends or the wait ends
   Run attach again until the job ends. A running job alone does not keep the
-  lease: each hostel command does, so keep the wait shorter than the time
-  without activity that acquire prints (10 minutes by default).
+  lease; a running attach does. Between two commands, the time without
+  activity that acquire prints applies (10 minutes by default).
 
 Exit codes of run and attach
   The last line on stderr says what happened. Always read it:

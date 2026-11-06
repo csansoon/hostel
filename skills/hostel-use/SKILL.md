@@ -125,7 +125,8 @@ Exit codes of `acquire`:
 on. For a long build, keep each command shorter than the time limit of your own
 shell tool: start it with `hostel run --detach`, then run
 `hostel attach <job> --wait 9m` until the job ends. A running job alone does not
-keep the lease, so keep the wait below `idle_timeout`.
+keep the lease; a running `attach` does. Between two commands, `idle_timeout`
+applies.
 
 ```sh
 hostel info                                # the machine facts of the lease again

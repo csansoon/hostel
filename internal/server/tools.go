@@ -103,6 +103,11 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read leases", err)
 		return
 	}
+	measured, err := s.store.LastHardware(ctx)
+	if err != nil {
+		s.internalError(w, "read room hardware", err)
+		return
+	}
 	cfg := view.lc.cfg
 	machines := view.schedMachines()
 	var names []string
@@ -128,7 +133,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 			}
 			cands = append(cands, m.Key())
 			entry.Machines = append(entry.Machines, protocol.ToolMachine{Key: m.Key(), OS: m.OS, Options: nonNil(h.Options),
-				OnDemand: m.OnDemand(), Online: online(m, view.rooms), Hardware: machineHardware(m, view.rooms)})
+				OnDemand: m.OnDemand(), Online: online(m, view.rooms), Hardware: machineHardware(m, measured)})
 			for _, o := range h.Options {
 				if !slices.Contains(entry.Options, o) {
 					entry.Options = append(entry.Options, o)

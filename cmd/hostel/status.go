@@ -147,8 +147,7 @@ func printStatus(w io.Writer, st protocol.Status, now time.Time) {
 	fmt.Fprintln(w, "To get a room: hostel acquire [<tool>...] --task \"...\" (\"hostel tools\" lists the tools).")
 }
 
-// printMachine prints a machine that has no room of that name: an on-demand
-// machine, with or without rooms now.
+// printMachine prints a machine that has no room of that name.
 func printMachine(w io.Writer, st protocol.Status, m protocol.MachineStatus) {
 	head := []string{m.Key}
 	if m.Kind == "static" {
@@ -173,6 +172,10 @@ func printMachine(w io.Writer, st protocol.Status, m protocol.MachineStatus) {
 	}
 	if n > 0 {
 		tw.flush()
+		return
+	}
+	if m.Kind == "static" {
+		fmt.Fprintln(w, "No room now: the server has not prepared this machine yet.")
 		return
 	}
 	fmt.Fprintln(w, "No room now: the next lease that needs this machine gets one.")

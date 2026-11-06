@@ -280,9 +280,14 @@ func (h *helper) miseCurrent(args []string) ([]protocol.MiseTool, error) {
 			continue
 		}
 		rel, err := filepath.Rel(work, versions[0].Source.Path)
-		if err == nil && !strings.HasPrefix(rel, "..") {
-			out = append(out, protocol.MiseTool{Name: name, Version: versions[0].Version})
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
 		}
+		var all []string
+		for _, v := range versions {
+			all = append(all, v.Version)
+		}
+		out = append(out, protocol.MiseTool{Name: name, Version: strings.Join(all, "/")})
 	}
 	slices.SortFunc(out, func(a, b protocol.MiseTool) int { return strings.Compare(a.Name, b.Name) })
 	return out, nil

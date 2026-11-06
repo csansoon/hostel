@@ -119,8 +119,12 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 	if err != nil {
 		return out, nil, err
 	}
+	measured, err := s.store.LastHardware(ctx)
+	if err != nil {
+		return out, nil, err
+	}
 	for i, m := range lc.cfg.Machines() {
-		out.Machines[i].Hardware = machineHardware(m, rooms)
+		out.Machines[i].Hardware = machineHardware(m, measured)
 	}
 	slots, err := s.store.Slots(ctx)
 	if err != nil {
@@ -155,26 +159,19 @@ func machineStatus(m *config.Machine) protocol.MachineStatus {
 		MaxRooms: *m.MaxRooms, Connect: m.Connect}
 }
 
-// machineHardware is what a new room of the machine will have: what its newest
-// room measured (only what does not change), else what its configuration says.
-func machineHardware(m *config.Machine, rooms []store.Room) *protocol.Hardware {
-	var newest *store.Room
-	for i, r := range rooms {
-		if r.Provider == m.Provider && r.Machine == m.Name && r.Hardware != "" && (newest == nil || r.ID > newest.ID) {
-			newest = &rooms[i]
-		}
-	}
-	if newest != nil {
-		var hw protocol.Hardware
-		if json.Unmarshal([]byte(newest.Hardware), &hw) == nil {
-			hw.DiskFreeBytes = 0
-			return &hw
-		}
-	}
+// machineHardware is what a new room of the machine will have: what its
+// configuration states, else what its newest room measured (only what does not
+// change). measured comes from Store.LastHardware.
+func machineHardware(m *config.Machine, measured map[string]string) *protocol.Hardware {
 	if cores, gb := m.DeclaredSize(); cores > 0 || gb > 0 {
 		return &protocol.Hardware{Cores: cores, MemoryBytes: int64(gb) << 30}
 	}
-	return nil
+	var hw protocol.Hardware
+	if json.Unmarshal([]byte(measured[m.Key()]), &hw) != nil {
+		return nil
+	}
+	hw.DiskFreeBytes = 0
+	return &hw
 }
 
 func roomStatus(cfg *config.Server, room store.Room, slots []store.Slot, rts []store.RoomTool) protocol.RoomStatus {

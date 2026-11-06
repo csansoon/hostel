@@ -6,7 +6,7 @@ set -eu
 api="${HOSTEL_ANDROID_API:-36}"
 sdk="$HOSTEL_CACHE_DIR/android-sdk"
 "$sdk/platform-tools/adb" version >/dev/null
-if ! [ -d "$sdk/platforms/android-$api" ]; then
+if ! [ -f "$sdk/platforms/android-$api/android.jar" ]; then
 	echo "the SDK has no platform android-$api; repair the room to run install again" >&2
 	exit 1
 fi
@@ -15,4 +15,9 @@ if [ "$free_gb" -lt 10 ]; then
 	echo "only $free_gb GB of free disk; at least 10 GB are necessary" >&2
 	exit 1
 fi
-ls "$sdk/platforms" | sed 's/^android-//' | sort -n | paste -sd, -
+versions=""
+for jar in "$sdk"/platforms/android-*/android.jar; do
+	version=${jar%/android.jar}
+	versions="$versions,${version##*/android-}"
+done
+echo "${versions#,}"

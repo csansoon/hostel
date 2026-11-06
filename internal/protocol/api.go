@@ -65,8 +65,8 @@ type MachineStatus struct {
 	Tools    []string `json:"tools"`
 	MaxRooms int      `json:"max_rooms"`
 	Connect  bool     `json:"connect,omitempty"`
-	// Hardware is from the machine's newest room, or from its configuration
-	// before it had a room; nil when neither says.
+	// Hardware is what the machine's configuration states, else what its
+	// newest room measured; nil when neither says.
 	Hardware *Hardware `json:"hardware,omitempty"`
 	// ConnectVersion is the hostel version of the machine's connect service
 	// while it is connected (M10d; "" before).

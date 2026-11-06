@@ -415,8 +415,16 @@ func (p *portProc) serveTunnel(name string, ln net.Listener) {
 // variable when acquire ran.
 func (p *portProc) localPort(name string) (int, error) {
 	p.mu.Lock()
-	cfg := *p.tunnels[name]
+	t := p.tunnels[name]
+	var cfg TunnelConfig
+	if t != nil {
+		cfg = *t
+	}
 	p.mu.Unlock()
+	// The tunnel can go while a request or a connection uses it.
+	if t == nil {
+		return 0, fmt.Errorf("no tunnel %s", name)
+	}
 	if cfg.LocalPort != 0 {
 		return cfg.LocalPort, nil
 	}
