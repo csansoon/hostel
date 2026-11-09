@@ -60,9 +60,9 @@ func closeAll(lns []net.Listener) {
 	}
 }
 
-// RecheckForwards closes the remote forwards of a lease whose room ports the
+// RecheckForwards closes the remote forwards of a lease whose machine ports the
 // lease no longer registers (after a change of its tunnels). A guest that
-// does not cancel a removed tunnel keeps no listener on the room.
+// does not cancel a removed tunnel keeps no listener on the machine.
 func (g *Gateway) RecheckForwards(ctx context.Context, leaseID string) {
 	g.mu.Lock()
 	sets := make([]*forwardSet, 0, len(g.forwards[leaseID]))
@@ -87,7 +87,7 @@ func (g *Gateway) RecheckForwards(ctx context.Context, leaseID string) {
 }
 
 // globalRequests handles the remote forwards of a ports connection: the
-// gateway asks the room's SSH server to listen on 127.0.0.1:<port> and
+// gateway asks the machine's SSH server to listen on 127.0.0.1:<port> and
 // [::1]:<port>, only for ports that the lease registered, and relays each
 // connection back to the guest.
 func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request, upstream *ssh.Client, leaseID, purpose string) {
@@ -128,9 +128,9 @@ func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request,
 				continue
 			}
 			// "localhost" would succeed when only one of the two addresses is
-			// free, and a room service on 127.0.0.1 would then get the tunnel's
+			// free, and a machine service on 127.0.0.1 would then get the tunnel's
 			// connections. So 127.0.0.1 must succeed; ::1 is best effort (the
-			// room may have no IPv6 loopback).
+			// machine may have no IPv6 loopback).
 			port := strconv.Itoa(int(fr.Port))
 			ln4, err := upstream.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
 			if err != nil {
@@ -186,8 +186,8 @@ func (g *Gateway) acceptForwarded(conn *ssh.ServerConn, ln net.Listener, fr forw
 	}
 }
 
-// directTCPIP relays a guest → room forward. Only the room's 127.0.0.1 is
-// allowed, and on a room with several slots only the ports of the lease's slot.
+// directTCPIP relays a guest → machine forward. Only the machine's 127.0.0.1 is
+// allowed, and on a machine with several rooms only the ports of the lease's room.
 func (g *Gateway) directTCPIP(nch ssh.NewChannel, upstream *ssh.Client, leaseID string) {
 	var dp directPayload
 	if ssh.Unmarshal(nch.ExtraData(), &dp) != nil {
@@ -195,19 +195,19 @@ func (g *Gateway) directTCPIP(nch ssh.NewChannel, upstream *ssh.Client, leaseID 
 		return
 	}
 	if dp.Addr != "127.0.0.1" && dp.Addr != "localhost" {
-		nch.Reject(ssh.Prohibited, "forwards may only go to 127.0.0.1 on the room")
+		nch.Reject(ssh.Prohibited, "forwards may only go to 127.0.0.1 on the machine")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	allowed := g.be.AllowDirect(ctx, leaseID, int(dp.Port))
 	cancel()
 	if !allowed {
-		nch.Reject(ssh.Prohibited, fmt.Sprintf("port %d is not a port of the lease's slot; this room has several slots, and a forward may only go to a port of its own slot", dp.Port))
+		nch.Reject(ssh.Prohibited, fmt.Sprintf("port %d is not a port of the lease's room; this machine has several rooms, and a forward may only go to a port of its own room", dp.Port))
 		return
 	}
 	up, err := upstream.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(dp.Port))))
 	if err != nil {
-		nch.Reject(ssh.ConnectionFailed, "connect to the room port: "+err.Error())
+		nch.Reject(ssh.ConnectionFailed, "connect to the machine port: "+err.Error())
 		return
 	}
 	defer up.Close()

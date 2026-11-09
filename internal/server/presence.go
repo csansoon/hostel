@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/csansoon/hostel/internal/machineops"
 	"github.com/csansoon/hostel/internal/protocol"
-	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/store"
 )
 
-// presenceTimeout bounds one presence check: an SSH connection to the room
+// presenceTimeout bounds one presence check: an SSH connection to the machine
 // (through the gateway for a machine that connects to the server).
 const presenceTimeout = 10 * time.Second
 
-// checkPresence starts a presence check of each idle static room, and of
-// each static room that is offline (broken: unreachable), every
+// checkPresence starts a presence check of each idle static machine, and of
+// each static machine that is offline (broken: unreachable), every
 // intervals.presence (M10b). A machine that is switched off is then offline
 // before a lease tries it, and the scheduler does not give it leases; when
 // it answers again, it provisions again and is vacant without an admin.
@@ -26,7 +26,7 @@ func (s *Server) checkPresence(ctx context.Context) error {
 		return nil
 	}
 	s.lastPresence = now
-	rooms, err := s.store.Rooms(ctx)
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return err
 	}
@@ -36,15 +36,15 @@ func (s *Server) checkPresence(ctx context.Context) error {
 	}
 	busy := map[int64]bool{}
 	for _, l := range leases {
-		busy[l.RoomID] = true
+		busy[l.MachineID] = true
 	}
-	for _, r := range rooms {
-		m := s.config().Machine(r.Provider + "/" + r.Machine)
+	for _, r := range machines {
+		m := s.config().Template(r.Provider + "/" + r.Template)
 		if m == nil || m.OnDemand() || busy[r.ID] {
 			continue
 		}
-		offline := r.State == protocol.RoomBroken && r.BrokenReason == reasonUnreachable
-		if r.State != protocol.RoomRunning && !offline {
+		offline := r.State == protocol.MachineBroken && r.BrokenReason == reasonUnreachable
+		if r.State != protocol.MachineRunning && !offline {
 			continue
 		}
 		id := r.ID
@@ -53,57 +53,57 @@ func (s *Server) checkPresence(ctx context.Context) error {
 	return nil
 }
 
-// presence checks one room: a running room that does not answer goes
-// offline; an offline room that answers provisions again.
+// presence checks one machine: a running machine that does not answer goes
+// offline; an offline machine that answers provisions again.
 func (s *Server) presence(ctx context.Context, id int64) {
-	r, err := s.store.Room(ctx, id)
+	r, err := s.store.Machine(ctx, id)
 	if err != nil {
 		return
 	}
 	unreachable, err := s.unreachable(ctx, r)
 	now := time.Now()
-	if errors.Is(err, roomops.ErrHostKeyChanged) {
+	if errors.Is(err, machineops.ErrHostKeyChanged) {
 		// The machine answers, but with another host key: broken until an
-		// admin accepts the new key (repair). Only an idle or offline room.
-		if busy, berr := s.roomBusy(ctx, r.ID); berr == nil && !busy {
-			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning, protocol.RoomBroken}, protocol.RoomBroken, reasonHostKeyChanged, now)
+		// admin accepts the new key (repair). Only an idle or offline machine.
+		if busy, berr := s.machineBusy(ctx, r.ID); berr == nil && !busy {
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning, protocol.MachineBroken}, protocol.MachineBroken, reasonHostKeyChanged, now)
 		}
 		return
 	}
 	if err != nil {
-		// Another error is not a presence matter: the next room step
+		// Another error is not a presence matter: the next machine step
 		// reports it.
 		return
 	}
 	switch {
 	case !unreachable:
 		if err := s.store.SetLastSeen(ctx, r.ID, now); err != nil {
-			s.log.Warn("presence: save the last seen time", "room", r.Name, "err", err)
+			s.log.Warn("presence: save the last seen time", "machine", r.Name, "err", err)
 		}
-		if r.State == protocol.RoomBroken && r.BrokenReason == reasonUnreachable {
-			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomBroken}, protocol.RoomProvisioning, "", now)
+		if r.State == protocol.MachineBroken && r.BrokenReason == reasonUnreachable {
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineBroken}, protocol.MachineProvisioning, "", now)
 		}
-	case r.State == protocol.RoomRunning:
-		// Only an idle room: a lease that started meanwhile finds out by
+	case r.State == protocol.MachineRunning:
+		// Only an idle machine: a lease that started meanwhile finds out by
 		// itself (its step fails as unreachable).
-		if busy, err := s.roomBusy(ctx, r.ID); err != nil || busy {
+		if busy, err := s.machineBusy(ctx, r.ID); err != nil || busy {
 			return
 		}
-		if moved, _ := s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning}, protocol.RoomBroken, reasonUnreachable, now); moved {
-			s.log.Info("presence: room offline", "room", r.Name)
+		if moved, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, protocol.MachineBroken, reasonUnreachable, now); moved {
+			s.log.Info("presence: machine offline", "machine", r.Name)
 		}
 	}
 }
 
-// unreachable makes an SSH connection to the room with the server key and
+// unreachable makes an SSH connection to the machine with the server key and
 // closes it. It must log in: OpenSSH (9.8 and later, PerSourcePenalties)
 // penalizes the source of connections that close without authentication, and
 // then refuses the server's own connections.
-func (s *Server) unreachable(ctx context.Context, r store.Room) (bool, error) {
+func (s *Server) unreachable(ctx context.Context, r store.Machine) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, presenceTimeout)
 	defer cancel()
 	conn, err := s.connect(ctx, r)
-	if errors.Is(err, roomops.ErrUnreachable) {
+	if errors.Is(err, machineops.ErrUnreachable) {
 		return true, nil
 	}
 	if err != nil {
@@ -113,14 +113,14 @@ func (s *Server) unreachable(ctx context.Context, r store.Room) (bool, error) {
 	return false, nil
 }
 
-// roomBusy reports whether a lease uses the room.
-func (s *Server) roomBusy(ctx context.Context, id int64) (bool, error) {
+// machineBusy reports whether a lease uses the machine.
+func (s *Server) machineBusy(ctx context.Context, id int64) (bool, error) {
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
 		return false, err
 	}
 	for _, l := range leases {
-		if l.RoomID == id {
+		if l.MachineID == id {
 			return true, nil
 		}
 	}

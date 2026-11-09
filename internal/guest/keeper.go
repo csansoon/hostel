@@ -178,5 +178,10 @@ func loadStateDir(dir string) (*State, bool, error) {
 	if err := json.Unmarshal(data, s); err != nil {
 		return nil, false, fmt.Errorf("read %s: %w", s.path(), err)
 	}
+	// Access from before M10g has other keys, and migration 013 ended its
+	// lease. Without it, acquire asks the server and reports the end.
+	if s.Access != nil && s.Access.MachineOS == "" {
+		s.Access = nil
+	}
 	return s, true, nil
 }

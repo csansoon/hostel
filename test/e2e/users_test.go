@@ -69,7 +69,7 @@ func (e *env) inviteCode(args ...string) string {
 func TestConnect(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	e.initServer(serverHeader() + staticMachine)
+	e.initServer(serverHeader() + staticTemplate)
 	s := e.startServer("")
 
 	ana := t.TempDir()
@@ -184,7 +184,7 @@ func TestConnect(t *testing.T) {
 
 	// Another server (another key) on the address that Ana pinned.
 	e2 := newEnv(t)
-	e2.initServer(serverHeader() + staticMachine)
+	e2.initServer(serverHeader() + staticTemplate)
 	s2 := e2.startServer("")
 	conn := filepath.Join(ana, ".config", "hostel", "config.toml")
 	data := strings.Replace(readFile(t, conn), s.url, s2.url, 1)
@@ -249,7 +249,7 @@ func TestUsersRoles(t *testing.T) {
 	if r := f.e.hostel("run", "--", "true"); r.code != 1 || !strings.Contains(r.stderr, "released by admin (admin)") {
 		t.Fatalf("the member's client after an admin release: %s", r)
 	}
-	f.waitSlotFree()
+	f.waitRoomFree()
 
 	// Removing a user ends their lease and their token.
 	f.e.newRepoNamed("second", defaultRepoFiles())
@@ -267,15 +267,15 @@ func TestUsersRoles(t *testing.T) {
 	if r := f.e.mustHostel("config", "users"); strings.Contains(r.stdout, "guest") {
 		t.Fatalf("users after the removal:\n%s", r.stdout)
 	}
-	f.waitSlotFree()
+	f.waitRoomFree()
 }
 
 var queuedRE = regexp.MustCompile(`lease ([a-z0-9]+) queued`)
 
-// TestQueueLanes (M8): with the only room busy, queued leases come out in their
+// TestQueueLanes (M8): with the only machine busy, queued leases come out in their
 // lanes (high, normal, low), first in, first out in each lane, without aging;
 // an admin moves a lease first and changes a lane; the placement ends when the
-// lease gets a slot.
+// lease gets a room.
 func TestQueueLanes(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
@@ -334,7 +334,7 @@ func TestQueueLanes(t *testing.T) {
 		f.s.get("/v1/leases/"+ids["normal1"], f.e.admin, &l)
 		return l.State == protocol.LeaseReady
 	})
-	// The placement ends when the lease gets a slot: a lease that goes back to
+	// The placement ends when the lease gets a room: a lease that goes back to
 	// the queue (a provider limit, a failed start) does not jump ahead again.
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(f.e.dataDir(), "hostel.db")+"?mode=ro")
 	if err != nil {
@@ -355,7 +355,7 @@ func TestQueueLanes(t *testing.T) {
 func TestTokenMigration(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	e.initServer(serverHeader() + staticMachine)
+	e.initServer(serverHeader() + staticTemplate)
 	for _, f := range []string{"hostel.db", "hostel.db-wal", "hostel.db-shm"} {
 		os.Remove(filepath.Join(e.dataDir(), f))
 	}
@@ -379,6 +379,7 @@ func TestTokenMigration(t *testing.T) {
 		{"owner (member)", "guest", "hostel_owner_member"},
 		{"Élodie", "guest", "hostel_elodie1"}, {"élodie", "guest", "hostel_elodie2"},
 		{"ci/bot", "guest", "hostel_cibot"},
+		{"old-machine", "room", "hostel_oldmachine"},
 	} {
 		if _, err := db.Exec(`INSERT INTO tokens (name, role, machine, sha256, created_at) VALUES (?, ?, '', ?, ?)`, tok.name, tok.role, hash(tok.secret), now); err != nil {
 			t.Fatal(err)
@@ -394,6 +395,17 @@ func TestTokenMigration(t *testing.T) {
 	var me protocol.Me
 	if code := s.get("/v1/me", "hostel_owner", &me); code != 200 || me.User != "owner" || me.Role != "admin" {
 		t.Fatalf("old admin token: HTTP %d, %+v", code, me)
+	}
+	// Migration 013: a token of the old role "room" is a machine token.
+	db, err = sql.Open("sqlite", filepath.Join(e.dataDir(), "hostel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var role string
+	err = db.QueryRow(`SELECT role FROM tokens WHERE name = 'old-machine'`).Scan(&role)
+	db.Close()
+	if err != nil || role != "machine" {
+		t.Fatalf("the role of an old machine token: %q, %v", role, err)
 	}
 	for _, secret := range []string{"hostel_agents1", "hostel_agents2"} {
 		if code := s.get("/v1/me", secret, &me); code != 200 || me.User != "agents" || me.Role != "member" {

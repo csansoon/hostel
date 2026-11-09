@@ -3,275 +3,138 @@
 package e2e
 
 import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
+	"io"
+	"net"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/csansoon/hostel/internal/hashes"
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-const roomReady = 3 * time.Minute
-
-// installScript records each call, with values from its environment, in the
-// room cache.
-const installScript = `#!/bin/sh
-echo "install $HOSTEL_TOOL var=$MACHINE_VAR mise=$MISE_DATA_DIR home=$PROBE_HOME pwd=$(pwd)" >> "$HOSTEL_CACHE_DIR/install.log"
-`
-
-func staticRoomConfig(c *container, tools string) string {
-	return serverHeader() + fmt.Sprintf(`
-[providers.home]
-kind = "static"
-
-[providers.home.machines.box]
-address = %q
-os = "linux"
-tools = [%s]
-env = { MACHINE_VAR = "machine-value" }
-`, c.address(), tools)
+// readForward connects to a local forward and returns what the machine server
+// sends ("" if the gateway refused the forward).
+func readForward(t *testing.T, local string) string {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", local, 2*time.Second)
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	b, _ := io.ReadAll(c)
+	return string(b)
 }
 
-// TestStaticRoom: a static room is probed, gets the helper, mise, and the
-// files of its tools, installs and checks them, and has them in its inventory
-// (scenario 22, static part). A restart does not install again; changed
-// scripts do; a tool that the machine no longer lists leaves the room and its
-// inventory. Init
-// rejects a server name, TLS mode, listen address, or public address that the
-// server would reject at start, and init and invite reject an invalid user name.
-// The schema that init writes has no aging. server invite checks the
-// addresses that go into the code.
-func TestStaticRoom(t *testing.T) {
+// TestRoomUsers is the M6 room scenario: two leases at the same time on one
+// machine, each room with its own OS user. Each lease runs as its room's user in
+// its own home, cannot read the other's files, and can forward only to its own
+// room's ports. The cleanup of one lease leaves the other's job running. An
+// exclusive lease (a whole_machine tool) waits until both rooms are free and
+// then takes both.
+func TestRoomUsers(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
-	for _, c := range []struct{ args, want []string }{
-		{[]string{"--server-id", "ip-test"}, []string{`"ip-test" must be 1 to 20 lowercase letters and digits`}},
-		{[]string{"--tls", "selfsigned"}, []string{"--tls:", `"selfsigned" must be "self-signed"`}},
-		{[]string{"--url", "http://100.80.1.2:7410"}, []string{"--url:", `"http://100.80.1.2:7410" must start with https://`}},
-		{[]string{"--url", "https://100.80.1.2:7410/?x"}, []string{"--url:", `"https://100.80.1.2:7410/?x" is not a server address`}},
-		{[]string{"--url", "https://100.80.1.2:7410#"}, []string{"--url:", `"https://100.80.1.2:7410#" is not a server address`}},
-		{[]string{"--user", "a/b"}, []string{"--user:", `"a/b" is not a valid name`}},
-		{[]string{"--listen", "localhost"}, []string{"--listen:", `"localhost" is not a host:port address`}},
-		{[]string{"--tls", "off", "--url", "http://100.80.1.2:7410"}, []string{"--url:", `"http://100.80.1.2:7410" must start with https://`}},
-		{[]string{"--tls", "off", "--listen", "0.0.0.0:7410"}, []string{"--url: give the address that clients use"}},
-	} {
-		r := e.hostel(append([]string{"server", "init", "--user", "admin"}, c.args...)...)
-		for _, w := range c.want {
-			if r.code != 1 || !strings.Contains(r.stderr, w) {
-				t.Fatalf("server init %v: want exit code 1 and %q: %s", c.args, w, r)
+	f := newFixture(t, &fixtureOpts{roomUsers: []string{"hostel-a", "hostel-b"}, templateTools: []string{"fake-screen", "fake-desktop"},
+		templateKeys: `rooms = [{ name = "a", user = "hostel-a" }, { name = "b", user = "hostel-b" }]
+`})
+	f.acquire()
+	if r := f.e.mustHostel("run", "--", "id -un; echo $HOSTEL_WORK_DIR"); r.stdout != "hostel-a\n/home/hostel-a/hostel/rooms/a/work\n" {
+		t.Fatalf("first lease: %q, want user hostel-a in its own home", r.stdout)
+	}
+	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-a | nc -N -l 127.0.0.1 7500; done")
+	fa := strings.TrimSpace(f.e.mustHostel("forward", "7500").stdout)
+	f.e.waitFor("the first lease's server on its room port", time.Minute, func() bool { return readForward(t, fa) == "hello-a\n" })
+	f.e.mustHostel("run", "--detach", "--", "sleep 3001")
+
+	f.e.newRepoNamed("second", defaultRepoFiles())
+	f.acquire()
+	if r := f.e.mustHostel("run", "--", "id -un; echo $HOSTEL_WORK_DIR"); r.stdout != "hostel-b\n/home/hostel-b/hostel/rooms/b/work\n" {
+		t.Fatalf("second lease: %q, want user hostel-b in its own home", r.stdout)
+	}
+	if r := f.e.hostel("run", "--", "cat /home/hostel-a/hostel/rooms/a/work/a.txt"); r.code == 0 {
+		t.Fatalf("the second lease read the first lease's files: %s", r)
+	}
+	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-b | nc -N -l 127.0.0.1 7510; done")
+	own := strings.TrimSpace(f.e.mustHostel("forward", "7510").stdout)
+	f.e.waitFor("forward to the own room's port", time.Minute, func() bool { return readForward(t, own) == "hello-b\n" })
+	other := strings.TrimSpace(f.e.mustHostel("forward", "7500").stdout)
+	if got := readForward(t, other); got != "" {
+		t.Fatalf("forward to a port of the other room: %q, want a refusal", got)
+	}
+	if r := f.e.hostel("tunnel", "add", "x", "--local-port", "18080", "--machine-port", "7500"); r.code == 0 || !strings.Contains(r.stderr, "belongs to room a") {
+		t.Fatalf("tunnel on a port of the other room: %s", r)
+	}
+
+	f.e.mustHostel("release")
+	f.e.waitFor("room b free", time.Minute, func() bool {
+		for _, sl := range f.s.machine("home/box").Rooms {
+			if sl.Name == "b" {
+				return sl.State == protocol.RoomFree && sl.LeaseID == ""
 			}
 		}
-		if _, err := os.Stat(filepath.Join(e.configDir(), "server.toml")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("server init %v wrote server.toml (err %v)", c.args, err)
-		}
-	}
-	// Behind a proxy with TLS, init writes the gateway on the public address;
-	// --helper-dir writes the directory of install.sh --server (M10c).
-	proxy := newEnv(t)
-	if r := proxy.hostel("server", "init", "--user", "admin", "--tls", "off", "--listen", "0.0.0.0:7410",
-		"--url", "https://hostel.example.com", "--helper-dir", "/opt/hostel/helpers"); r.code != 0 {
-		t.Fatalf("server init behind a proxy: %s", r)
-	}
-	toml := readFile(t, filepath.Join(proxy.configDir(), "server.toml"))
-	for _, want := range []string{`gateway_public = "wss://hostel.example.com/v1/gateway"`, `helper_dir = "/opt/hostel/helpers"`} {
-		if !strings.Contains(toml, want) {
-			t.Fatalf("server.toml from init behind a proxy has no %s:\n%s", want, toml)
-		}
-	}
-	if r := proxy.hostel("admin", "config", "check"); r.code != 0 {
-		t.Fatalf("admin config check of the proxy server.toml: %s", r)
-	}
-	e.init()
-	if r := e.hostel("server", "invite", "--name", "a/b"); r.code != 1 || !strings.Contains(r.stderr, `"a/b" is not a valid name`) {
-		t.Fatalf("server invite with an invalid name: %s", r)
-	}
-	// server invite checks the addresses that go into the code (tls = "off":
-	// https:// only, http:// only on loopback).
-	e.writeConfig(strings.Replace(serverHeader(), `tls = "self-signed"`+"\n"+`public_urls = ["https://127.0.0.1:0"]`,
-		`tls = "off"`+"\n"+`public_urls = ["http://100.80.1.2:7410"]`, 1) + staticMachine)
-	if r := e.hostel("server", "invite"); r.code != 1 || !strings.Contains(r.stderr, `public_urls[0]: "http://100.80.1.2:7410" must start with https://`) {
-		t.Fatalf("server invite with an http:// public URL: %s", r)
-	}
-	// The schema that init writes has the M8 keys, and not aging (removed).
-	schema, err := os.ReadFile(filepath.Join(e.configDir(), "hostel.schema.json"))
-	if err != nil || !strings.Contains(string(schema), `"public_urls"`) || strings.Contains(string(schema), `"aging"`) {
-		t.Fatalf("hostel.schema.json (err %v): want public_urls and no aging", err)
-	}
-	c := e.startStaticRoom("box")
-	e.writeTool("probe", map[string]string{
-		"tool.toml":        "description = \"Probe\"\nenv = { PROBE_HOME = \"{cache}/probe\" }\n",
-		"install.linux.sh": installScript,
-		"install.macos.sh": "#!/bin/sh\nexit 1\n",
-		"check.linux.sh":   "#!/bin/sh\necho checking\necho 2.0\n",
+		return false
 	})
-	e.writeTool("probe-two", map[string]string{"tool.toml": "description = \"Second probe\"\n", "check.linux.sh": "#!/bin/sh\necho 3.1\n"})
-	e.writeConfig(staticRoomConfig(c, `"probe", "probe-two"`))
-	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-
-	r := s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if r.OS != "linux" || r.Arch != dockerArch {
-		t.Fatalf("room = %+v, want linux/%s", r, dockerArch)
-	}
-	if p := inventoryOf(r, "probe"); p == nil || p.State != "ready" || !slices.Equal(p.Options, []string{"2.0"}) || !slices.Equal(p.Env, []string{"PROBE_HOME"}) {
-		t.Fatalf("probe in the inventory: %+v (inventory %+v)", p, r.Tools)
-	}
-	if p := inventoryOf(r, "probe-two"); p == nil || !slices.Equal(p.Options, []string{"3.1"}) {
-		t.Fatalf("probe-two in the inventory: %+v", r.Tools)
-	}
-	if len(r.Slots) != 1 || r.Slots[0].Name != "a" || r.Slots[0].State != protocol.SlotFree {
-		t.Fatalf("room slots = %+v, want one free slot a", r.Slots)
+	f.useRepo("repo")
+	if r := f.e.mustHostel("jobs"); !strings.Contains(r.stdout, "running") || !strings.Contains(r.stdout, "sleep 3001") {
+		t.Fatalf("the first lease's job after the second lease's cleanup:\n%s", r.stdout)
 	}
 
-	for _, f := range []string{"hostel-linux-" + dockerArch, "mise-linux-" + dockerArch} {
-		want, err := hashes.File(filepath.Join(helperDir, f))
-		if err != nil {
-			t.Fatal(err)
+	// An exclusive lease waits for the busy room, then takes both rooms.
+	f.e.newRepoNamed("third", defaultRepoFiles())
+	if r := f.e.hostel("acquire", "fake-desktop", "--task", "exclusive", "--wait", "2s"); r.code != 75 {
+		t.Fatalf("exclusive lease while room a is busy: %s, want exit code 75", r)
+	}
+	f.useRepo("repo")
+	f.e.mustHostel("release")
+	f.useRepo("third")
+	var lease string
+	f.e.waitFor("the exclusive lease is ready", 2*time.Minute, func() bool {
+		r := f.e.hostel("acquire", "fake-desktop", "--task", "exclusive", "--wait", "10s")
+		if m := leaseIDRE.FindStringSubmatch(r.stdout); r.code == 0 && m != nil {
+			lease = m[1]
+			return true
 		}
-		remote := "/home/hostel/hostel/bin/" + strings.Split(f, "-")[0]
-		if got := strings.Fields(c.sh("sha256sum " + remote))[0]; got != want {
-			t.Fatalf("%s on the room: sha256 %s, want %s", remote, got, want)
+		return false
+	})
+	for _, sl := range f.s.machine("home/box").Rooms {
+		if sl.LeaseID != lease {
+			t.Fatalf("room %s after the exclusive lease is ready: lease %q, want %s", sl.Name, sl.LeaseID, lease)
 		}
 	}
-	if got := c.sh("ls /home/hostel/hostel/tools/probe"); got != "check.linux.sh\ninstall.linux.sh\ntool.toml" {
-		t.Fatalf("tool files on the room:\n%s\nwant tool.toml and the linux scripts only", got)
+	// The status counts both rooms as used.
+	if r := f.e.mustHostel("status"); !regexp.MustCompile(`(?m)^home/box\s+\S.*\s+in use 2/2\s+guest\s+exclusive\s`).MatchString(r.stdout) {
+		t.Fatalf("status with the exclusive lease, want \"in use 2/2\":\n%s", r.stdout)
 	}
-	if got := c.sh("stat -c %a /home/hostel/hostel/room-env.json"); got != "600" {
-		t.Fatalf("room-env.json mode %s, want 600", got)
-	}
-	wantLog := "install probe var=machine-value mise=/home/hostel/hostel/cache/mise home=/home/hostel/hostel/cache/probe pwd=/home/hostel/hostel"
-	if got := c.sh("cat /home/hostel/hostel/cache/install.log"); got != wantLog {
-		t.Fatalf("install log:\n%s\nwant:\n%s", got, wantLog)
-	}
-	if r := e.hostel("status"); r.code != 0 || !regexp.MustCompile(`home/box\s+probe 2\.0, probe-two 3\.1\s+free`).MatchString(r.stdout) {
-		t.Fatalf("hostel status: %s", r)
-	}
-
-	// A restart probes again but does not run install again.
-	s.stop()
-	s = e.startServer(s.token)
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if got := c.sh("wc -l < /home/hostel/hostel/cache/install.log"); got != "1" {
-		t.Fatalf("install ran %s times after a restart, want 1", got)
-	}
-
-	// Changed tool scripts (pushed, without a restart): the free room
-	// installs again.
-	e.writeTool("probe", map[string]string{"install.linux.sh": installScript + "# changed\n"})
-	e.pushTool("probe")
-	e.waitFor("install runs again", roomReady, func() bool {
-		return c.sh("wc -l < /home/hostel/hostel/cache/install.log") == "2"
-	})
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	// A tool that the machine no longer lists leaves the room and the
-	// inventory.
-	if r := e.applyDoc(strings.Replace(s.configDoc().Document, `"probe", "probe-two"`, `"probe"`, 1)); r.code != 0 {
-		t.Fatalf("apply: %s", r)
-	}
-	e.waitFor("probe-two leaves the room", roomReady, func() bool {
-		return c.sh("test -e /home/hostel/hostel/tools/probe-two && echo exists || echo removed") == "removed"
-	})
-	r = s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-	if inventoryOf(r, "probe-two") != nil || inventoryOf(r, "probe") == nil {
-		t.Fatalf("inventory after the removal of probe-two: %+v", r.Tools)
-	}
+	// It holds both rooms, so it may forward to any port.
+	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-x | nc -N -l 127.0.0.1 7510; done")
+	fx := strings.TrimSpace(f.e.mustHostel("forward", "7510").stdout)
+	f.e.waitFor("forward of the exclusive lease", time.Minute, func() bool { return readForward(t, fx) == "hello-x\n" })
+	f.e.mustHostel("release")
 }
 
-// TestProvisionBackgroundProcess: an install script that leaves a background
-// process with its output open (for example a simulator) still succeeds.
-func TestProvisionBackgroundProcess(t *testing.T) {
+// TestExclusiveScripts: the tool scripts of an exclusive lease (a
+// whole_machine tool) get HOSTEL_EXCLUSIVE=1, so they may reset the desktop;
+// those of a normal lease get it empty (M7).
+func TestExclusiveScripts(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
-	e.init()
-	c := e.startStaticRoom("box")
-	e.writeTool("probe", map[string]string{"tool.toml": "description = \"Probe\"\n", "install.linux.sh": "#!/bin/sh\nsleep 600 &\necho started\n"})
-	e.writeConfig(staticRoomConfig(c, `"probe"`))
-	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-}
-
-// TestStaticRoomOffline: a static host that is offline at start is broken with
-// the reason "unreachable", and becomes running by itself when the host is back
-// (scenario 25, offline at start).
-func TestStaticRoomOffline(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	e.init()
-	c := e.createStaticRoom("box")
-	e.writeConfig(staticRoomConfig(c, ""))
-	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	r := s.waitRoom("home/box", protocol.RoomBroken, time.Minute)
-	if r.Reason != "unreachable" {
-		t.Fatalf("room = %+v, want reason unreachable", r)
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "fake-desktop"}})
+	desk := f.acquire("fake-screen", "fake-desktop")
+	f.e.mustHostel("release")
+	f.waitRoomFree()
+	normal := f.acquire()
+	f.e.mustHostel("release")
+	f.waitRoomFree()
+	log := f.c.sh("cat " + cacheDir + "/fake-screen.log")
+	for _, want := range []string{
+		"start linux " + desk + " option-a exclusive=1", "stop linux " + desk + " option-a exclusive=1",
+		"start linux " + normal + " option-a exclusive=\n", "stop linux " + normal + " option-a exclusive=\n",
+	} {
+		if !strings.Contains(log+"\n", want) {
+			t.Fatalf("fake-screen.log has no %q:\n%s", want, log)
+		}
 	}
-	c.start()
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
-}
-
-// TestProvisionFailure: a failed install script makes the room broken.
-func TestProvisionFailure(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	e.init()
-	c := e.startStaticRoom("box")
-	e.writeTool("probe", map[string]string{"tool.toml": "description = \"Probe\"\n", "install.linux.sh": "#!/bin/sh\necho no simulator runtime >&2\nexit 3\n"})
-	e.writeConfig(staticRoomConfig(c, `"probe"`))
-	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	r := s.waitRoom("home/box", protocol.RoomBroken, roomReady)
-	if r.Reason != "tool probe: install script exited with code 3" {
-		t.Fatalf("room = %+v, want the install failure as the reason", r)
-	}
-	if p := inventoryOf(r, "probe"); p == nil || p.State != "failed" {
-		t.Fatalf("probe in the inventory: %+v", r.Tools)
-	}
-}
-
-// TestTokens: admins create and revoke room tokens; members cannot, and user
-// tokens come only from invite codes (M8).
-func TestTokens(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	e.initServer(serverHeader() + staticMachine)
-	s := e.startServer("")
-	admin := e.admin
-
-	r := e.hostel("admin", "token", "create", "--name", "box", "--role", "room", "--machine", "home/box")
-	if r.code != 0 || !strings.HasPrefix(r.stdout, "hostel_") {
-		t.Fatalf("room token create: %s", r)
-	}
-	room := strings.TrimSpace(r.stdout)
-	if code := s.get("/v1/info", room, nil); code != 200 {
-		t.Fatalf("room token: GET /v1/info HTTP %d", code)
-	}
-	if code := s.get("/v1/status", room, nil); code != 401 {
-		t.Fatalf("room token: GET /v1/status HTTP %d, want 401", code)
-	}
-	if r := e.hostel("admin", "token", "create", "--name", "agent", "--role", "guest"); r.code != 1 || !strings.Contains(r.stderr, "hostel config users invite") {
-		t.Fatalf("user token create: %s, want a refusal that names invites", r)
-	}
-	if r := e.hostel("admin", "token", "create", "--name", "r", "--role", "room", "--machine", "home/nothing"); r.code != 1 || !strings.Contains(r.stderr, "static machine") {
-		t.Fatalf("room token for an unknown machine: %s", r)
-	}
-	e.useGuestToken()
-	if r := e.hostel("status"); r.code != 0 {
-		t.Fatalf("status with a member token: %s", r)
-	}
-	if r := e.hostel("admin", "token", "create", "--name", "x", "--role", "room", "--machine", "home/box"); r.code != 1 || !strings.Contains(r.stderr, "only an admin") {
-		t.Fatalf("token create with a member token: %s", r)
-	}
-	e.vars["HOSTEL_TOKEN"] = admin
-	if r := e.hostel("admin", "token", "revoke", "2"); r.code != 0 {
-		t.Fatalf("token revoke: %s", r)
-	}
-	if code := s.get("/v1/info", room, nil); code != 401 {
-		t.Fatalf("revoked token: GET /v1/info HTTP %d, want 401", code)
-	}
-	if r := e.hostel("admin", "pubkey"); r.code != 0 || !strings.HasPrefix(r.stdout, "ssh-ed25519 ") {
-		t.Fatalf("admin pubkey: %s", r)
+	if log := f.c.sh("cat " + cacheDir + "/fake-desktop.log"); !strings.Contains(log, "start linux "+desk+" exclusive=1") || strings.Contains(log, normal) {
+		t.Fatalf("fake-desktop.log: %q, want a start for the desktop lease only", log)
 	}
 }

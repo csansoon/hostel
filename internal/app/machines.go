@@ -1,247 +1,430 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// machineRooms returns the rooms of a machine (an on-demand machine can have
-// several).
-func machineRooms(st protocol.Status, key string) []protocol.RoomStatus {
-	var out []protocol.RoomStatus
-	for _, r := range st.Rooms {
-		if r.Provider+"/"+r.Machine == key {
-			out = append(out, r)
-		}
+// detailsInterval is the shortest time between two reads of a machine's
+// details (each read opens SSH to its machines).
+const detailsInterval = 10 * time.Second
+
+// templatePage is one machine: its hardware and live use, and each lease with
+// its jobs; the admin actions.
+type templatePage struct {
+	templateKey string
+	// machine limits the page to one machine of an on-demand template.
+	machine string
+	// details of each machine of the machine, by machine name.
+	details map[string]protocol.MachineDetails
+	errs    []string
+	loaded  time.Time
+	loading bool
+	// sel is the selected lease (its ID).
+	sel string
+}
+
+type detailsMsg struct {
+	gen     int
+	key     string
+	machine string
+	details map[string]protocol.MachineDetails
+	errs    []string
+}
+
+func (p *templatePage) title() string {
+	if p.machine != "" {
+		return p.machine
+	}
+	return p.templateKey
+}
+
+// state is the state of the page's machines: one machine of a template, or
+// all of them.
+func (p *templatePage) state(m *model, ms protocol.TemplateStatus, now time.Time) state {
+	st := m.st
+	st.Machines = p.machines(m)
+	return templateState(st, ms, now)
+}
+
+func (p *templatePage) machines(m *model) []protocol.MachineStatus {
+	out := templateMachines(m.st, p.templateKey)
+	if p.machine != "" {
+		out = slices.DeleteFunc(out, func(r protocol.MachineStatus) bool { return r.Name != p.machine })
 	}
 	return out
 }
 
-// roomLeases returns the leases on a room that are not queued.
-func roomLeases(st protocol.Status, id int64) []protocol.LeaseStatus {
+func (p *templatePage) template(m *model) (protocol.TemplateStatus, bool) {
+	i := slices.IndexFunc(m.st.Templates, func(ms protocol.TemplateStatus) bool { return ms.Key == p.templateKey })
+	if i < 0 {
+		return protocol.TemplateStatus{}, false
+	}
+	return m.st.Templates[i], true
+}
+
+func (p *templatePage) load(m *model) tea.Cmd {
+	if p.loading || time.Since(p.loaded) < detailsInterval && p.details != nil {
+		return nil
+	}
+	p.loading = true
+	c, gen, key, selected := m.c, m.gen, p.templateKey, p.machine
+	var names []string
+	for _, r := range p.machines(m) {
+		names = append(names, r.Name)
+	}
+	return func() tea.Msg {
+		out := detailsMsg{gen: gen, key: key, machine: selected, details: map[string]protocol.MachineDetails{}}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		// The machines in parallel, each with its own deadline: each read can
+		// take seconds (jobs and live use over SSH).
+		for _, name := range names {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+				defer cancel()
+				var d protocol.MachineDetails
+				err := c.Do(ctx, "GET", "/v1/machines/"+name, nil, &d)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					out.errs = append(out.errs, name+": "+err.Error())
+					return
+				}
+				out.details[name] = d
+			}()
+		}
+		wg.Wait()
+		return out
+	}
+}
+
+func (p *templatePage) other(m *model, msg tea.Msg) tea.Cmd {
+	if d, ok := msg.(detailsMsg); ok && d.gen == m.gen && d.key == p.templateKey && d.machine == p.machine {
+		p.details, p.errs, p.loaded, p.loading = d.details, d.errs, time.Now(), false
+	}
+	return nil
+}
+
+// leases returns the leases on the machine's machines (from the status, so that
+// they follow each change) and the index of the selected one.
+func (p *templatePage) leases(m *model) ([]protocol.LeaseStatus, int) {
 	var out []protocol.LeaseStatus
-	for _, l := range st.Leases {
-		if l.RoomID == id && l.State != protocol.LeaseQueued {
-			out = append(out, l)
+	for _, r := range p.machines(m) {
+		out = append(out, machineLeases(m.st, r.ID)...)
+	}
+	i := slices.IndexFunc(out, func(l protocol.LeaseStatus) bool { return l.ID == p.sel })
+	if i < 0 && len(out) > 0 {
+		i, p.sel = 0, out[0].ID
+	}
+	return out, i
+}
+
+func gb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<30), 'f', 1, 64) + " GB" }
+
+func (p *templatePage) body(m *model) string {
+	ms, ok := p.template(m)
+	if !ok {
+		return "\n" + note("This machine is not on the server any more.")
+	}
+	now := time.Now()
+	w := contentWidth(m)
+	st := p.state(m, ms, now)
+	kind := "On demand, up to " + plural(ms.MaxMachines, "machine")
+	if ms.Kind == "static" {
+		kind = "A fixed machine"
+		if ms.Connect {
+			kind += " that connects to the server"
 		}
 	}
-	return out
-}
-
-// freeSlot reports a running room that takes a new lease for the tool now.
-func freeSlot(r protocol.RoomStatus, tool string) bool {
-	if r.State != protocol.RoomRunning || r.Drained || (tool != "" && !roomHas(r, tool)) {
-		return false
+	summary := st.dot() + " " + m.word("m:"+ms.Key, st)
+	if st.detail != "" {
+		summary += "     " + mutedStyle.Render(clean(st.detail))
 	}
-	return slices.ContainsFunc(r.Slots, func(s protocol.SlotStatus) bool { return s.State == protocol.SlotFree })
-}
+	var b strings.Builder
+	b.WriteString(head(clean(p.templateKey), kind, summary))
 
-// roomHas reports whether a room's inventory has a tool.
-func roomHas(r protocol.RoomStatus, tool string) bool {
-	return slices.ContainsFunc(r.Tools, func(t protocol.InventoryTool) bool { return t.Name == tool })
-}
-
-// machineFree reports whether a machine can take a lease for the tool now:
-// a free slot, or room for a new on-demand room.
-func machineFree(st protocol.Status, m protocol.MachineStatus, tool string) bool {
-	rooms := machineRooms(st, m.Key)
-	if slices.ContainsFunc(rooms, func(r protocol.RoomStatus) bool { return freeSlot(r, tool) }) {
-		return true
+	// What the machine is: one section, or one for each on-demand machine.
+	about := line(field("OS", clean(ms.OS)))
+	if rms := p.machines(m); len(rms) == 0 || ms.Kind != "static" {
+		// The configured tools; the inventory is in each machine's section.
+		var ts []string
+		for _, t := range ms.Tools {
+			ts = append(ts, fg(colBlue).Render(clean(t)))
+		}
+		about += line(field("Tools", strings.Join(ts, "   ")))
 	}
-	return m.Kind != "static" && len(rooms) < m.MaxRooms
-}
-
-// leaseLine is a lease in plain words: Ana · "iOS snapshots" · 12m.
-func leaseLine(l protocol.LeaseStatus, now time.Time) string {
-	s := fmt.Sprintf("%s · %q · %s", clean(l.User), clean(l.Task), ago(now.Sub(leaseSince(l))))
-	if l.State != protocol.LeaseReady {
-		s += " (" + plainLeaseState(l.State) + ")"
+	if ms.ConnectVersion != "" {
+		v := clean(ms.ConnectVersion)
+		if m.outOfDate(ms) {
+			v += "   " + fg(colYellow).Render("◆ out of date")
+		}
+		about += line(field("Connect", v))
+		if m.outOfDate(ms) {
+			about += line(field("", mutedStyle.Render("On the machine, as an administrator: ")+accentStyle.Render(machineUpdateCommand(ms.OS))))
+		}
 	}
-	return s
-}
-
-// leaseSince is the check in time of a lease: ready, else created.
-func leaseSince(l protocol.LeaseStatus) time.Time {
-	if !l.ReadyAt.IsZero() {
-		return l.ReadyAt
+	rms := p.machines(m)
+	b.WriteString(section("Machine", w, false) + about)
+	for _, r := range rms {
+		title := "Now"
+		if ms.Kind != "static" {
+			title = clean("Machine " + r.Name + " · " + r.State)
+		}
+		b.WriteString(section(title, w, true) + p.machineInfo(r))
 	}
-	return l.CreatedAt
-}
-
-func plainLeaseState(state string) string {
-	switch state {
-	case protocol.LeaseAssigned, protocol.LeaseProvisioning, protocol.LeasePreparing:
-		return "getting ready"
-	case protocol.LeaseCleaning:
-		return "cleaning up"
+	for _, e := range p.errs {
+		b.WriteString(line(errStyle.Render(clean("Cannot read " + e))))
 	}
-	return state
-}
 
-// state is a machine state: a themed word with its color, and the detail in
-// plain words.
-type state struct {
-	word   string
-	color  lipgloss.Color
-	detail string
-}
-
-// dot is the state's icon in its color: ● vacant (green), ◉ occupied
-// (blue), ◐ getting ready (it turns), ◌ no new leases, ✕ broken, ○ offline or not
-// connected.
-func (s state) dot() string {
-	mark := "●"
-	switch s.word {
-	case "Occupied":
-		mark = "◉"
-	case "Getting ready":
-		mark = spin("◐", "◓", "◑", "◒")
-	case "No new leases":
-		mark = "◌"
-	case "Broken":
-		mark = "✕"
-	case "Offline", "Not connected", "Not ready":
-		mark = "○"
+	// The guests: two lines each, and their running jobs.
+	b.WriteString(section("Guests", w, true))
+	leases, sel := p.leases(m)
+	if len(leases) == 0 {
+		b.WriteString(note("Nobody uses this machine now."))
 	}
-	return fg(s.color).Render(mark)
-}
-
-// rank orders the states in lists: the machines that can work first, the
-// offline ones last.
-func (s state) rank() int {
-	switch s.word {
-	case "Vacant":
-		return 0
-	case "Occupied":
-		return 1
-	case "Getting ready":
-		return 2
-	case "No new leases":
-		return 3
-	case "Broken":
-		return 4
-	case "Offline":
-		return 6
-	case "Not connected", "Not ready":
-		return 7
+	for i, l := range leases {
+		title := clean(l.User) + "  " + fmt.Sprintf("%q", clean(l.Task))
+		right := mutedStyle.Render("checked in " + ago(now.Sub(leaseSince(l))) + " ago")
+		if l.State != protocol.LeaseReady {
+			right = fg(colYellow).Render(spin("◐", "◓", "◑", "◒") + " " + plainLeaseState(l.State))
+		}
+		from := clean(l.Guest) + " · " + clean(l.Repo)
+		if l.Branch != "" {
+			from += " · ⎇ " + clean(l.Branch)
+		}
+		out := ""
+		if !l.ExpiresAt.IsZero() {
+			out = mutedStyle.Render("out by " + l.ExpiresAt.Local().Format("15:04"))
+		}
+		b.WriteString(item(w, i == sel, title, from, right, out) + "\n")
+		for _, d := range p.details {
+			for _, j := range d.Jobs[l.ID] {
+				if j.State == "running" {
+					b.WriteString(line("   " + fg(colGreen).Render("▶ ") + clean(strings.Join(j.Command, " ")) + mutedStyle.Render("   running "+ago(now.Sub(j.StartedAt)))))
+				}
+			}
+			if d.JobsError != "" && d.Machine.ID == l.MachineID {
+				b.WriteString(note("   " + clean(d.JobsError)))
+			}
+		}
+		b.WriteString("\n")
 	}
-	return 5
+	return b.String()
 }
 
-// byState returns the machines in state order (stable: the configuration
-// order inside a state).
-func byState(st protocol.Status, machines []protocol.MachineStatus, now time.Time) []protocol.MachineStatus {
-	out := slices.Clone(machines)
-	slices.SortStableFunc(out, func(a, b protocol.MachineStatus) int {
-		return machineState(st, a, now).rank() - machineState(st, b, now).rank()
+// inventoryLines are the tools of a machine with their options and check state, one
+// line each.
+func inventoryLines(r protocol.MachineStatus) string {
+	if len(r.Tools) == 0 {
+		return line(field("Tools", mutedStyle.Render("not installed yet")))
+	}
+	nameW, optW := 0, 0
+	for _, t := range r.Tools {
+		nameW = max(nameW, lipgloss.Width(clean(t.Name)))
+		optW = max(optW, lipgloss.Width(clean(strings.Join(t.Options, ", "))))
+	}
+	var b strings.Builder
+	for i, t := range r.Tools {
+		label := ""
+		if i == 0 {
+			label = "Tools"
+		}
+		s := state{"ready", colGreen, ""}
+		glyph := "●"
+		switch t.State {
+		case "installing":
+			s, glyph = state{"installing", colYellow, ""}, "◐"
+		case "failed":
+			s, glyph = state{"failed", colRed, ""}, "✕"
+		}
+		kind := ""
+		if t.Screen {
+			kind = "   " + mutedStyle.Render("screen")
+		}
+		b.WriteString(line(field(label, cell(fg(colBlue).Render(clean(t.Name)), nameW)+"   "+cell(clean(strings.Join(t.Options, ", ")), optW)+
+			"   "+fg(s.color).Render(glyph+" "+s.word)+kind)))
+	}
+	return b.String()
+}
+
+// machineInfo is the hardware, the inventory, and the live use of one machine.
+func (p *templatePage) machineInfo(r protocol.MachineStatus) string {
+	var b strings.Builder
+	if hw := r.Hardware; hw != nil {
+		var parts []string
+		add := func(ok bool, s string) {
+			if ok {
+				parts = append(parts, s)
+			}
+		}
+		add(hw.CPU != "", clean(hw.CPU))
+		add(hw.Cores > 0, plural(hw.Cores, "core"))
+		add(hw.MemoryBytes > 0, gb(hw.MemoryBytes))
+		add(hw.OSVersion != "", clean(hw.OSVersion))
+		add(r.Arch != "", clean(r.Arch))
+		b.WriteString(line(field("Hardware", strings.Join(parts, mutedStyle.Render(" · ")))))
+	}
+	b.WriteString(inventoryLines(r))
+	d, ok := p.details[r.Name]
+	switch {
+	case ok && d.Usage != nil:
+		u := d.Usage
+		b.WriteString(line(field("CPU", gauge(u.CPUPercent/100, 24, shareColor(u.CPUPercent/100))+fmt.Sprintf("  %.0f%%", u.CPUPercent))))
+		if u.MemoryTotalBytes > 0 {
+			share := float64(u.MemoryUsedBytes) / float64(u.MemoryTotalBytes)
+			b.WriteString(line(field("Memory", gauge(share, 24, shareColor(share))+"  "+gb(u.MemoryUsedBytes)+" of "+gb(u.MemoryTotalBytes))))
+		}
+		if u.DiskFreeBytes > 0 {
+			b.WriteString(line(field("Disk", gb(u.DiskFreeBytes)+" free")))
+		}
+	case p.details == nil && r.State == protocol.MachineRunning:
+		b.WriteString(line(field("Use", mutedStyle.Render("reading …"))))
+	}
+	if r.Reason != "" {
+		b.WriteString(line(field("Reason", fg(colRed).Render(clean(r.Reason)))))
+	}
+	if r.Drained {
+		b.WriteString(line(field("Leases", mutedStyle.Render("◌ no new leases"))))
+	}
+	return b.String()
+}
+
+func (p *templatePage) hint(m *model) string {
+	leases, i := p.leases(m)
+	if i < 0 {
+		ms, _ := p.template(m)
+		s := p.state(m, ms, time.Now())
+		return p.templateKey + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
+	}
+	l := leases[i]
+	h := clean(l.User) + "'s lease"
+	if !l.ExpiresAt.IsZero() {
+		h += ": ends at " + l.ExpiresAt.Local().Format("15:04") + " at the latest, or earlier after a time without activity"
+	}
+	return h + "."
+}
+
+// repairable: repair is for a broken machine of a static machine (a failed
+// health check, a changed host key); the server destroys a broken on-demand
+// machine. An offline machine comes back by itself; a running machine needs no repair.
+func repairable(ms protocol.TemplateStatus, r protocol.MachineStatus) bool {
+	return ms.Kind == "static" && r.State == protocol.MachineBroken && r.Reason != "unreachable"
+}
+
+func (p *templatePage) canEnd(m *model, l protocol.LeaseStatus) bool {
+	return m.admin() || (m.st.User != "" && l.User == m.st.User)
+}
+
+func (p *templatePage) keys(m *model) []binding {
+	leases, sel := p.leases(m)
+	var ks []binding
+	if len(leases) > 1 {
+		ks = append(ks, binding{"↑↓", "move"})
+	}
+	if sel >= 0 && p.canEnd(m, leases[sel]) {
+		ks = append(ks, binding{"enter", "actions"})
+	}
+	if ms, ok := p.template(m); ok && m.admin() && len(machineActions(m, ms)) > 0 {
+		ks = append(ks, binding{"a", "machine actions"})
+	}
+	return ks
+}
+
+func (p *templatePage) key(m *model, k tea.KeyMsg) tea.Cmd {
+	leases, i := p.leases(m)
+	switch k.String() {
+	case "a":
+		if ms, ok := p.template(m); ok && m.admin() {
+			if opts := machineActions(m, ms); len(opts) > 0 {
+				m.menu(clean(ms.Key), p.state(m, ms, time.Now()).word, opts)
+			}
+		}
+	case "up", "k":
+		if i > 0 {
+			p.sel = leases[i-1].ID
+		}
+	case "down", "j":
+		if i >= 0 && i < len(leases)-1 {
+			p.sel = leases[i+1].ID
+		}
+	case "enter":
+		if i >= 0 && p.canEnd(m, leases[i]) {
+			// The option keeps the lease: the list can change meanwhile.
+			l := leases[i]
+			m.menu(clean(l.User), fmt.Sprintf("%q", clean(l.Task)), []option{
+				{label: "End the lease", key: "e", run: func() tea.Cmd { p.endLease(m, l); return nil }},
+			})
+		}
+	case "e":
+		if i >= 0 && p.canEnd(m, leases[i]) {
+			p.endLease(m, leases[i])
+		}
+	}
+	return nil
+}
+
+func (p *templatePage) endLease(m *model, l protocol.LeaseStatus) {
+	m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+		p.loaded = time.Time{}
+		return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
 	})
+}
+
+// machineActions are the admin actions on the machine of a static machine: stop or
+// allow new leases, and repair. On-demand machines come and go (admins limit
+// them with max_machines).
+func machineActions(m *model, ms protocol.TemplateStatus) []option {
+	rms := templateMachines(m.st, ms.Key)
+	if ms.Kind != "static" || len(rms) == 0 {
+		return nil
+	}
+	r := rms[0]
+	id := strconv.FormatInt(r.ID, 10)
+	var out []option
+	if r.Drained {
+		out = append(out, option{label: "Allow new leases", sub: "The machine takes new leases again", key: "d", run: func() tea.Cmd {
+			m.ask("Allow new leases", "Allow new leases on "+clean(r.Name)+" again?", func() tea.Cmd {
+				return m.do("POST", "/v1/machines/"+id+"/undrain", nil, "New leases on "+clean(r.Name)+" are allowed again.")
+			})
+			return nil
+		}})
+	} else {
+		out = append(out, option{label: "Stop new leases", sub: "The current leases continue", key: "d", run: func() tea.Cmd {
+			m.ask("Stop new leases", "Stop new leases on "+clean(r.Name)+"? The current leases continue.", func() tea.Cmd {
+				return m.do("POST", "/v1/machines/"+id+"/drain", nil, "No new leases on "+clean(r.Name)+".")
+			})
+			return nil
+		}})
+	}
+	if repairable(ms, r) {
+		repair := func(accept bool) func() tea.Cmd {
+			return func() tea.Cmd {
+				return m.do("POST", "/v1/machines/"+id+"/repair", map[string]bool{"accept_host_key": accept}, "Repair of "+clean(r.Name)+" requested.")
+			}
+		}
+		out = append(out, option{label: "Repair", sub: "The server checks the machine again", key: "r", run: func() tea.Cmd {
+			if r.Reason == "host key changed" {
+				// The new key must be accepted on purpose: it can also be
+				// another machine at the same address.
+				m.warn("Accept the new key", "The host key of "+clean(r.Name)+" changed. It can also be another machine at the same address. Accept the new key and repair?", repair(true))
+				return nil
+			}
+			m.ask("Repair", "Repair "+clean(r.Name)+"? The server checks the machine again.", repair(false))
+			return nil
+		}})
+	}
 	return out
-}
-
-// offlineRoom returns the room of a static machine that does not answer
-// (broken, reason "unreachable"; the server checks it again).
-func offlineRoom(rooms []protocol.RoomStatus) (protocol.RoomStatus, bool) {
-	for _, r := range rooms {
-		if r.State == protocol.RoomBroken && r.Reason == "unreachable" {
-			return r, true
-		}
-	}
-	return protocol.RoomStatus{}, false
-}
-
-// online reports whether a machine can take leases at all: an on-demand
-// machine, or a static machine with a room that is not offline (a static
-// machine without a room has not connected or is not prepared yet).
-func online(st protocol.Status, m protocol.MachineStatus) bool {
-	if m.Kind != "static" {
-		return true
-	}
-	rooms := machineRooms(st, m.Key)
-	_, off := offlineRoom(rooms)
-	return len(rooms) > 0 && !off
-}
-
-// machineState is the state of a machine: Vacant (a new lease can start on
-// it now; the same rule as the free machines of the Lobby), Occupied, No new
-// leases, Getting ready, Broken, …
-func machineState(st protocol.Status, m protocol.MachineStatus, now time.Time) state {
-	rooms := machineRooms(st, m.Key)
-	var leases []protocol.LeaseStatus
-	for _, r := range rooms {
-		leases = append(leases, roomLeases(st, r.ID)...)
-	}
-	guests := func() string {
-		s := leaseLine(leases[0], now)
-		if len(leases) > 1 {
-			s += fmt.Sprintf(" (+%d)", len(leases)-1)
-		}
-		return s
-	}
-	if m.Kind == "static" && len(rooms) == 0 {
-		if m.Connect {
-			return state{"Not connected", colMuted, "the machine has not connected to the server yet"}
-		}
-		return state{"Not ready", colMuted, "the server has not prepared the machine yet"}
-	}
-	if r, ok := offlineRoom(rooms); ok && len(leases) == 0 {
-		seen := "not seen yet"
-		if !r.LastSeen.IsZero() {
-			seen = "last seen " + ago(now.Sub(r.LastSeen)) + " ago"
-		}
-		return state{"Offline", colMuted, seen + " · it comes back by itself when the machine answers"}
-	}
-	var s state
-	switch {
-	case machineFree(st, m, ""):
-		s = state{"Vacant", colGreen, "ready for a new lease"}
-		if len(leases) > 0 {
-			s.detail = guests() + " · room for one more"
-		}
-	case len(leases) > 0:
-		s = state{"Occupied", colBlue, guests()}
-	case slices.ContainsFunc(rooms, func(r protocol.RoomStatus) bool { return r.State == protocol.RoomBroken }):
-		i := slices.IndexFunc(rooms, func(r protocol.RoomStatus) bool { return r.State == protocol.RoomBroken })
-		s = state{"Broken", colRed, clean(rooms[i].Reason)}
-	case slices.ContainsFunc(rooms, func(r protocol.RoomStatus) bool { return r.Drained }):
-		s = state{"No new leases", colMuted, "an admin stopped new leases on this machine"}
-	case slices.ContainsFunc(rooms, func(r protocol.RoomStatus) bool {
-		return r.State == protocol.RoomProvisioning || r.State == protocol.RoomCreating
-	}):
-		s = state{"Getting ready", colYellow, "the server prepares the machine"}
-	default:
-		s = state{strings.ToUpper(rooms[0].State[:1]) + rooms[0].State[1:], colMuted, ""}
-	}
-	if m.Kind != "static" {
-		s.detail = strings.TrimPrefix(s.detail+fmt.Sprintf(" · on demand, %d of %d rooms", len(rooms), m.MaxRooms), " · ")
-	}
-	if s.word == "Occupied" && slices.ContainsFunc(rooms, func(r protocol.RoomStatus) bool { return r.Drained }) {
-		s.detail += " · no new leases"
-	}
-	return s
-}
-
-// ago prints a duration as 41s, 12m, or 2h05m.
-func ago(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", max(int(d.Seconds()), 0))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
-}
-
-// word is the state's word in its color; a state that just changed glows
-// (the word on its color) for a moment.
-func (m *model) word(key string, s state) string {
-	if m.glowing(key) {
-		return lipgloss.NewStyle().Background(s.color).Foreground(colInk).Render(s.word)
-	}
-	return fg(s.color).Render(s.word)
 }

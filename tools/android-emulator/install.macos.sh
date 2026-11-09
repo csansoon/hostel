@@ -41,7 +41,7 @@ device_type() {
 }
 
 # The console port of the golden AVD's one boot, the last port of the emulator
-# range; slots use HOSTEL_ANDROID_PORT (default 5554).
+# range; rooms use HOSTEL_ANDROID_PORT (default 5554).
 port=5682
 pattern="qemu-system-.* -port $port "
 # An install that was stopped can leave its emulator running.

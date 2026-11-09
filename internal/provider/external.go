@@ -95,12 +95,12 @@ func (e *External) call(ctx context.Context, op string, in, out any) error {
 // LoadCapabilities asks the command for the capabilities of each machine. The
 // server calls it at start.
 func (e *External) LoadCapabilities(ctx context.Context) error {
-	for _, m := range e.cfg.MachineOrder {
+	for _, m := range e.cfg.TemplateOrder {
 		var resp struct {
 			CanStop   bool `json:"can_stop"`
 			CanExtend bool `json:"can_extend"`
 		}
-		if err := e.call(ctx, "capabilities", map[string]string{"machine": m}, &resp); err != nil {
+		if err := e.call(ctx, "capabilities", map[string]string{"template": m}, &resp); err != nil {
 			return err
 		}
 		e.mu.Lock()
@@ -110,10 +110,10 @@ func (e *External) LoadCapabilities(ctx context.Context) error {
 	return nil
 }
 
-func (e *External) Capabilities(machine string) Capabilities {
+func (e *External) Capabilities(template string) Capabilities {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	c := e.caps[machine]
+	c := e.caps[template]
 	c.OnDemand = true
 	return c
 }
@@ -130,71 +130,71 @@ type sshAddr struct {
 	Port int    `json:"port"`
 }
 
-func (e *External) Provision(ctx context.Context, req ProvisionRequest) (RoomRef, error) {
+func (e *External) Provision(ctx context.Context, req ProvisionRequest) (MachineRef, error) {
 	var resp externalAccess
-	err := e.call(ctx, "provision", map[string]any{"name": req.Name, "machine": req.Machine, "spec": req.Spec,
+	err := e.call(ctx, "provision", map[string]any{"name": req.Name, "template": req.Template, "spec": req.Spec,
 		"deadline": req.Deadline.UTC().Format(time.RFC3339), "server_key": req.ServerKey}, &resp)
 	if err != nil {
-		return RoomRef{}, err
+		return MachineRef{}, err
 	}
 	if resp.ID == "" {
-		return RoomRef{}, fmt.Errorf("provider %s provision: the response has no id", e.cfg.Name)
+		return MachineRef{}, fmt.Errorf("provider %s provision: the response has no id", e.cfg.Name)
 	}
-	return RoomRef{Name: req.Name, Machine: req.Machine, ID: resp.ID}, nil
+	return MachineRef{Name: req.Name, Template: req.Template, ID: resp.ID}, nil
 }
 
-func (e *External) Resume(ctx context.Context, room RoomRef) error {
-	return e.call(ctx, "resume", map[string]string{"id": room.ID}, nil)
+func (e *External) Resume(ctx context.Context, machine MachineRef) error {
+	return e.call(ctx, "resume", map[string]string{"id": machine.ID}, nil)
 }
 
-func (e *External) Stop(ctx context.Context, room RoomRef) error {
-	return e.call(ctx, "stop", map[string]string{"id": room.ID}, nil)
+func (e *External) Stop(ctx context.Context, machine MachineRef) error {
+	return e.call(ctx, "stop", map[string]string{"id": machine.ID}, nil)
 }
 
-func (e *External) Extend(ctx context.Context, room RoomRef, deadline time.Time) error {
-	return e.call(ctx, "extend", map[string]string{"id": room.ID, "deadline": deadline.UTC().Format(time.RFC3339)}, nil)
+func (e *External) Extend(ctx context.Context, machine MachineRef, deadline time.Time) error {
+	return e.call(ctx, "extend", map[string]string{"id": machine.ID, "deadline": deadline.UTC().Format(time.RFC3339)}, nil)
 }
 
-func (e *External) Destroy(ctx context.Context, room RoomRef) error {
-	return e.call(ctx, "destroy", map[string]string{"id": room.ID, "name": room.Name}, nil)
+func (e *External) Destroy(ctx context.Context, machine MachineRef) error {
+	return e.call(ctx, "destroy", map[string]string{"id": machine.ID, "name": machine.Name}, nil)
 }
 
-func (e *External) List(ctx context.Context, prefix string) ([]RoomRef, error) {
+func (e *External) List(ctx context.Context, prefix string) ([]MachineRef, error) {
 	var resp struct {
-		Rooms []struct {
+		Machines []struct {
 			ID    string `json:"id"`
 			Name  string `json:"name"`
 			State string `json:"state"`
-		} `json:"rooms"`
+		} `json:"machines"`
 	}
 	if err := e.call(ctx, "list", map[string]string{"prefix": prefix}, &resp); err != nil {
 		return nil, err
 	}
-	var out []RoomRef
-	for _, r := range resp.Rooms {
+	var out []MachineRef
+	for _, r := range resp.Machines {
 		if strings.HasPrefix(r.Name, prefix) {
-			out = append(out, RoomRef{Name: r.Name, ID: r.ID, State: r.State})
+			out = append(out, MachineRef{Name: r.Name, ID: r.ID, State: r.State})
 		}
 	}
 	return out, nil
 }
 
-func (e *External) Access(ctx context.Context, room RoomRef) (RoomAccess, error) {
+func (e *External) Access(ctx context.Context, machine MachineRef) (MachineAccess, error) {
 	var resp externalAccess
-	if err := e.call(ctx, "access", map[string]string{"id": room.ID}, &resp); err != nil {
-		return RoomAccess{}, err
+	if err := e.call(ctx, "access", map[string]string{"id": machine.ID}, &resp); err != nil {
+		return MachineAccess{}, err
 	}
-	a := RoomAccess{User: resp.User, Signers: []ssh.Signer{e.serverKey}}
+	a := MachineAccess{User: resp.User, Signers: []ssh.Signer{e.serverKey}}
 	switch {
 	case resp.SSH != nil:
 		a.Dial = TCPDial(net.JoinHostPort(resp.SSH.Host, strconv.Itoa(resp.SSH.Port)))
 	case len(resp.ProxyCommand) > 0:
 		a.Dial = proxyDial(resp.ProxyCommand)
 	default:
-		return RoomAccess{}, errors.New("provider access: the response has neither ssh nor proxy_command")
+		return MachineAccess{}, errors.New("provider access: the response has neither ssh nor proxy_command")
 	}
 	if a.User == "" {
-		return RoomAccess{}, errors.New("provider access: the response has no user")
+		return MachineAccess{}, errors.New("provider access: the response has no user")
 	}
 	return a, nil
 }

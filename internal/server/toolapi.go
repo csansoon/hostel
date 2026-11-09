@@ -23,13 +23,13 @@ func (s *Server) handleConfigTools(w http.ResponseWriter, r *http.Request) {
 	for _, name := range config.ToolNames(cfg.Tools) {
 		t := cfg.Tools[name]
 		ct := protocol.ConfigTool{Name: name, Screen: t.Screen, Description: t.Description,
-			Source: toolSource(name, latest), Machines: []string{}}
+			Source: toolSource(name, latest), Templates: []string{}}
 		if rev, ok := latest[name]; ok {
 			ct.Revision, ct.User, ct.ChangedAt = rev.Revision, rev.User, rev.CreatedAt
 		}
-		for _, m := range cfg.Machines() {
+		for _, m := range cfg.Templates() {
 			if m.Tool(name) != nil {
-				ct.Machines = append(ct.Machines, m.Key())
+				ct.Templates = append(ct.Templates, m.Key())
 			}
 		}
 		out = append(out, ct)
@@ -77,7 +77,7 @@ func (s *Server) handleRemoveTool(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "", fmt.Sprintf("no defined tool %q; \"hostel config tools\" lists them", name))
 		return
 	}
-	for _, m := range cfg.Machines() {
+	for _, m := range cfg.Templates() {
 		if mt := m.Tool(name); mt != nil {
 			what := "lists"
 			if mt.Need {

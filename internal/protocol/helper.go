@@ -2,7 +2,7 @@ package protocol
 
 import "time"
 
-// HelperInfo is the output of "hostel room info".
+// HelperInfo is the output of "hostel helper info".
 type HelperInfo struct {
 	OS      string       `json:"os"`
 	Arch    string       `json:"arch"`
@@ -22,16 +22,16 @@ type HelperHashes struct {
 	Helper     string            `json:"helper"`
 	Mise       string            `json:"mise"`
 	MiseConfig string            `json:"mise_config"`
-	RoomEnv    string            `json:"room_env"`
+	MachineEnv string            `json:"machine_env"`
 	Tools      map[string]string `json:"tools"`
 }
 
-// RoomEnv is hostel/room-env.json: the provider and machine env, the MISE_*
-// variables, and the env of each slot. The helper adds it to the environment of
+// MachineEnv is hostel/machine-env.json: the provider and machine env, the MISE_*
+// variables, and the env of each room. The helper adds it to the environment of
 // scripts, jobs, and shells.
-type RoomEnv struct {
+type MachineEnv struct {
 	Env   map[string]string            `json:"env"`
-	Slots map[string]map[string]string `json:"slots"`
+	Rooms map[string]map[string]string `json:"rooms"`
 	// OS is the machine's configured OS. It selects the tool scripts; it
 	// can differ from the probed OS (external machines).
 	OS string `json:"os"`
@@ -40,14 +40,14 @@ type RoomEnv struct {
 	ToolOptions map[string][]string `json:"tool_options,omitempty"`
 }
 
-// RunScriptRequest is the input of "hostel room run-script".
+// RunScriptRequest is the input of "hostel helper run-script".
 type RunScriptRequest struct {
 	Args           []string          `json:"args"`
 	Env            map[string]string `json:"env"`
 	TimeoutSeconds int               `json:"timeout_seconds"`
 }
 
-// MiseInstallResponse is the output of "hostel room mise-install": the
+// MiseInstallResponse is the output of "hostel helper mise-install": the
 // result of the install, and the version of each machine-level mise tool
 // (tool name as in the configuration → versions, comma-separated).
 type MiseInstallResponse struct {
@@ -55,13 +55,13 @@ type MiseInstallResponse struct {
 	Versions map[string]string `json:"versions,omitempty"`
 }
 
-// MiseInstallRequest is the input of "hostel room mise-install".
+// MiseInstallRequest is the input of "hostel helper mise-install".
 type MiseInstallRequest struct {
 	TimeoutSeconds int  `json:"timeout_seconds"`
 	AgentDevice    bool `json:"agent_device"`
 }
 
-// RunScriptResponse is the output of "hostel room run-script".
+// RunScriptResponse is the output of "hostel helper run-script".
 type RunScriptResponse struct {
 	ExitCode   int    `json:"exit_code"`
 	OutputTail string `json:"output_tail"`
@@ -88,7 +88,7 @@ type StartedTool struct {
 	Facts   []string `json:"facts,omitempty"`
 }
 
-// BeginRequest is the input of "hostel room begin".
+// BeginRequest is the input of "hostel helper begin".
 type BeginRequest struct {
 	LeaseID string `json:"lease_id"`
 	// Tools are the lease's tools with their options (HOSTEL_TOOLS).
@@ -96,11 +96,11 @@ type BeginRequest struct {
 	// Started are the screen tools that start for the lease, in the order of
 	// their start.
 	Started []StartedTool `json:"started"`
-	// Exclusive: the lease holds the whole room (for example the desktop).
+	// Exclusive: the lease holds the whole machine (for example the desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
 }
 
-// CleanupRequest is the input of "hostel room cleanup". It comes from the
+// CleanupRequest is the input of "hostel helper cleanup". It comes from the
 // database, so a repeated cleanup does not need lease.json.
 type CleanupRequest struct {
 	LeaseID string   `json:"lease_id"`
@@ -109,11 +109,11 @@ type CleanupRequest struct {
 	// scripts run in reverse order.
 	Started []StartedTool `json:"started"`
 	Ports   []int         `json:"ports"`
-	// Exclusive: the lease held the whole room (its scripts may reset the
+	// Exclusive: the lease held the whole machine (its scripts may reset the
 	// desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
 	// Check are the tools whose check script runs at the end: those that the
-	// room has installed. An on-demand room has the files of a screen tool
+	// machine has installed. An on-demand machine has the files of a screen tool
 	// before its install script ran.
 	Check []string `json:"check"`
 }

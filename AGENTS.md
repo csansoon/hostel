@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Hostel gives coding agents short, temporary, exclusive access to remote machines
-(rooms) for builds, UI QA, and device tests. It has three pieces: a central server,
-guests (the CLI that agents use), and rooms. One Go binary contains all three
+for builds, UI QA, and device tests. It has three pieces: a central server,
+guests (the CLI that agents use), and machines. One Go binary contains all three
 modes.
 
 ## Read first
@@ -35,12 +35,11 @@ owner decision in `requirements.md`, section 3, with the date.
 ## Vocabulary
 
 Only Hostel, Guest, and Room come from the hostel theme. Use the plain terms from
-`requirements.md` (provider, machine, platform, device, slot, lease, queue,
-platform scripts, cleanup) in code, CLI text, and docs. Do not add new themed words. CLI verbs stay plain
+`requirements.md` (provider, template, machine, room, tool, lease, queue, cleanup) in code, CLI text, and docs. Do not add new themed words. CLI verbs stay plain
 (`acquire`, `run`, `release`). Exception (owner decision, 2026-11-03): the labels of the
 Hostel app (`hostel` without arguments) may be themed (Lobby, Rooms, Front desk, Check in,
 Check out, Guest, Guest list, Vacant, Occupied, Checked in, Out by, Waiting line, Typical
-stay, Next room), each with a plain description (in the footer for a selectable item).
+stay, Next machine), each with a plain description (in the footer for a selectable item).
 
 ## Toolchain
 
@@ -57,7 +56,7 @@ stay, Next room), each with a plain description (in the footer for a selectable 
 - **Comments are rare.** Prefer clear names and types. Add a short comment only for
   a critical invariant, a security constraint, an external contract, or a
   non-obvious workaround. Explain why, not what.
-- **Errors.** Wrap errors with context (`fmt.Errorf("provision room: %w", err)`).
+- **Errors.** Wrap errors with context (`fmt.Errorf("provision machine: %w", err)`).
   Messages for guests must say what failed and what to do next.
 - **No I/O in transactions.** Never hold a SQLite transaction during a provider
   call, an SSH operation, or a script. Read the state, do the I/O, then write with a
@@ -75,7 +74,7 @@ stay, Next room), each with a plain description (in the footer for a selectable 
 ## Testing rules
 
 - **E2E tests are the quality gate.** They run the real server, guest, and helper
-  binaries against Docker rooms (`docs/design.md`, section 20). Add or extend an E2E
+  binaries against Docker machines (`docs/design.md`, section 20). Add or extend an E2E
   scenario for each changed behavior.
 - **Mocks.** Mock only third-party services, at their adapter boundary. The
   `external` fake provider is the boundary for cloud providers. Do not mock internal
@@ -96,7 +95,7 @@ stay, Next room), each with a plain description (in the footer for a selectable 
   or objects with a `hostel-e2e` label that are older than 2 hours (left by a crashed
   run). Never run `docker system prune`, `docker rm -f $(docker ps -aq)`, or another
   command that acts on objects that the tests did not create. Tests use free random
-  ports on `127.0.0.1` for the server, the gateway, and the room containers; never
+  ports on `127.0.0.1` for the server, the gateway, and the machine containers; never
   fixed ports such as 3000, 5432, 7410, or 9000.
 - **Real providers.** Namespace tests are opt-in (`HOSTEL_SMOKE_NAMESPACE=1`) and
   cost money. Before a real test, run `devbox list -o json` (or `nsc list -o json`).

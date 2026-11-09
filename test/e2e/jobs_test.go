@@ -69,7 +69,7 @@ func TestJobs(t *testing.T) {
 	}()
 	// The job waits for the test: under load, one "hostel jobs" can take longer
 	// than a job of fixed length.
-	f.e.waitFor("job started", roomReady, func() bool {
+	f.e.waitFor("job started", machineReady, func() bool {
 		return strings.Contains(f.e.hostel("jobs").stdout, "running")
 	})
 	f.s = f.s.restart()
@@ -82,7 +82,7 @@ func TestJobs(t *testing.T) {
 	// A killed supervisor gives "lost".
 	r = f.e.hostel("run", "--detach", "--", "sleep 300")
 	id = strings.TrimSpace(r.stdout)
-	f.c.sh("kill -9 $(sed 's/.*\"supervisor_pid\":\\([0-9]*\\).*/\\1/' /home/hostel/hostel/slots/a/jobs/" + id + "/supervisor.json)")
+	f.c.sh("kill -9 $(sed 's/.*\"supervisor_pid\":\\([0-9]*\\).*/\\1/' /home/hostel/hostel/rooms/a/jobs/" + id + "/supervisor.json)")
 	r = f.e.hostel("attach", id)
 	if r.code != 1 || !strings.Contains(r.stderr, "job "+id+" was lost") {
 		t.Fatalf("attach to a lost job: %s", r)
@@ -121,7 +121,7 @@ func TestCleanup(t *testing.T) {
 	daemon := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sh -c setsid sleep 1004' || true"
 	f.e.waitFor("the daemon ended", time.Minute, func() bool { return f.c.sh(daemon) == "0" })
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	if got := f.c.sh(procs); got != "0" {
 		t.Fatalf("lease processes after cleanup: %s", got)
 	}
@@ -133,12 +133,12 @@ func TestCleanup(t *testing.T) {
 	}
 }
 
-// TestCleanupKeepsOtherSlot: on a room with two slots, the cleanup of one lease
+// TestCleanupKeepsOtherRoom: on a machine with two rooms, the cleanup of one lease
 // does not stop the processes of the other lease, also those that it finds
 // only by session or as a descendant.
-func TestCleanupKeepsOtherSlot(t *testing.T) {
+func TestCleanupKeepsOtherRoom(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineKeys: "slots = [{ name = \"a\" }, { name = \"b\" }]\n"})
+	f := newFixture(t, &fixtureOpts{templateKeys: "rooms = [{ name = \"a\" }, { name = \"b\" }]\n"})
 	start := func(n string) {
 		f.e.mustHostel("run", "--", "nohup env -u HOSTEL_LEASE sleep 20"+n+"0 > /dev/null 2>&1 < /dev/null &")
 		f.e.mustHostel("run", "--", "nohup env -u HOSTEL_LEASE sh -c 'setsid sleep 20"+n+"1 & wait' > /dev/null 2>&1 < /dev/null &")
@@ -155,10 +155,10 @@ func TestCleanupKeepsOtherSlot(t *testing.T) {
 	f.useRepo("repo")
 	f.e.mustHostel("release")
 	f.e.waitFor("the first lease's processes stopped", time.Minute, func() bool { return count("1") == "0" })
-	f.e.waitFor("one slot free", time.Minute, func() bool {
+	f.e.waitFor("one room free", time.Minute, func() bool {
 		free := 0
-		for _, sl := range f.s.room("home/box").Slots {
-			if sl.State == protocol.SlotFree && sl.LeaseID == "" {
+		for _, sl := range f.s.machine("home/box").Rooms {
+			if sl.State == protocol.RoomFree && sl.LeaseID == "" {
 				free++
 			}
 		}

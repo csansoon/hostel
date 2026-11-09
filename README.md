@@ -2,23 +2,23 @@
 
 Short, temporary, exclusive access to remote machines for coding agents.
 
-![Guests (agents on your machines) check in at the Hostel front desk, wait in one line, and get a room with the tools that they need (Android, iOS, macOS, Windows)](docs/images/hostel.gif)
+![Guests (agents on your machines) check in at the Hostel front desk, wait in one line, and get a machine with the tools that they need (Android, iOS, macOS, Windows)](docs/images/hostel.gif)
 
 Coding agents edit code on your computer. When they need another machine for a
 build, a UI check, or a device test (an Android SDK, an iOS simulator, an Android
 emulator, a macOS or Windows desktop app, Linux), they ask Hostel for a **lease**
 with the **tools** that they need. The Hostel server keeps one waiting line,
-gives the agent a **room** (one of your
-machines, or an on-demand cloud machine), and cleans the room when the lease ends
+gives the agent a **room** on a machine (one of your
+computers, or an on-demand cloud machine), and cleans the room when the lease ends
 (caches stay, so the next build is fast). The agent's code stays local: Hostel sends the changed files.
 
 - Many agents, many people, few machines: leases are exclusive and wait in line, with
   priorities and wait estimates.
-- Your own machines (a Mac, a Windows PC, a Linux box; also behind NAT) and
+- Your own computers (a Mac, a Windows PC, a Linux box; also behind NAT) and
   on-demand machines (Namespace, or your own provider script).
 - Tools for Android, iOS, macOS, Windows, and Linux: a build needs no screen,
   and a lease that asks for one gets a clean emulator, simulator, or desktop,
-  with screenshots, desktop app control, and tunnels from the room to your local
+  with screenshots, desktop app control, and tunnels from the machine to your local
   servers.
 
 ## Install
@@ -50,21 +50,26 @@ hostel
 - **Check in**: the first time, paste the invite code that an admin of your
   server gave you. The app connects your computer, and your agents use the same
   connection.
-- **Lobby**: each tool (screen tools first) with its free machines and its
-  waiting line. Open a tool to see its options, machines, and waiting leases;
-  admins move entries and change priorities.
-- **Rooms**: each machine, its state (Vacant, Occupied, Offline, …), and who uses
-  it. Open a machine to see its hardware, its live CPU and memory use, and the
-  current lease with its branch and running job. You can end your own lease;
-  admins can end any lease, stop new leases, and repair a broken room.
-- **Front desk**: the server, the guest list, and Check out. Members can make a
-  code for their other computer. Admins invite guests (Invite a guest), change
-  roles, add machines (Add a room), and update the server (Update the server).
+- **Front desk**: Guests (admins invite people and change roles; everyone can
+  make a code for their other computer), This server (address, version, and
+  Update the server for admins, when a newer release exists), and Check out.
+- **Lobby**: the one waiting line first (each queued lease, in order, with its
+  estimated wait), then Screens (one line each: vacancy, machines, waiting), then
+  Software in a short wrapped list. Enter on a tool opens its options, machines,
+  and waiting leases; enter on a waiting lease opens the page of its first tool.
+  Admins move entries and change priorities there.
+- **Rooms**: one list, provider › machine › room. Rooms are small squares by the
+  machine (blue occupied, green vacant, yellow in setup or cleanup, red broken).
+  Each room has one line: the guest, "Vacant", or its state. Gauges show the CPU and memory use.
+  Enter opens the machine (hardware, live use, leases with branch and running
+  job), the room page, an on-demand provider, or a template. You can end your own
+  lease; admins can end any lease. Admins press `a` for the machine actions (stop
+  new leases, repair) and `+` to add a machine.
 - **Update**: shows in the menu when a newer release exists; it installs it on
   this computer.
 
 The footer shows what the selected item is and which keys work. `?` lists all
-keys; `1` `2` `3` jump to Lobby, Rooms, and Front desk; `q` quits.
+keys; `1` `2` `3` jump to Front desk, Lobby, and Rooms; `q` quits.
 
 ### Your own server
 
@@ -72,7 +77,7 @@ No server yet? Ask your coding agent to set one up with the skills below, for
 example:
 
 > Read the skills at https://github.com/csansoon/hostel/tree/main/skills and set
-> up Hostel for me: a server on my VPS, my Mac as an iOS room, and an invite for
+> up Hostel for me: a server on my VPS, my Mac as an iOS machine, and an invite for
 > me.
 
 Or do it yourself on a Linux machine that your computers can reach:
@@ -87,10 +92,10 @@ hostel server run
 Run `hostel server init` and `hostel server run` as the user of the service (not
 root), and open TCP 7410.
 `hostel server init` prints the invite code for your computer; use it within 24
-hours. Then open the app and add your machines in Front desk › Add a room. The
+hours. Then open the app and add your machines: Rooms, then `+`. The
 [`hostel-server-setup`](skills/hostel-server-setup/SKILL.md) skill has the
 details (a service, a proxy with TLS, backups, updates: an admin updates the
-server from the app, in Front desk › Update the server).
+server from the app, in Front desk › This server › Update the server).
 
 ## For agents
 
@@ -107,10 +112,10 @@ skill fits a task.
   on a VPS or a machine at home: `hostel server init` (its own TLS, or behind a
   proxy), a systemd service, the configuration in the database
   (`hostel config edit`), backups, updates (`hostel server update`).
-- [**`hostel-rooms`**](skills/hostel-rooms/SKILL.md): add machines: over SSH, from
-  behind NAT (`hostel config rooms add`, then `hostel machine join` on the
+- [**`hostel-machines`**](skills/hostel-machines/SKILL.md): add machines: over SSH, from
+  behind NAT (`hostel config machines add`, then `hostel machine join` on the
   machine), or on demand (Namespace, or an `external` provider); limits, warm
-  rooms, drain, repair, remove; offline machines.
+  machines, drain, repair, remove; offline machines.
 - [**`hostel-tools`**](skills/hostel-tools/SKILL.md): the tools of a machine
   (`android-sdk`, `android-emulator`, `xcode`, `ios-simulator`, `macos-desktop`,
   `windows-desktop`, and any mise tool such as `jdk:21`), what each needs on the
@@ -124,7 +129,7 @@ skill fits a task.
   run it again), `hostel run`, `hostel sync`, `hostel screenshot`, `hostel release`;
   `hostel.toml` in a repository for its usual tools, setup commands, and tunnels
   to a local API.
-- [**`hostel-troubleshoot`**](skills/hostel-troubleshoot/SKILL.md): room and lease
+- [**`hostel-troubleshoot`**](skills/hostel-troubleshoot/SKILL.md): machine and lease
   states, offline and broken machines, repair and changed host keys, logs,
   common errors (exit codes 69 and 78, a changed TLS key).
 
@@ -157,8 +162,8 @@ only for the tools that you need; ask for a screen tool only to see the app. Alw
 | [docs/design.md](docs/design.md) | Architecture and contracts |
 | [docs/requirements.md](docs/requirements.md) | Vocabulary, decisions, requirements |
 | [docs/deploy-vps.md](docs/deploy-vps.md) | A server on a VPS |
-| [docs/static-room-setup.md](docs/static-room-setup.md) | Your own machines as rooms |
-| [docs/namespace.md](docs/namespace.md) | On-demand rooms on Namespace |
+| [docs/static-machine-setup.md](docs/static-machine-setup.md) | Your own computers as machines |
+| [docs/namespace.md](docs/namespace.md) | On-demand machines on Namespace |
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents that work on Hostel itself |
 

@@ -1,4 +1,4 @@
-// Package scheduler orders the queue and selects a slot or a provider action for
+// Package scheduler orders the queue and selects a room or a provider action for
 // each queued lease (design, section 5). It is a pure function: it reads its
 // input and does no I/O. Workers do the actions after the pass.
 package scheduler
@@ -12,7 +12,7 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// lifetimeMargin is the extra room lifetime that a lease needs after max_lease.
+// lifetimeMargin is the extra machine lifetime that a lease needs after max_lease.
 const lifetimeMargin = 5 * time.Minute
 
 // Want is one requested tool: "name" or "name:option".
@@ -25,14 +25,14 @@ type Want struct {
 type Request struct {
 	// Tools are the requested tools; none: any machine.
 	Tools []Want
-	// PoolTunnels is the number of tunnels without a fixed room port.
+	// PoolTunnels is the number of tunnels without a fixed machine port.
 	PoolTunnels int
 	Fresh       bool
-	// Exclusive leases take all slots of a room.
+	// Exclusive leases take all rooms of a machine.
 	Exclusive bool
 }
 
-// Have is what a machine or a room gives of one tool.
+// Have is what a machine or a machine gives of one tool.
 type Have struct {
 	Screen bool
 	// Options are the versions of a software tool, or the options of a
@@ -79,54 +79,54 @@ func gives(tools map[string]Have, r Request) bool {
 	return true
 }
 
-// Machine is one machine of the configuration.
-type Machine struct {
+// Template is one machine of the configuration.
+type Template struct {
 	Key       string // "<provider>/<machine>"
 	Provider  string
 	OnDemand  bool
 	CanResume bool
-	// Tools are the machine's tools: the inventories of its rooms where
+	// Tools are the machine's tools: the inventories of its machines where
 	// they have one, else the configuration.
 	Tools map[string]Have
-	// PoolPorts is the smallest number of pool ports of its slots.
+	// PoolPorts is the smallest number of pool ports of its rooms.
 	PoolPorts int
-	// Slots are the slot names of a new room.
-	Slots       []string
-	MaxRooms    int
+	// Rooms are the room names of a new machine.
+	Rooms       []string
+	MaxMachines int
 	MaxLease    time.Duration
 	MaxLifetime time.Duration // 0: no limit
 }
 
 // Provider has the limits of a provider.
 type Provider struct {
-	Name     string
-	MaxRooms int // 0: no limit
-	Limits   []Limit
+	Name        string
+	MaxMachines int // 0: no limit
+	Limits      []Limit
 }
 
-// Limit counts the rooms of a subset of the machines of a provider.
+// Limit counts the machines of a subset of the machines of a provider.
 type Limit struct {
-	Machines []string // machine keys
-	MaxRooms int
+	Templates   []string // machine keys
+	MaxMachines int
 }
 
-// Room is a room that is not destroyed.
-type Room struct {
+// Machine is a machine that is not destroyed.
+type Machine struct {
 	ID        int64
-	Machine   string
+	Template  string
 	State     string
 	Drained   bool
 	CreatedAt time.Time
-	// Tools are what the room gives: its inventory, else its machine's
+	// Tools are what the machine gives: its inventory, else its machine's
 	// configuration.
 	Tools map[string]Have
-	// Ready lists the tools that the room has installed and checked with
+	// Ready lists the tools that the machine has installed and checked with
 	// the current scripts, with their needs.
 	Ready map[string]bool
-	Slots []Slot
+	Rooms []Room
 }
 
-type Slot struct {
+type Room struct {
 	Name      string
 	State     string
 	PoolPorts int
@@ -145,9 +145,9 @@ type Lease struct {
 
 type Input struct {
 	Now       time.Time
-	Machines  []Machine // configuration order
+	Templates []Template // configuration order
 	Providers []Provider
-	Rooms     []Room
+	Machines  []Machine
 	Leases    []Lease
 	// Full has the machines with a provider "limit reached" flag.
 	Full map[string]bool
@@ -157,34 +157,34 @@ type Input struct {
 type Action string
 
 const (
-	// UseRoom: a free slot in a running room that is ready for the lease.
-	UseRoom Action = "use"
-	// ProvisionRoom: a free slot in a running room; the install scripts of
+	// UseMachine: a free room in a running machine that is ready for the lease.
+	UseMachine Action = "use"
+	// ProvisionMachine: a free room in a running machine; the install scripts of
 	// the lease's tools run first.
-	ProvisionRoom Action = "provision"
-	// ResumeRoom: a stopped room.
-	ResumeRoom Action = "resume"
-	// CreateRoom: a new room of Machine; RoomID is 0.
-	CreateRoom Action = "create"
+	ProvisionMachine Action = "provision"
+	// ResumeMachine: a stopped machine.
+	ResumeMachine Action = "resume"
+	// CreateMachine: a new machine of Machine; MachineID is 0.
+	CreateMachine Action = "create"
 )
 
 type Assignment struct {
-	LeaseID string
-	Action  Action
-	Machine string
-	RoomID  int64
-	// Slots are the reserved slots; the first is the lease's slot.
-	Slots []string
+	LeaseID   string
+	Action    Action
+	Template  string
+	MachineID int64
+	// Rooms are the reserved rooms; the first is the lease's room.
+	Rooms []string
 }
 
 // Reasons why a lease waits (R7).
 const (
-	ReasonNoSlot       = "no free slot"
-	ReasonEarlierLease = "an earlier lease waits for the same machines"
-	ReasonRoomStarting = "a room is starting"
-	ReasonLimit        = "room limit reached"
-	ReasonProviderFull = "provider limit reached"
-	ReasonEviction     = "an idle room is being removed to make space"
+	ReasonNoRoom          = "no free room"
+	ReasonEarlierLease    = "an earlier lease waits for the same machines"
+	ReasonMachineStarting = "a machine is starting"
+	ReasonLimit           = "machine limit reached"
+	ReasonProviderFull    = "provider limit reached"
+	ReasonEviction        = "an idle machine is being removed to make space"
 )
 
 type Waiting struct {
@@ -199,7 +199,7 @@ type Waiting struct {
 
 type Output struct {
 	Assignments []Assignment
-	// Evict lists idle rooms to destroy, so that a waiting lease can get a new room.
+	// Evict lists idle machines to destroy, so that a waiting lease can get a new machine.
 	Evict   []int64
 	Waiting []Waiting
 }
@@ -232,13 +232,13 @@ func before(a, b Lease) bool {
 }
 
 // Serves reports whether the machine can ever satisfy the request.
-func (m *Machine) Serves(r Request) bool {
+func (m *Template) Serves(r Request) bool {
 	return gives(m.Tools, r) && m.PoolPorts >= r.PoolTunnels && (!r.Fresh || m.OnDemand)
 }
 
-// ready reports whether the room has installed and checked each requested
+// ready reports whether the machine has installed and checked each requested
 // tool.
-func (r *room) ready(req Request) bool {
+func (r *machine) ready(req Request) bool {
 	for _, w := range req.Tools {
 		if !r.Ready[w.Name] {
 			return false
@@ -249,11 +249,11 @@ func (r *room) ready(req Request) bool {
 
 // Candidates returns the keys of the machines that can satisfy the request, in
 // configuration order.
-func Candidates(machines []Machine, r Request) []string {
+func Candidates(templates []Template, r Request) []string {
 	var keys []string
-	for i := range machines {
-		if machines[i].Serves(r) {
-			keys = append(keys, machines[i].Key)
+	for i := range templates {
+		if templates[i].Serves(r) {
+			keys = append(keys, templates[i].Key)
 		}
 	}
 	return keys
@@ -261,36 +261,36 @@ func Candidates(machines []Machine, r Request) []string {
 
 type pass struct {
 	in        Input
-	machines  map[string]*Machine
+	templates map[string]*Template
 	providers map[string]*Provider
-	rooms     []*room
+	machines  []*machine
 	blocked   map[string]bool
 }
 
-type room struct {
-	Room
-	machine *Machine
-	evicted bool
-	busy    map[string]bool // slots taken in this pass
+type machine struct {
+	Machine
+	template *Template
+	evicted  bool
+	busy     map[string]bool // rooms taken in this pass
 }
 
 // Schedule runs one scheduler pass.
 func Schedule(in Input) Output {
-	p := &pass{in: in, machines: map[string]*Machine{}, providers: map[string]*Provider{}, blocked: map[string]bool{}}
-	for i := range in.Machines {
-		p.machines[in.Machines[i].Key] = &in.Machines[i]
+	p := &pass{in: in, templates: map[string]*Template{}, providers: map[string]*Provider{}, blocked: map[string]bool{}}
+	for i := range in.Templates {
+		p.templates[in.Templates[i].Key] = &in.Templates[i]
 	}
 	for i := range in.Providers {
 		p.providers[in.Providers[i].Name] = &in.Providers[i]
 	}
-	for _, r := range in.Rooms {
-		m := p.machines[r.Machine]
+	for _, r := range in.Machines {
+		m := p.templates[r.Template]
 		if m == nil {
-			continue // a room of a machine that left the configuration
+			continue // a machine of a machine that left the configuration
 		}
-		p.rooms = append(p.rooms, &room{Room: r, machine: m, busy: map[string]bool{}})
+		p.machines = append(p.machines, &machine{Machine: r, template: m, busy: map[string]bool{}})
 	}
-	sort.SliceStable(p.rooms, func(i, j int) bool { return p.rooms[i].ID < p.rooms[j].ID })
+	sort.SliceStable(p.machines, func(i, j int) bool { return p.machines[i].ID < p.machines[j].ID })
 
 	leases := slices.Clone(in.Leases)
 	Order(leases)
@@ -298,11 +298,11 @@ func Schedule(in Input) Output {
 	var out Output
 	var waiting []waitingLease
 	for _, l := range leases {
-		all := Candidates(in.Machines, l.Request)
-		var free []*Machine
+		all := Candidates(in.Templates, l.Request)
+		var free []*Template
 		for _, k := range all {
 			if !p.blocked[k] {
-				free = append(free, p.machines[k])
+				free = append(free, p.templates[k])
 			}
 		}
 		if a, ok := p.assign(l, free); ok {
@@ -319,7 +319,7 @@ func Schedule(in Input) Output {
 		}
 		behind := 0
 		for _, w := range waiting {
-			if slices.ContainsFunc(all, func(k string) bool { return slices.Contains(w.machines, k) }) {
+			if slices.ContainsFunc(all, func(k string) bool { return slices.Contains(w.templates, k) }) {
 				behind++
 			}
 		}
@@ -329,70 +329,70 @@ func Schedule(in Input) Output {
 	return out
 }
 
-type waitingLease struct{ machines []string }
+type waitingLease struct{ templates []string }
 
-func (p *pass) assign(l Lease, machines []*Machine) (Assignment, bool) {
+func (p *pass) assign(l Lease, templates []*Template) (Assignment, bool) {
 	if !l.Fresh {
 		for _, ready := range []bool{true, false} {
-			for _, m := range machines {
-				for _, r := range p.roomsOf(m.Key) {
-					if r.evicted || r.State != protocol.RoomRunning || r.Drained || !gives(r.Tools, l.Request) || r.ready(l.Request) != ready || !p.lifetimeOK(r) {
+			for _, m := range templates {
+				for _, r := range p.machinesOf(m.Key) {
+					if r.evicted || r.State != protocol.MachineRunning || r.Drained || !gives(r.Tools, l.Request) || r.ready(l.Request) != ready || !p.lifetimeOK(r) {
 						continue
 					}
-					if slots := r.take(l.Request); slots != nil {
-						action := UseRoom
+					if rooms := r.take(l.Request); rooms != nil {
+						action := UseMachine
 						if !ready {
-							action = ProvisionRoom
+							action = ProvisionMachine
 						}
-						return Assignment{LeaseID: l.ID, Action: action, Machine: m.Key, RoomID: r.ID, Slots: slots}, true
+						return Assignment{LeaseID: l.ID, Action: action, Template: m.Key, MachineID: r.ID, Rooms: rooms}, true
 					}
 				}
 			}
 		}
-		for _, m := range machines {
+		for _, m := range templates {
 			if !m.CanResume {
 				continue
 			}
-			for _, r := range p.roomsOf(m.Key) {
-				if r.evicted || r.State != protocol.RoomStopped || r.Drained || !gives(r.Tools, l.Request) || !p.lifetimeOK(r) {
+			for _, r := range p.machinesOf(m.Key) {
+				if r.evicted || r.State != protocol.MachineStopped || r.Drained || !gives(r.Tools, l.Request) || !p.lifetimeOK(r) {
 					continue
 				}
-				if slots := r.take(l.Request); slots != nil {
-					return Assignment{LeaseID: l.ID, Action: ResumeRoom, Machine: m.Key, RoomID: r.ID, Slots: slots}, true
+				if rooms := r.take(l.Request); rooms != nil {
+					return Assignment{LeaseID: l.ID, Action: ResumeMachine, Template: m.Key, MachineID: r.ID, Rooms: rooms}, true
 				}
 			}
 		}
 	}
-	for _, m := range machines {
+	for _, m := range templates {
 		if !m.OnDemand || p.in.Full[m.Key] || len(p.blockingLimits(m)) > 0 {
 			continue
 		}
-		slots := m.Slots[:1]
+		rooms := m.Rooms[:1]
 		if l.Exclusive {
-			slots = slices.Clone(m.Slots)
+			rooms = slices.Clone(m.Rooms)
 		}
-		// The new room counts against the limits for the rest of the pass.
-		nr := &room{Room: Room{State: protocol.RoomCreating, Machine: m.Key, CreatedAt: p.in.Now}, machine: m, busy: map[string]bool{}}
-		p.rooms = append(p.rooms, nr)
-		return Assignment{LeaseID: l.ID, Action: CreateRoom, Machine: m.Key, Slots: slots}, true
+		// The new machine counts against the limits for the rest of the pass.
+		nr := &machine{Machine: Machine{State: protocol.MachineCreating, Template: m.Key, CreatedAt: p.in.Now}, template: m, busy: map[string]bool{}}
+		p.machines = append(p.machines, nr)
+		return Assignment{LeaseID: l.ID, Action: CreateMachine, Template: m.Key, Rooms: rooms}, true
 	}
 	return Assignment{}, false
 }
 
-// take reserves the slots for a lease, or returns nil.
-func (r *room) take(req Request) []string {
+// take reserves the rooms for a lease, or returns nil.
+func (r *machine) take(req Request) []string {
 	var free []string
-	for _, s := range r.Slots {
-		if s.State == protocol.SlotFree && !r.busy[s.Name] {
+	for _, s := range r.Rooms {
+		if s.State == protocol.RoomFree && !r.busy[s.Name] {
 			free = append(free, s.Name)
 		}
 	}
 	if req.Exclusive {
-		if len(free) != len(r.Slots) || len(free) == 0 || r.slotPorts(free[0]) < req.PoolTunnels {
+		if len(free) != len(r.Rooms) || len(free) == 0 || r.roomPorts(free[0]) < req.PoolTunnels {
 			return nil
 		}
 	} else {
-		i := slices.IndexFunc(free, func(n string) bool { return r.slotPorts(n) >= req.PoolTunnels })
+		i := slices.IndexFunc(free, func(n string) bool { return r.roomPorts(n) >= req.PoolTunnels })
 		if i < 0 {
 			return nil
 		}
@@ -404,8 +404,8 @@ func (r *room) take(req Request) []string {
 	return free
 }
 
-func (r *room) slotPorts(name string) int {
-	for _, s := range r.Slots {
+func (r *machine) roomPorts(name string) int {
+	for _, s := range r.Rooms {
 		if s.Name == name {
 			return s.PoolPorts
 		}
@@ -413,17 +413,17 @@ func (r *room) slotPorts(name string) int {
 	return 0
 }
 
-// idle reports whether the room has no lease: running with all slots free, or stopped.
-func (r *room) idle() bool {
+// idle reports whether the machine has no lease: running with all rooms free, or stopped.
+func (r *machine) idle() bool {
 	if r.evicted {
 		return false
 	}
 	switch r.State {
-	case protocol.RoomStopped:
+	case protocol.MachineStopped:
 		return true
-	case protocol.RoomRunning:
-		for _, s := range r.Slots {
-			if s.State != protocol.SlotFree || r.busy[s.Name] {
+	case protocol.MachineRunning:
+		for _, s := range r.Rooms {
+			if s.State != protocol.RoomFree || r.busy[s.Name] {
 				return false
 			}
 		}
@@ -432,15 +432,15 @@ func (r *room) idle() bool {
 	return false
 }
 
-func (p *pass) lifetimeOK(r *room) bool {
-	lt := r.machine.MaxLifetime
-	return lt == 0 || r.CreatedAt.Add(lt).Sub(p.in.Now) >= r.machine.MaxLease+lifetimeMargin
+func (p *pass) lifetimeOK(r *machine) bool {
+	lt := r.template.MaxLifetime
+	return lt == 0 || r.CreatedAt.Add(lt).Sub(p.in.Now) >= r.template.MaxLease+lifetimeMargin
 }
 
-func (p *pass) roomsOf(machine string) []*room {
-	var out []*room
-	for _, r := range p.rooms {
-		if r.Machine == machine {
+func (p *pass) machinesOf(template string) []*machine {
+	var out []*machine
+	for _, r := range p.machines {
+		if r.Template == template {
 			out = append(out, r)
 		}
 	}
@@ -449,16 +449,16 @@ func (p *pass) roomsOf(machine string) []*room {
 
 // scope is a limit with the machines that it counts.
 type scope struct {
-	machines []string
-	max      int
+	templates []string
+	max       int
 }
 
-func (s scope) has(machine string) bool { return slices.Contains(s.machines, machine) }
+func (s scope) has(template string) bool { return slices.Contains(s.templates, template) }
 
-func (p *pass) count(s scope, without map[*room]bool) int {
+func (p *pass) count(s scope, without map[*machine]bool) int {
 	n := 0
-	for _, r := range p.rooms {
-		if s.has(r.Machine) && !without[r] {
+	for _, r := range p.machines {
+		if s.has(r.Template) && !without[r] {
 			n++
 		}
 	}
@@ -466,34 +466,34 @@ func (p *pass) count(s scope, without map[*room]bool) int {
 }
 
 // scopes returns the machine, provider, and provider limits that apply to m.
-func (p *pass) scopes(m *Machine) []scope {
-	out := []scope{{machines: []string{m.Key}, max: m.MaxRooms}}
+func (p *pass) scopes(m *Template) []scope {
+	out := []scope{{templates: []string{m.Key}, max: m.MaxMachines}}
 	prov := p.providers[m.Provider]
 	if prov == nil {
 		return out
 	}
-	if prov.MaxRooms > 0 {
+	if prov.MaxMachines > 0 {
 		var all []string
-		for _, mm := range p.in.Machines {
+		for _, mm := range p.in.Templates {
 			if mm.Provider == m.Provider {
 				all = append(all, mm.Key)
 			}
 		}
-		out = append(out, scope{machines: all, max: prov.MaxRooms})
+		out = append(out, scope{templates: all, max: prov.MaxMachines})
 	}
 	for _, l := range prov.Limits {
-		if slices.Contains(l.Machines, m.Key) {
-			out = append(out, scope{machines: l.Machines, max: l.MaxRooms})
+		if slices.Contains(l.Templates, m.Key) {
+			out = append(out, scope{templates: l.Templates, max: l.MaxMachines})
 		}
 	}
 	return out
 }
 
-func (p *pass) blockingLimits(m *Machine) []scope {
+func (p *pass) blockingLimits(m *Template) []scope {
 	return p.blockingWithout(m, nil)
 }
 
-func (p *pass) blockingWithout(m *Machine, without map[*room]bool) []scope {
+func (p *pass) blockingWithout(m *Template, without map[*machine]bool) []scope {
 	var out []scope
 	for _, s := range p.scopes(m) {
 		if p.count(s, without) >= s.max {
@@ -503,27 +503,27 @@ func (p *pass) blockingWithout(m *Machine, without map[*room]bool) []scope {
 	return out
 }
 
-// evict selects idle rooms to destroy so that a new room of one of the machines
-// fits in all its limits. It selects nothing while a room in a blocking limit is
-// already being destroyed: that room frees the space soon.
-func (p *pass) evict(machines []*Machine) ([]int64, bool) {
-	for _, m := range machines {
+// evict selects idle machines to destroy so that a new machine of one of the machines
+// fits in all its limits. It selects nothing while a machine in a blocking limit is
+// already being destroyed: that machine frees the space soon.
+func (p *pass) evict(templates []*Template) ([]int64, bool) {
+	for _, m := range templates {
 		if !m.OnDemand || p.in.Full[m.Key] {
 			continue
 		}
-		chosen := map[*room]bool{}
+		chosen := map[*machine]bool{}
 		for {
 			blocking := p.blockingWithout(m, chosen)
 			if len(blocking) == 0 {
 				break
 			}
 			s := blocking[0]
-			var oldest *room
-			for _, r := range p.rooms {
-				if !s.has(r.Machine) || chosen[r] {
+			var oldest *machine
+			for _, r := range p.machines {
+				if !s.has(r.Template) || chosen[r] {
 					continue
 				}
-				if r.State == protocol.RoomDestroying || r.evicted {
+				if r.State == protocol.MachineDestroying || r.evicted {
 					return nil, false
 				}
 				if r.idle() && (oldest == nil || r.CreatedAt.Before(oldest.CreatedAt)) {
@@ -540,7 +540,7 @@ func (p *pass) evict(machines []*Machine) ([]int64, bool) {
 			continue
 		}
 		var ids []int64
-		for _, r := range p.rooms {
+		for _, r := range p.machines {
 			if chosen[r] {
 				r.evicted = true
 				ids = append(ids, r.ID)
@@ -551,16 +551,16 @@ func (p *pass) evict(machines []*Machine) ([]int64, bool) {
 	return nil, false
 }
 
-func (p *pass) reason(machines []*Machine, someBlocked bool) string {
+func (p *pass) reason(templates []*Template, someBlocked bool) string {
 	limit, full := false, false
-	for _, m := range machines {
-		for _, r := range p.roomsOf(m.Key) {
+	for _, m := range templates {
+		for _, r := range p.machinesOf(m.Key) {
 			switch r.State {
-			case protocol.RoomCreating, protocol.RoomProvisioning, protocol.RoomResuming:
-				// Only a starting room with a free slot can take this lease, for
+			case protocol.MachineCreating, protocol.MachineProvisioning, protocol.MachineResuming:
+				// Only a starting machine with a free room can take this lease, for
 				// example after an early cancel.
-				if slices.ContainsFunc(r.Slots, func(s Slot) bool { return s.State == protocol.SlotFree && !r.busy[s.Name] }) {
-					return ReasonRoomStarting
+				if slices.ContainsFunc(r.Rooms, func(s Room) bool { return s.State == protocol.RoomFree && !r.busy[s.Name] }) {
+					return ReasonMachineStarting
 				}
 			}
 		}
@@ -577,5 +577,5 @@ func (p *pass) reason(machines []*Machine, someBlocked bool) string {
 	case someBlocked:
 		return ReasonEarlierLease
 	}
-	return ReasonNoSlot
+	return ReasonNoRoom
 }

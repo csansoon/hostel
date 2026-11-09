@@ -15,9 +15,9 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// instanceMachine is an instance machine of the namespace provider "ns".
-const instanceMachine = `
-[providers.ns.machines.box]
+// instanceTemplate is an instance machine of the namespace provider "ns".
+const instanceTemplate = `
+[providers.ns.templates.box]
 spec = { product = "instance", machine_type = "linux/amd64:4x16", image = "ubuntu:24.04" }
 tools = ["fake-screen"]
 `
@@ -57,7 +57,7 @@ func (e *env) fakeNsc(args ...string) string {
 	return string(out)
 }
 
-// instances returns the room names of the fake instances.
+// instances returns the machine names of the fake instances.
 func (e *env) instances() []string {
 	e.t.Helper()
 	var list []struct {
@@ -81,7 +81,7 @@ func newInstanceFixture(t *testing.T, serverKeys, providerKeys string, vars map[
 	e.init()
 	e.useTools("fake-sdk", "fake-screen")
 	state := e.useFakeNsc(vars)
-	e.writeConfig(serverHeader() + serverKeys + "[providers.ns]\nkind = \"namespace\"\n" + providerKeys + instanceMachine)
+	e.writeConfig(serverHeader() + serverKeys + "[providers.ns]\nkind = \"namespace\"\n" + providerKeys + instanceTemplate)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
 	if files == nil {
@@ -92,11 +92,11 @@ func newInstanceFixture(t *testing.T, serverKeys, providerKeys string, vars map[
 }
 
 // TestNamespaceInstance: a lease on a Namespace instance. The server creates a
-// bare instance with a duration and its labels, starts the room container
+// bare instance with a duration and its labels, starts the machine container
 // with the server key, and reaches its SSH server through "nsc instance
 // port-forward" (also a tunnel and after a restart). A second instance with
-// the room's name is destroyed, and a leaked instance with the server's prefix is
-// destroyed, and so is the room's instance at the end.
+// the machine's name is destroyed, and a leaked instance with the server's prefix is
+// destroyed, and so is the machine's instance at the end.
 func TestNamespaceInstance(t *testing.T) {
 	t.Parallel()
 	free := freePort(t)
@@ -106,17 +106,17 @@ func TestNamespaceInstance(t *testing.T) {
 		".env":        fmt.Sprintf("PORT=%d\n", free),
 	})
 	f.acquire()
-	rooms := f.nsRooms()
-	if len(rooms) != 1 {
-		t.Fatalf("rooms: %+v", rooms)
+	machines := f.nsMachines()
+	if len(machines) != 1 {
+		t.Fatalf("machines: %+v", machines)
 	}
-	room := rooms[0].Name
-	args, err := os.ReadFile(filepath.Join(state, "create-"+room+".args"))
+	machine := machines[0].Name
+	args, err := os.ReadFile(filepath.Join(state, "create-"+machine+".args"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--bare", "--machine_type linux/amd64:4x16", "--duration ", "--label hostel.name=" + room,
-		"--label hostel.machine=box", "--purpose hostel room " + room} {
+	for _, want := range []string{"--bare", "--machine_type linux/amd64:4x16", "--duration ", "--label hostel.name=" + machine,
+		"--label hostel.machine=box", "--purpose hostel machine " + machine} {
 		if !strings.Contains(string(args), want) {
 			t.Fatalf("nsc create args %q do not contain %q", args, want)
 		}
@@ -124,22 +124,22 @@ func TestNamespaceInstance(t *testing.T) {
 	if n := strings.Count(string(args), "\n"); n != 1 {
 		t.Fatalf("%d nsc create calls, want 1", n)
 	}
-	if run, err := os.ReadFile(filepath.Join(state, "docker-"+room+".args")); err != nil || !strings.Contains(string(run), "--network host") ||
+	if run, err := os.ReadFile(filepath.Join(state, "docker-"+machine+".args")); err != nil || !strings.Contains(string(run), "--network host") ||
 		!strings.Contains(string(run), " ubuntu:24.04 -c ") {
 		t.Fatalf("docker run on the instance: %q, %v", run, err)
 	}
 	if r := f.e.mustHostel("run", "--", "id -un"); r.stdout != "hostel\n" {
-		t.Fatalf("room user: %q", r.stdout)
+		t.Fatalf("machine user: %q", r.stdout)
 	}
 	// A tunnel needs remote forwards, which the instance's own SSH server
-	// refuses; the room container's sshd accepts them.
+	// refuses; the machine container's sshd accepts them.
 	localHTTP(t, fmt.Sprintf("127.0.0.1:%d", free), "guest")
-	if r := f.roomGet("$HOSTEL_TUNNEL_API_PORT", "/api"); !strings.Contains(r.stdout, "hello from guest /api") {
+	if r := f.machineGet("$HOSTEL_TUNNEL_API_PORT", "/api"); !strings.Contains(r.stdout, "hello from guest /api") {
 		t.Fatalf("tunnel: %s", r)
 	}
 
 	// A leaked instance with the server's prefix.
-	sid := strings.Split(room, "-")[1]
+	sid := strings.Split(machine, "-")[1]
 	leaked := fmt.Sprintf("hostel-%s-999", sid)
 	key := filepath.Join(f.e.home, "leak.pub")
 	f.e.writeFile(key, "ssh-ed25519 AAAA leak\n")
@@ -147,12 +147,12 @@ func TestNamespaceInstance(t *testing.T) {
 		"--label", "hostel.name="+leaked, "--label", "hostel.machine=box", "-o", "json")
 	f.e.waitFor("the leaked instance destroyed", time.Minute, func() bool {
 		names := f.e.instances()
-		return len(names) == 1 && names[0] == room
+		return len(names) == 1 && names[0] == machine
 	})
-	// A second instance with the room's name, as a create call of a killed
+	// A second instance with the machine's name, as a create call of a killed
 	// server can make late: reconcile keeps only the recorded one.
 	f.e.fakeNsc("create", "--bare", "--machine_type", "linux/amd64:2x4", "--duration", "10m", "--ssh_key", key,
-		"--label", "hostel.name="+room, "--label", "hostel.machine=box", "-o", "json")
+		"--label", "hostel.name="+machine, "--label", "hostel.machine=box", "-o", "json")
 	f.e.waitFor("the second instance destroyed", time.Minute, func() bool { return len(f.e.instances()) == 1 })
 	if r := f.e.mustHostel("run", "--", "echo still-here"); r.stdout != "still-here\n" {
 		t.Fatalf("run after the second instance was destroyed: %q", r.stdout)
@@ -163,30 +163,30 @@ func TestNamespaceInstance(t *testing.T) {
 		t.Fatalf("run after the restart: %q", r.stdout)
 	}
 	f.e.mustHostel("release")
-	f.e.waitFor("slot free", time.Minute, func() bool {
-		rs := f.nsRooms()
-		return len(rs) == 1 && rs[0].Slots[0].State == protocol.SlotFree && rs[0].Slots[0].LeaseID == ""
+	f.e.waitFor("room free", time.Minute, func() bool {
+		rs := f.nsMachines()
+		return len(rs) == 1 && rs[0].Rooms[0].State == protocol.RoomFree && rs[0].Rooms[0].LeaseID == ""
 	})
-	f.admin("admin", "room", "destroy", fmt.Sprint(rooms[0].ID))
+	f.admin("admin", "machine", "destroy", fmt.Sprint(machines[0].ID))
 	f.e.waitFor("instance destroyed", 2*time.Minute, func() bool {
-		return len(f.nsRooms()) == 0 && len(f.e.instances()) == 0 && len(f.e.fakeRooms()) == 0
+		return len(f.nsMachines()) == 0 && len(f.e.instances()) == 0 && len(f.e.fakeMachines()) == 0
 	})
 }
 
 // TestNamespaceInstanceKill: after kill -9 of the server during "nsc create",
 // the restarted server finds the instance by its label, does not create
-// another one, and starts the room container on it.
+// another one, and starts the machine container on it.
 func TestNamespaceInstanceKill(t *testing.T) {
 	t.Parallel()
 	// The create takes 20 s, a wide window for the kill also on a slow machine.
 	f, state := newInstanceFixture(t, "", "warm_running = \"3s\"\n", map[string]string{"FAKE_DELAY": "20s"}, nil)
 	f.acquireUntil(protocol.LeaseProvisioning)
 	f.e.waitFor("nsc create started", time.Minute, func() bool { return len(f.e.instances()) == 1 })
-	before := f.nsRooms()
+	before := f.nsMachines()
 	f.s = f.s.restartAfterKill()
 	f.acquire()
-	if after := f.nsRooms(); len(before) != 1 || len(after) != 1 || after[0].ID != before[0].ID {
-		t.Fatalf("rooms before the kill %+v, after %+v; want the same one", before, after)
+	if after := f.nsMachines(); len(before) != 1 || len(after) != 1 || after[0].ID != before[0].ID {
+		t.Fatalf("machines before the kill %+v, after %+v; want the same one", before, after)
 	}
 	if names := f.e.instances(); len(names) != 1 {
 		t.Fatalf("instances during the lease: %v, want 1", names)
@@ -202,7 +202,7 @@ func TestNamespaceInstanceKill(t *testing.T) {
 		t.Fatalf("run: %q", r.stdout)
 	}
 	f.e.mustHostel("release")
-	f.e.waitFor("no instance left", 2*time.Minute, func() bool { return len(f.nsRooms()) == 0 && len(f.e.instances()) == 0 })
+	f.e.waitFor("no instance left", 2*time.Minute, func() bool { return len(f.nsMachines()) == 0 && len(f.e.instances()) == 0 })
 }
 
 // TestNamespaceInstanceLimit: at the plan limit "nsc create" blocks; after its
@@ -229,7 +229,7 @@ func TestNamespaceInstanceLogin(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.useFakeNsc(map[string]string{"FAKE_LOGGED_OUT": "1"})
-	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + strings.Replace(instanceMachine, "tools = [\"fake-screen\"]\n", "", 1))
+	e.initServer(serverHeader() + "[providers.ns]\nkind = \"namespace\"\n" + strings.Replace(instanceTemplate, "tools = [\"fake-screen\"]\n", "", 1))
 	r := e.hostel("server", "run")
 	if r.code != 1 || !strings.Contains(r.stderr, `providers.ns: the nsc CLI is not ready (install it and run "nsc login" as the server user)`) ||
 		!strings.Contains(r.stderr, "You are not logged in") {

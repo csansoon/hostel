@@ -71,9 +71,9 @@ func fitScreen(body, foot string, width, height int) string {
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
 	footLines := strings.Split(foot, "\n")
 	if height > 0 {
-		room := max(height-len(footLines), 1)
-		lines = window(lines, room)
-		for len(lines) < room {
+		machine := max(height-len(footLines), 1)
+		lines = window(lines, machine)
+		for len(lines) < machine {
 			lines = append(lines, "")
 		}
 	}
@@ -86,24 +86,24 @@ func fitScreen(body, foot string, width, height int) string {
 	return strings.Join(all, "\n")
 }
 
-// window keeps at most room lines: the first lines, and around the selected
+// window keeps at most machine lines: the first lines, and around the selected
 // item (with the bar) when the body is longer; "…" marks cut lines.
-func window(lines []string, room int) []string {
-	if len(lines) <= room {
+func window(lines []string, machine int) []string {
+	if len(lines) <= machine {
 		return lines
 	}
 	sel := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(ansi.Strip(l), barMark) })
 	start := 0
 	if sel >= 0 {
-		start = min(max(sel-room/2, 0), len(lines)-room)
+		start = min(max(sel-machine/2, 0), len(lines)-machine)
 	}
-	out := slices.Clone(lines[start : start+room])
+	out := slices.Clone(lines[start : start+machine])
 	more := mutedStyle.Render("…")
 	if start > 0 && sel != start {
 		out[0] = more
 	}
-	if start+room < len(lines) && sel != start+room-1 {
-		out[room-1] = more
+	if start+machine < len(lines) && sel != start+machine-1 {
+		out[machine-1] = more
 	}
 	return out
 }

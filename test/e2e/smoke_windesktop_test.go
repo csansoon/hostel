@@ -46,9 +46,9 @@ public partial class MainWindow : System.Windows.Window {
 `,
 }
 
-// TestSmokeWindowsDesktop (M7) runs against a real Windows room with a
+// TestSmokeWindowsDesktop (M7) runs against a real Windows machine with a
 // desktop (HOSTEL_SMOKE_WINDOWS, as TestSmokeWindows; the machine needs the
-// Hostel desktop task, docs/static-room-setup.md). The desktop must be
+// Hostel desktop task, docs/static-machine-setup.md). The desktop must be
 // connected, and nobody may use it during the test. HOSTEL_SMOKE_OUT
 // (optional) is a directory for the screenshot.
 //
@@ -71,12 +71,12 @@ func TestSmokeWindowsDesktop(t *testing.T) {
 		}
 	}
 	waitFree := func() {
-		e.waitFor("the Windows room free", 5*time.Minute, func() bool {
-			r := s.room("home/win")
-			if r.State == protocol.RoomBroken {
-				t.Fatalf("the Windows room is broken: %s", r.Reason)
+		e.waitFor("the Windows machine free", 5*time.Minute, func() bool {
+			r := s.machine("home/win")
+			if r.State == protocol.MachineBroken {
+				t.Fatalf("the Windows machine is broken: %s", r.Reason)
 			}
-			return r.State == protocol.RoomRunning && len(r.Slots) == 1 && r.Slots[0].State == protocol.SlotFree && r.Slots[0].LeaseID == ""
+			return r.State == protocol.MachineRunning && len(r.Rooms) == 1 && r.Rooms[0].State == protocol.RoomFree && r.Rooms[0].LeaseID == ""
 		})
 	}
 	ui := func(args ...string) result {

@@ -10,7 +10,7 @@ import (
 )
 
 // proxyDial runs a proxy command and uses its stdin and stdout as the
-// connection to the room's SSH server.
+// connection to the machine's SSH server.
 func proxyDial(argv []string) func(ctx context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) {
 		cmd := exec.Command(argv[0], argv[1:]...)

@@ -11,7 +11,7 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// frontDesk is the place for the server's people and rooms, the server
+// frontDesk is the place for the server's people and machines, the server
 // itself, and check out (owner decision, 2026-11-05).
 type frontDesk struct{ sel int }
 
@@ -38,11 +38,6 @@ func (p *frontDesk) entries(m *model) []deskEntry {
 		hint: "Guests: the people on this server, and invite codes.", open: func() page { return &guestList{} }}}
 	if !m.admin() {
 		out[0].sub = "The people on this server; add your other computer"
-	}
-	if m.admin() {
-		out = append(out, deskEntry{icon: "🔑", label: "Rooms", sub: "Add a machine; stop new leases; repair",
-			hint:  "Rooms: manage the machines of this server.",
-			right: mutedStyle.Render(plural(len(m.st.Machines), "machine")), open: func() page { return &roomAdmin{} }})
 	}
 	server := deskEntry{icon: "🏨", label: "This server", sub: "Address, version, and updates",
 		hint: "This server: its address, its version, and you.", open: func() page { return &serverPage{} }}

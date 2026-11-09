@@ -15,15 +15,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// TestDirtySlotStaysDirty: a lease leaves a dirty slot on an unreachable room
-// and gets a slot on another room; its later steps do not touch the dirty
-// slot, which is cleaned when its room is back.
-func TestDirtySlotStaysDirty(t *testing.T) {
+// TestDirtyRoomStaysDirty: a lease leaves a dirty room on an unreachable machine
+// and gets a room on another machine; its later steps do not touch the dirty
+// room, which is cleaned when its machine is back.
+func TestDirtyRoomStaysDirty(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	first := e.startStaticRoom("first")
-	second := e.startStaticRoom("second")
+	first := e.startStaticMachine("first")
+	second := e.startStaticMachine("second")
 	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader() + `
 [providers.home]
@@ -40,8 +40,8 @@ os = "linux"
 tools = ["fake-screen"]
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/first", protocol.RoomRunning, roomReady)
-	s.waitRoom("home/second", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/first", protocol.MachineRunning, machineReady)
+	s.waitMachine("home/second", protocol.MachineRunning, machineReady)
 	e.useGuestToken()
 	// Machines are taken in configuration order: the holder gets "first", so
 	// the tested lease starts on "second".
@@ -56,12 +56,12 @@ tools = ["fake-screen"]
 		t.Fatalf("acquire: %s", r)
 	}
 	// The lease began (the server sets began_at before start runs), so the
-	// slot becomes dirty when the room is gone.
+	// room becomes dirty when the machine is gone.
 	start := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 20 $' || true"
 	f.e.waitFor("the slow start", time.Minute, func() bool { return second.sh(start) == "1" })
 	second.stop()
-	f.e.waitFor("dirty slot", time.Minute, func() bool { return s.room("home/second").Slots[0].State == protocol.SlotDirty })
-	// The holder releases; the lease moves to the first room.
+	f.e.waitFor("dirty room", time.Minute, func() bool { return s.machine("home/second").Rooms[0].State == protocol.RoomDirty })
+	// The holder releases; the lease moves to the first machine.
 	f.useRepo("holder")
 	e.mustHostel("release")
 	f.useRepo("repo")
@@ -69,31 +69,31 @@ tools = ["fake-screen"]
 		t.Fatalf("the lease is not on home/first: %s", r)
 	}
 	e.mustHostel("release")
-	f.e.waitFor("first slot free", time.Minute, func() bool { return s.room("home/first").Slots[0].State == protocol.SlotFree })
-	if st := s.room("home/second").Slots[0].State; st != protocol.SlotDirty {
-		t.Fatalf("the dirty slot is %s after the lease ended on another room", st)
+	f.e.waitFor("first room free", time.Minute, func() bool { return s.machine("home/first").Rooms[0].State == protocol.RoomFree })
+	if st := s.machine("home/second").Rooms[0].State; st != protocol.RoomDirty {
+		t.Fatalf("the dirty room is %s after the lease ended on another machine", st)
 	}
 	second.start()
 	f.marker("slow-start", false)
-	f.e.waitFor("room back with a clean slot", 2*time.Minute, func() bool {
-		r := s.room("home/second")
-		return r.State == protocol.RoomRunning && r.Slots[0].State == protocol.SlotFree
+	f.e.waitFor("machine back with a clean room", 2*time.Minute, func() bool {
+		r := s.machine("home/second")
+		return r.State == protocol.MachineRunning && r.Rooms[0].State == protocol.RoomFree
 	})
-	// The cleanup of the dirty slot ran: the slot directory is gone. The stop
+	// The cleanup of the dirty room ran: the room directory is gone. The stop
 	// ran too: the start of fake-screen did not finish and can leave processes.
-	if got := second.sh("test -e /home/hostel/hostel/slots/a && echo exists || echo removed"); got != "removed" {
-		t.Fatalf("the slot directory of the dirty slot: %s", got)
+	if got := second.sh("test -e /home/hostel/hostel/rooms/a && echo exists || echo removed"); got != "removed" {
+		t.Fatalf("the room directory of the dirty room: %s", got)
 	}
 	if got := second.sh("grep -c '^stop linux' " + cacheDir + "/fake-screen.log || true"); got != "1" {
-		t.Fatalf("stops on the dirty room: %s, want 1", got)
+		t.Fatalf("stops on the dirty machine: %s, want 1", got)
 	}
 }
 
-// TestTwoSlotsKeepNoGuestKey: on a room with two slots, a key that lease A
+// TestTwoRoomsKeepNoGuestKey: on a machine with two rooms, a key that lease A
 // adds does not go into the base of lease B, so A's cleanup removes it.
-func TestTwoSlotsKeepNoGuestKey(t *testing.T) {
+func TestTwoRoomsKeepNoGuestKey(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineKeys: "slots = [{ name = \"a\" }, { name = \"b\" }]\n"})
+	f := newFixture(t, &fixtureOpts{templateKeys: "rooms = [{ name = \"a\" }, { name = \"b\" }]\n"})
 	base := f.c.sh("cat /home/hostel/.ssh/authorized_keys")
 	f.acquire()
 	f.e.mustHostel("run", "--", "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuestAddedKeyGuestAddedKeyGuestAddedK lease-a' >> ~/.ssh/authorized_keys")
@@ -103,9 +103,9 @@ func TestTwoSlotsKeepNoGuestKey(t *testing.T) {
 	f.e.mustHostel("release")
 	f.useRepo("second")
 	f.e.mustHostel("release")
-	f.e.waitFor("both slots free", time.Minute, func() bool {
-		for _, sl := range f.s.room("home/box").Slots {
-			if sl.State != protocol.SlotFree {
+	f.e.waitFor("both rooms free", time.Minute, func() bool {
+		for _, sl := range f.s.machine("home/box").Rooms {
+			if sl.State != protocol.RoomFree {
 				return false
 			}
 		}
@@ -116,29 +116,29 @@ func TestTwoSlotsKeepNoGuestKey(t *testing.T) {
 	}
 }
 
-// TestBrokenCloudRoomDestroyed: an on-demand room that a failed cleanup broke
-// is destroyed (its broken slot keeps the ended lease's ID).
-func TestBrokenCloudRoomDestroyed(t *testing.T) {
+// TestBrokenCloudMachineDestroyed: an on-demand machine that a failed cleanup broke
+// is destroyed (its broken room keeps the ended lease's ID).
+func TestBrokenCloudMachineDestroyed(t *testing.T) {
 	t.Parallel()
-	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
+	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallTemplate)
 	f.acquire()
-	room := f.cloudRooms()[0].Name
-	f.roomSh(room, "touch "+cacheDir+"/fail-stop")
+	machine := f.cloudMachines()[0].Name
+	f.machineSh(machine, "touch "+cacheDir+"/fail-stop")
 	f.e.mustHostel("release")
-	f.waitNoCloudRooms()
-	// A machine without a room keeps the size that its last room measured.
-	if r := f.e.mustHostel("status", "cloud/small"); !regexp.MustCompile(`(?m)^cloud/small · on demand, up to \d+ rooms? · linux · \d+ cores, \d+ GB$`).MatchString(r.stdout) {
-		t.Fatalf("status of a machine whose room is gone:\n%s", r.stdout)
+	f.waitNoCloudMachines()
+	// A machine without a machine keeps the size that its last machine measured.
+	if r := f.e.mustHostel("status", "cloud/small"); !regexp.MustCompile(`(?m)^cloud/small · on demand, up to \d+ machines? · linux · \d+ cores, \d+ GB$`).MatchString(r.stdout) {
+		t.Fatalf("status of a machine whose machine is gone:\n%s", r.stdout)
 	}
 }
 
 // TestTunnelsBeforeCreation: a lease whose tunnels cannot be placed fails
-// before a room is created for it.
+// before a machine is created for it.
 func TestTunnelsBeforeCreation(t *testing.T) {
 	t.Parallel()
-	f := newExternalFixture(t, "", "", nil, smallMachine)
+	f := newExternalFixture(t, "", "", nil, smallTemplate)
 	var cfg strings.Builder
-	cfg.WriteString("[tunnels.fixed]\nlocal_port = 3000\nroom_port = 7500\n")
+	cfg.WriteString("[tunnels.fixed]\nlocal_port = 3000\nmachine_port = 7500\n")
 	for i := range 10 {
 		fmt.Fprintf(&cfg, "[tunnels.p%d]\nlocal_port = 3000\n", i)
 	}
@@ -147,33 +147,33 @@ func TestTunnelsBeforeCreation(t *testing.T) {
 	if r.code != 1 || !strings.Contains(r.stderr, "no free pool port") {
 		t.Fatalf("acquire: %s", r)
 	}
-	if rooms := f.e.fakeRooms(); len(rooms) != 0 {
-		t.Fatalf("provider rooms: %v, want none", rooms)
+	if machines := f.e.fakeMachines(); len(machines) != 0 {
+		t.Fatalf("provider machines: %v, want none", machines)
 	}
-	if rooms := f.cloudRooms(); len(rooms) != 0 {
-		t.Fatalf("rooms: %+v, want none", rooms)
+	if machines := f.cloudMachines(); len(machines) != 0 {
+		t.Fatalf("machines: %+v, want none", machines)
 	}
 }
 
-// TestDuplicateFixedPorts: two tunnels cannot have the same fixed room port.
+// TestDuplicateFixedPorts: two tunnels cannot have the same fixed machine port.
 func TestDuplicateFixedPorts(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, &fixtureOpts{files: map[string]string{
-		"hostel.toml": "[tunnels.a]\nlocal_port = 3000\nroom_port = 7600\n[tunnels.b]\nlocal_port = 3001\nroom_port = 7600\n",
+		"hostel.toml": "[tunnels.a]\nlocal_port = 3000\nmachine_port = 7600\n[tunnels.b]\nlocal_port = 3001\nmachine_port = 7600\n",
 	}})
 	r := f.e.hostel("acquire", "fake-screen", "--task", "x")
-	if r.code != 1 || !strings.Contains(r.stderr, "room port 7600 is also the room port of tunnel a") {
+	if r.code != 1 || !strings.Contains(r.stderr, "machine port 7600 is also the machine port of tunnel a") {
 		t.Fatalf("acquire: %s", r)
 	}
 	f.e.newRepoNamed("plain", defaultRepoFiles())
 	id := f.acquire()
-	body := `[{"name":"a","room_port":7600},{"name":"b","room_port":7600}]`
+	body := `[{"name":"a","machine_port":7600},{"name":"b","machine_port":7600}]`
 	if code := f.s.put("/v1/leases/"+id+"/tunnels", f.e.vars["HOSTEL_TOKEN"], body); code != 400 {
 		t.Fatalf("PUT tunnels with a duplicate fixed port: HTTP %d, want 400", code)
 	}
 	create, err := json.Marshal(protocol.CreateLeaseRequest{Tools: []string{"fake-screen"}, Task: "x",
 		PublicKey: string(ssh.MarshalAuthorizedKey(f.leaseKey().PublicKey())),
-		Tunnels:   []protocol.TunnelRequest{{Name: "a", RoomPort: 7600}, {Name: "b", RoomPort: 7600}}})
+		Tunnels:   []protocol.TunnelRequest{{Name: "a", MachinePort: 7600}, {Name: "b", MachinePort: 7600}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestTunnelChange(t *testing.T) {
 	id := f.acquire()
 	guest := f.e.vars["HOSTEL_TOKEN"]
 	before := f.lease(id).Revision
-	if code := f.s.put("/v1/leases/"+id+"/tunnels", guest, `[{"name":"web","room_port":7600}]`); code != 200 {
+	if code := f.s.put("/v1/leases/"+id+"/tunnels", guest, `[{"name":"web","machine_port":7600}]`); code != 200 {
 		t.Fatalf("PUT tunnels: HTTP %d", code)
 	}
 	if after := f.lease(id).Revision; after <= before {
@@ -208,12 +208,12 @@ func TestTunnelChange(t *testing.T) {
 	}
 	defer ln.Close()
 	if got := f.work("nc -z 127.0.0.1 7600 && echo open || echo closed"); got != "open" {
-		t.Fatalf("room port 7600 with the forward: %s", got)
+		t.Fatalf("machine port 7600 with the forward: %s", got)
 	}
 	if code := f.s.put("/v1/leases/"+id+"/tunnels", guest, `[]`); code != 200 {
 		t.Fatalf("PUT tunnels: HTTP %d", code)
 	}
-	f.e.waitFor("forward closed on the room", time.Minute, func() bool {
+	f.e.waitFor("forward closed on the machine", time.Minute, func() bool {
 		return f.work("nc -z 127.0.0.1 7600 && echo open || echo closed") == "closed"
 	})
 }

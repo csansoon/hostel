@@ -5,13 +5,15 @@ package e2e
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-const staticMachine = `
+const staticTemplate = `
 [providers.home]
 kind = "static"
 
@@ -25,7 +27,7 @@ os = "linux"
 func TestServerStart(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	e.initServer(serverHeader() + staticMachine)
+	e.initServer(serverHeader() + staticTemplate)
 	s := e.startServer("")
 	token := e.admin
 
@@ -58,38 +60,48 @@ func TestConfigErrors(t *testing.T) {
 	}{
 		{
 			name:   "unknown key",
-			config: staticMachine + "colour = \"blue\"\n",
+			config: staticTemplate + "colour = \"blue\"\n",
 			marker: "colour",
 			want:   []string{"{dir}/server.toml:{line}:1: unknown key \"providers.home.machines.box.colour\""},
 		},
 		{
 			name:   "unknown tool",
-			config: staticMachine + "tools = [\"andriod-sdk\"]\n",
+			config: staticTemplate + "tools = [\"andriod-sdk\"]\n",
 			want:   []string{"{dir}/server.toml: providers.home.machines.box.tools[0]: unknown tool \"andriod-sdk\""},
 		},
 		{
 			name:   "a mise tool without a version",
-			config: staticMachine + "tools = [\"node\"]\n",
+			config: staticTemplate + "tools = [\"node\"]\n",
 			want:   []string{"providers.home.machines.box.tools[0]: unknown tool \"node\"", "a mise tool needs its version, for example \"node:22\""},
 		},
 		{
 			name:   "an OS in tools",
-			config: staticMachine + "tools = [\"linux\"]\n",
+			config: staticTemplate + "tools = [\"linux\"]\n",
 			want:   []string{"{dir}/server.toml: providers.home.machines.box.tools[0]: \"linux\" is an OS"},
 		},
 		{
 			name:   "a tool without scripts for the OS of the machine",
-			config: staticMachine + "tools = [\"windows-desktop\"]\n",
+			config: staticTemplate + "tools = [\"windows-desktop\"]\n",
 			want:   []string{"providers.home.machines.box.tools[0]: windows-desktop has no scripts for linux; it works on windows"},
 		},
 		{
 			name:   "an option that a screen tool does not have",
-			config: strings.Replace(staticMachine, `os = "linux"`, `os = "macos"`, 1) + "tools = [\"ios-simulator:watch\"]\n",
+			config: strings.Replace(staticTemplate, `os = "linux"`, `os = "macos"`, 1) + "tools = [\"ios-simulator:watch\"]\n",
 			want:   []string{"providers.home.machines.box.tools[0]: \"ios-simulator:watch\": ios-simulator has no option \"watch\""},
 		},
 		{
+			name:   "the words before M10g",
+			config: staticTemplate + "max_rooms = 1\n",
+			want:   []string{"max_rooms is now max_machines"},
+		},
+		{
+			name:   "templates in a static provider",
+			config: "[providers.home]\nkind = \"static\"\n\n[providers.home.templates.box]\nos = \"linux\"\n",
+			want:   []string{"a static provider has real machines"},
+		},
+		{
 			name:   "the keys before M10e",
-			config: staticMachine + "platforms = [\"ios\"]\nlabels = [\"desktop\"]\n",
+			config: staticTemplate + "platforms = [\"ios\"]\nlabels = [\"desktop\"]\n",
 			want: []string{
 				"{dir}/server.toml: providers.home.machines.box.platforms: removed in M10e: list the tools of the machine instead",
 				"{dir}/server.toml: providers.home.machines.box.labels: removed in M10e: labels are gone; list tools instead",
@@ -97,7 +109,7 @@ func TestConfigErrors(t *testing.T) {
 		},
 		{
 			name:   "the tools map before M10e",
-			config: staticMachine + "tools = { jq = \"1.7.1\" }\n",
+			config: staticTemplate + "tools = { jq = \"1.7.1\" }\n",
 			want:   []string{"{dir}/server.toml: providers.home.machines.box.tools: the map form before M10e; tools is now a list"},
 		},
 		{
@@ -108,32 +120,32 @@ func TestConfigErrors(t *testing.T) {
 		{
 			name: "external machine without os",
 			config: "[providers.cloud]\nkind = \"external\"\ncommand = [\"/bin/false\"]\n" +
-				"[providers.cloud.machines.small]\nspec = { image = \"x\" }\n",
-			want: []string{"{dir}/server.toml: providers.cloud.machines.small.os: required for external machines"},
+				"[providers.cloud.templates.small]\nspec = { image = \"x\" }\n",
+			want: []string{"{dir}/server.toml: providers.cloud.templates.small.os: required for external machines"},
 		},
 		{
 			name: "devbox without max_lifetime and size",
 			config: "[providers.ns]\nkind = \"namespace\"\n" +
-				"[providers.ns.machines.mac]\nspec = { product = \"devbox\", platform = \"macos\", image = \"tahoe-slim\" }\n",
+				"[providers.ns.templates.mac]\nspec = { product = \"devbox\", platform = \"macos\", image = \"tahoe-slim\" }\n",
 			want: []string{
-				"{dir}/server.toml: providers.ns.machines.mac.spec.size: required for a devbox",
-				"{dir}/server.toml: providers.ns.machines.mac.max_lifetime: required for a devbox",
+				"{dir}/server.toml: providers.ns.templates.mac.spec.size: required for a devbox",
+				"{dir}/server.toml: providers.ns.templates.mac.max_lifetime: required for a devbox",
 			},
 		},
 		{
 			name:   "WebSocket gateway without its path",
-			config: "gateway_public = \"wss://hostel.example.com\"\n" + staticMachine,
+			config: "gateway_public = \"wss://hostel.example.com\"\n" + staticTemplate,
 			want:   []string{"{dir}/server.toml: gateway_public: \"wss://hostel.example.com\" must end with the path /v1/gateway"},
 		},
 		{
 			name:   "number as a duration",
-			config: staticMachine + "max_lease = 5\n",
+			config: staticTemplate + "max_lease = 5\n",
 			marker: "max_lease",
 			want:   []string{"{dir}/server.toml:{line}:13: providers.home.machines.box.max_lease: wrong type: got a number, want a duration string"},
 		},
 		{
 			name: "several errors at once",
-			config: staticMachine + "tools = [\"andriod-sdk\"]\n" +
+			config: staticTemplate + "tools = [\"andriod-sdk\"]\n" +
 				"[providers.home.machines.other]\naddress = \"h\"\n",
 			want: []string{
 				"{dir}/server.toml: providers.home.machines.box.tools[0]: unknown tool \"andriod-sdk\"",
@@ -193,5 +205,17 @@ tools = ["ios-simulator", "android-emulator", "macos-desktop", "jdk:21"]
 	r := e.hostel("admin", "config", "check")
 	if r.code != 0 || !strings.Contains(r.stdout, "iphone-17-pro") || !strings.Contains(r.stdout, "# home/macbook: the needs of its tools add xcode, android-sdk") {
 		t.Fatalf("config check of the default tools: %s", r)
+	}
+	if !strings.Contains(r.stdout, "[providers.home.machines.macbook]") || strings.Contains(r.stdout, "[providers.home.templates") {
+		t.Fatalf("the effective configuration of a static provider: %s", r)
+	}
+	effective := filepath.Join(t.TempDir(), "effective.toml")
+	// After the configuration, the output lists the default of each tool.
+	document, _, _ := strings.Cut(r.stdout, "\n# tool ")
+	if err := os.WriteFile(effective, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if again := e.hostel("admin", "config", "check", "--config", effective); again.code != 0 {
+		t.Fatalf("config check of the effective configuration: %s", again)
 	}
 }

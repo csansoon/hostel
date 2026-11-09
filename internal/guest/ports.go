@@ -27,17 +27,17 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// TunnelConfig is one tunnel of a lease (room → guest).
+// TunnelConfig is one tunnel of a lease (machine → guest).
 type TunnelConfig struct {
 	LocalPort    int    `json:"local_port,omitempty"`
 	LocalPortEnv string `json:"local_port_env,omitempty"`
 	// EnvValue is the value of LocalPortEnv in the environment of acquire, the
 	// last source of the local port.
 	EnvValue string `json:"env_value,omitempty"`
-	// FixedRoomPort is the requested room port (0: from the slot's pool).
-	FixedRoomPort int `json:"fixed_room_port,omitempty"`
-	// RoomPort is the room port that the server gave.
-	RoomPort int `json:"room_port"`
+	// FixedMachinePort is the requested machine port (0: from the room's pool).
+	FixedMachinePort int `json:"fixed_machine_port,omitempty"`
+	// MachinePort is the machine port that the server gave.
+	MachinePort int `json:"machine_port"`
 }
 
 // tunnelsFile is <state>/tunnels.json. Only acquire (before the port process
@@ -71,7 +71,7 @@ func saveTunnels(st *State, t map[string]*TunnelConfig) error {
 func tunnelPorts(t map[string]*TunnelConfig) map[string]int {
 	out := map[string]int{}
 	for n, c := range t {
-		out[n] = c.RoomPort
+		out[n] = c.MachinePort
 	}
 	return out
 }
@@ -103,24 +103,24 @@ type portRequest struct {
 	LocalPort    *int   `json:"local_port,omitempty"`
 	LocalPortEnv string `json:"local_port_env,omitempty"`
 	// EnvValue is the value of LocalPortEnv in the command's environment.
-	EnvValue string `json:"env_value,omitempty"`
-	RoomPort *int   `json:"room_port,omitempty"`
+	EnvValue    string `json:"env_value,omitempty"`
+	MachinePort *int   `json:"machine_port,omitempty"`
 }
 
 type tunnelStatus struct {
-	Name      string `json:"name"`
-	RoomPort  int    `json:"room_port"`
-	Local     string `json:"local"`
-	Confirmed bool   `json:"confirmed"`
-	Error     string `json:"error,omitempty"`
+	Name        string `json:"name"`
+	MachinePort int    `json:"machine_port"`
+	Local       string `json:"local"`
+	Confirmed   bool   `json:"confirmed"`
+	Error       string `json:"error,omitempty"`
 	// Problem says why the guest side does not work now; only the "check"
 	// request looks at that side.
 	Problem string `json:"problem,omitempty"`
 }
 
 type forwardStatus struct {
-	RoomPort  int `json:"room_port"`
-	LocalPort int `json:"local_port"`
+	MachinePort int `json:"machine_port"`
+	LocalPort   int `json:"local_port"`
 }
 
 type portResponse struct {
@@ -200,8 +200,8 @@ type portProc struct {
 	tunnels  map[string]*TunnelConfig
 	state    map[string]*tunnelStatus
 	conn     *Conn
-	tunLn    map[string]net.Listener // tunnel name → listener on the room (through the gateway)
-	forwards map[int]net.Listener    // room port → local listener
+	tunLn    map[string]net.Listener // tunnel name → listener on the machine (through the gateway)
+	forwards map[int]net.Listener    // machine port → local listener
 }
 
 // Ports is the hidden "hostel ports --dir <state dir>" command.
@@ -364,7 +364,7 @@ func (p *portProc) connectLoop(ctx context.Context) {
 }
 
 // listenTunnel asks the gateway for the remote forward of a tunnel. A refusal
-// (for example a room service uses the port) is recorded in the tunnel state.
+// (for example a machine service uses the port) is recorded in the tunnel state.
 func (p *portProc) listenTunnel(name string) error {
 	p.mu.Lock()
 	cfg, conn := p.tunnels[name], p.conn
@@ -376,13 +376,13 @@ func (p *portProc) listenTunnel(name string) error {
 	if cfg == nil || conn == nil {
 		return errors.New("no gateway connection; the port process reconnects")
 	}
-	ln, err := conn.client.Listen("tcp", net.JoinHostPort("localhost", strconv.Itoa(cfg.RoomPort)))
+	ln, err := conn.client.Listen("tcp", net.JoinHostPort("localhost", strconv.Itoa(cfg.MachinePort)))
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st := &tunnelStatus{Name: name, RoomPort: cfg.RoomPort}
+	st := &tunnelStatus{Name: name, MachinePort: cfg.MachinePort}
 	p.state[name] = st
 	if err != nil {
-		st.Error = fmt.Sprintf("the room refused to listen on port %d (a room service may use it): %v", cfg.RoomPort, err)
+		st.Error = fmt.Sprintf("the machine refused to listen on port %d (a machine service may use it): %v", cfg.MachinePort, err)
 		return errors.New(st.Error)
 	}
 	st.Confirmed = true
@@ -460,7 +460,7 @@ func dialPort(port int) (net.Conn, error) {
 	return nil, fmt.Errorf("nothing listens on local port %d: %v", port, err)
 }
 
-// checkLocal adds the state of the guest side to a status: the room side alone
+// checkLocal adds the state of the guest side to a status: the machine side alone
 // does not make a tunnel work. It is outside status, which acquire polls.
 func (p *portProc) checkLocal(resp portResponse) portResponse {
 	for i := range resp.Tunnels {
@@ -554,7 +554,7 @@ func (p *portProc) status() portResponse {
 	sort.Strings(names)
 	for _, n := range names {
 		cfg := p.tunnels[n]
-		ts := tunnelStatus{Name: n, RoomPort: cfg.RoomPort}
+		ts := tunnelStatus{Name: n, MachinePort: cfg.MachinePort}
 		if s := p.state[n]; s != nil {
 			ts.Confirmed, ts.Error = s.Confirmed, s.Error
 		}
@@ -571,7 +571,7 @@ func (p *portProc) status() portResponse {
 	}
 	sort.Ints(ports)
 	for _, rp := range ports {
-		resp.Forwards = append(resp.Forwards, forwardStatus{RoomPort: rp, LocalPort: p.forwards[rp].Addr().(*net.TCPAddr).Port})
+		resp.Forwards = append(resp.Forwards, forwardStatus{MachinePort: rp, LocalPort: p.forwards[rp].Addr().(*net.TCPAddr).Port})
 	}
 	return resp
 }
@@ -610,15 +610,15 @@ func (p *portProc) handle(ctx context.Context, req portRequest) (portResponse, e
 	case "forward_add":
 		return p.addForward(req)
 	case "forward_stop":
-		if req.RoomPort == nil {
-			return portResponse{}, errors.New("forward stop needs a room port")
+		if req.MachinePort == nil {
+			return portResponse{}, errors.New("forward stop needs a machine port")
 		}
 		p.mu.Lock()
-		ln := p.forwards[*req.RoomPort]
-		delete(p.forwards, *req.RoomPort)
+		ln := p.forwards[*req.MachinePort]
+		delete(p.forwards, *req.MachinePort)
 		p.mu.Unlock()
 		if ln == nil {
-			return portResponse{}, fmt.Errorf("no forward for room port %d", *req.RoomPort)
+			return portResponse{}, fmt.Errorf("no forward for machine port %d", *req.MachinePort)
 		}
 		ln.Close()
 		return p.status(), nil
@@ -627,7 +627,7 @@ func (p *portProc) handle(ctx context.Context, req portRequest) (portResponse, e
 }
 
 // changeTunnel adds, changes, or removes a tunnel: it registers the new list
-// at the server, opens the forward on the room, and writes lease.env for new
+// at the server, opens the forward on the machine, and writes lease.env for new
 // jobs. A refused forward undoes the registration.
 func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portResponse, error) {
 	p.mu.Lock()
@@ -654,8 +654,8 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 		if req.LocalPort != nil {
 			t.LocalPort = *req.LocalPort
 		}
-		if req.RoomPort != nil {
-			t.FixedRoomPort = *req.RoomPort
+		if req.MachinePort != nil {
+			t.FixedMachinePort = *req.MachinePort
 		}
 		next[req.Name] = t
 	case "tunnel_set":
@@ -666,8 +666,8 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 		if req.LocalPort != nil {
 			t.LocalPort, t.LocalPortEnv = *req.LocalPort, ""
 		}
-		if req.RoomPort != nil {
-			t.FixedRoomPort = *req.RoomPort
+		if req.MachinePort != nil {
+			t.FixedMachinePort = *req.MachinePort
 		}
 	case "tunnel_remove":
 		if next[req.Name] == nil {
@@ -675,14 +675,14 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 		}
 		delete(next, req.Name)
 	}
-	needRegister := req.Op != "tunnel_set" || req.RoomPort != nil
+	needRegister := req.Op != "tunnel_set" || req.MachinePort != nil
 	if needRegister {
 		ports, err := p.register(ctx, next)
 		if err != nil {
 			return portResponse{}, err
 		}
 		for n, port := range ports {
-			next[n].RoomPort = port
+			next[n].MachinePort = port
 		}
 	}
 	p.mu.Lock()
@@ -726,7 +726,7 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 func (p *portProc) register(ctx context.Context, tunnels map[string]*TunnelConfig) (map[string]int, error) {
 	req := []protocol.TunnelRequest{}
 	for n, t := range tunnels {
-		req = append(req, protocol.TunnelRequest{Name: n, RoomPort: t.FixedRoomPort})
+		req = append(req, protocol.TunnelRequest{Name: n, MachinePort: t.FixedMachinePort})
 	}
 	var resp struct {
 		TunnelPorts map[string]int `json:"tunnel_ports"`
@@ -755,19 +755,19 @@ func (p *portProc) writeLeaseEnv(ctx context.Context, tunnels map[string]*Tunnel
 }
 
 // addForward listens on the guest's 127.0.0.1 and sends each connection
-// through the gateway to the room's 127.0.0.1:<room port>.
+// through the gateway to the machine's 127.0.0.1:<machine port>.
 func (p *portProc) addForward(req portRequest) (portResponse, error) {
-	if req.RoomPort == nil || *req.RoomPort < 1 || *req.RoomPort > 65535 {
-		return portResponse{}, errors.New("forward needs a room port between 1 and 65535")
+	if req.MachinePort == nil || *req.MachinePort < 1 || *req.MachinePort > 65535 {
+		return portResponse{}, errors.New("forward needs a machine port between 1 and 65535")
 	}
-	room := *req.RoomPort
+	machine := *req.MachinePort
 	p.mu.Lock()
-	exists := p.forwards[room] != nil
+	exists := p.forwards[machine] != nil
 	p.mu.Unlock()
 	if exists {
-		return portResponse{}, fmt.Errorf("a forward for room port %d exists", room)
+		return portResponse{}, fmt.Errorf("a forward for machine port %d exists", machine)
 	}
-	local := room
+	local := machine
 	if req.LocalPort != nil {
 		local = *req.LocalPort
 	}
@@ -780,7 +780,7 @@ func (p *portProc) addForward(req portRequest) (portResponse, error) {
 		return portResponse{}, fmt.Errorf("listen on local port %d: %w", local, err)
 	}
 	p.mu.Lock()
-	p.forwards[room] = ln
+	p.forwards[machine] = ln
 	p.mu.Unlock()
 	go func() {
 		for {
@@ -796,9 +796,9 @@ func (p *portProc) addForward(req portRequest) (portResponse, error) {
 				if conn == nil {
 					return
 				}
-				up, err := conn.client.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(room)))
+				up, err := conn.client.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(machine)))
 				if err != nil {
-					p.log.Printf("ports: forward %d: %v", room, err)
+					p.log.Printf("ports: forward %d: %v", machine, err)
 					return
 				}
 				defer up.Close()

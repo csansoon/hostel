@@ -86,8 +86,8 @@ type State struct {
 	Final    bool   `json:"final"`
 	// Machine ("<provider>/<machine>") and Started, the screen tools that
 	// started for the lease, come from the server when the lease is ready.
-	Machine string                 `json:"machine,omitempty"`
-	Started []protocol.StartedTool `json:"started,omitempty"`
+	Template string                 `json:"template,omitempty"`
+	Started  []protocol.StartedTool `json:"started,omitempty"`
 	// Step is the last acquire step that finished.
 	Step   string           `json:"step"`
 	Access *protocol.Access `json:"access,omitempty"`

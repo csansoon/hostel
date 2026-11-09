@@ -15,29 +15,29 @@ const (
 	LeaseFailed       = "failed"
 )
 
-// Room states.
+// Machine states.
 const (
-	RoomCreating     = "creating"
-	RoomProvisioning = "provisioning"
-	RoomRunning      = "running"
-	RoomStopping     = "stopping"
-	RoomStopped      = "stopped"
-	RoomResuming     = "resuming"
-	RoomDestroying   = "destroying"
-	RoomDestroyed    = "destroyed"
-	RoomBroken       = "broken"
-	RoomRetired      = "retired"
+	MachineCreating     = "creating"
+	MachineProvisioning = "provisioning"
+	MachineRunning      = "running"
+	MachineStopping     = "stopping"
+	MachineStopped      = "stopped"
+	MachineResuming     = "resuming"
+	MachineDestroying   = "destroying"
+	MachineDestroyed    = "destroyed"
+	MachineBroken       = "broken"
+	MachineRetired      = "retired"
 )
 
-// Slot states.
+// Room states.
 const (
-	SlotFree      = "free"
-	SlotAssigned  = "assigned"
-	SlotPreparing = "preparing"
-	SlotLeased    = "leased"
-	SlotCleaning  = "cleaning"
-	SlotBroken    = "broken"
-	SlotDirty     = "dirty"
+	RoomFree      = "free"
+	RoomAssigned  = "assigned"
+	RoomPreparing = "preparing"
+	RoomLeased    = "leased"
+	RoomCleaning  = "cleaning"
+	RoomBroken    = "broken"
+	RoomDirty     = "dirty"
 )
 
 // Priorities. The effective priority of a queued lease grows with its wait time

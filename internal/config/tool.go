@@ -343,8 +343,8 @@ func ParseToolEntry(s string) (ToolEntry, error) {
 	return e, nil
 }
 
-// MachineTool is a tool of a machine after the configuration is resolved.
-type MachineTool struct {
+// TemplateTool is a tool of a machine after the configuration is resolved.
+type TemplateTool struct {
 	ToolEntry
 	// Mise: the tool has no definition; mise installs it, and the option is
 	// the version.

@@ -53,10 +53,10 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 	defer conn.Close()
 	file := fmt.Sprintf("screenshot-%d.png", time.Now().UnixNano())
 	remote := path.Join(path.Dir(l.st.Access.WorkDir), file)
-	// The room reads the file: sh, or PowerShell with a binary copy
+	// The machine reads the file: sh, or PowerShell with a binary copy
 	// (Get-Content would change the bytes).
 	read := "cat " + quote(remote) + " && rm -f " + quote(remote)
-	if l.st.Access.RoomOS == config.OSWindows {
+	if l.st.Access.MachineOS == config.OSWindows {
 		dir := l.st.Access.WorkDir[:max(strings.LastIndex(l.st.Access.WorkDir, `\`), 0)]
 		remote = dir + `\` + file
 		p := "'" + strings.ReplaceAll(remote, "'", "''") + "'"
@@ -74,7 +74,7 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case resp.Missing:
-		return l.fail(stderr, fmt.Errorf("the tool %s has no screenshot script for %s", tool, l.st.Access.RoomOS))
+		return l.fail(stderr, fmt.Errorf("the tool %s has no screenshot script for %s", tool, l.st.Access.MachineOS))
 	case resp.TimedOut || resp.ExitCode != 0:
 		return l.fail(stderr, fmt.Errorf("the screenshot script failed (exit code %d): %s", resp.ExitCode, strings.TrimSpace(resp.OutputTail)))
 	}

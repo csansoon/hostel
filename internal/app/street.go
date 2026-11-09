@@ -195,8 +195,8 @@ func (w windowState) draw() string {
 func (s *street) draw(m *model) string {
 	now := time.Now()
 	var words []string
-	for _, ms := range m.st.Machines {
-		words = append(words, machineState(m.st, ms, now).word)
+	for _, ms := range m.st.Templates {
+		words = append(words, templateState(m.st, ms, now).word)
 	}
 	ws := windows(m.st.ServerID, words)
 	if s.lit == nil {

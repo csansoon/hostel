@@ -36,9 +36,9 @@ type Lease struct {
 	Worktree       string
 	Branch         string
 	Provider       string
-	Machine        string
-	RoomID         int64
-	SlotName       string
+	Template       string
+	MachineID      int64
+	RoomName       string
 	Attempts       int
 	BeganAt        time.Time
 	CreatedAt      time.Time
@@ -62,18 +62,18 @@ func Final(state string) bool {
 }
 
 const leaseColumns = `id, token_id, state, revision, position, reason, tools, started, task, priority,
-	tunnels, fresh, public_key, guest_host, repo, worktree, provider, machine, room_id,
-	slot_name, attempts, began_at, created_at, last_poll_at, last_activity_at, ready_at, expires_at,
+	tunnels, fresh, public_key, guest_host, repo, worktree, provider, template, machine_id,
+	room_name, attempts, began_at, created_at, last_poll_at, last_activity_at, ready_at, expires_at,
 	ended_at, end_state, end_reason, manual_position, branch`
 
 func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 	var l Lease
 	var tools, started, tunnels string
-	var roomID, began, ready, expires, ended sql.NullInt64
+	var machineID, began, ready, expires, ended sql.NullInt64
 	var created, poll, activity int64
 	err := row.Scan(&l.ID, &l.TokenID, &l.State, &l.Revision, &l.Position, &l.Reason, &tools, &started,
 		&l.Task, &l.Priority, &tunnels, &l.Fresh, &l.PublicKey, &l.GuestHost, &l.Repo, &l.Worktree,
-		&l.Provider, &l.Machine, &roomID, &l.SlotName, &l.Attempts, &began, &created, &poll, &activity,
+		&l.Provider, &l.Template, &machineID, &l.RoomName, &l.Attempts, &began, &created, &poll, &activity,
 		&ready, &expires, &ended, &l.EndState, &l.EndReason, &l.ManualPosition, &l.Branch)
 	if err != nil {
 		return l, err
@@ -86,7 +86,7 @@ func scanLease(row interface{ Scan(...any) error }) (Lease, error) {
 			return l, fmt.Errorf("lease %s: decode: %w", l.ID, err)
 		}
 	}
-	l.RoomID = roomID.Int64
+	l.MachineID = machineID.Int64
 	l.BeganAt, l.ReadyAt, l.ExpiresAt, l.EndedAt = fromMS(began), fromMS(ready), fromMS(expires), fromMS(ended)
 	l.CreatedAt, l.LastPollAt, l.LastActivityAt = time.UnixMilli(created), time.UnixMilli(poll), time.UnixMilli(activity)
 	return l, nil
@@ -196,41 +196,41 @@ func (s *Store) SetQueue(ctx context.Context, id string, position int, reason st
 	return nil
 }
 
-// Assign reserves slots of a room for a queued lease and gives its tunnels
-// their room ports (compare-and-set: the lease must be queued and the slots
+// Assign reserves rooms of a machine for a queued lease and gives its tunnels
+// their machine ports (compare-and-set: the lease must be queued and the rooms
 // free). It reports whether the assignment happened.
-func (s *Store) Assign(ctx context.Context, leaseID string, room Room, slots []string, ports map[string]int, now time.Time) (bool, error) {
+func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, rooms []string, ports map[string]int, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'assigned', room_id = ?, slot_name = ?, provider = ?,
-			machine = ?, position = 0, manual_position = 0, reason = '', revision = revision + 1 WHERE id = ? AND state = 'queued'`,
-			room.ID, slots[0], room.Provider, room.Machine, leaseID)
+		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'assigned', machine_id = ?, room_name = ?, provider = ?,
+			template = ?, position = 0, manual_position = 0, reason = '', revision = revision + 1 WHERE id = ? AND state = 'queued'`,
+			machine.ID, rooms[0], machine.Provider, machine.Template, leaseID)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return nil
 		}
-		for _, sl := range slots {
-			res, err := tx.ExecContext(ctx, `UPDATE slots SET state = 'assigned', lease_id = ? WHERE room_id = ? AND name = ? AND state = 'free'`,
-				leaseID, room.ID, sl)
+		for _, sl := range rooms {
+			res, err := tx.ExecContext(ctx, `UPDATE rooms SET state = 'assigned', lease_id = ? WHERE machine_id = ? AND name = ? AND state = 'free'`,
+				leaseID, machine.ID, sl)
 			if err != nil {
 				return err
 			}
 			if n, _ := res.RowsAffected(); n == 0 {
-				return errSlotTaken
+				return errRoomTaken
 			}
 		}
 		for name, port := range ports {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, room_port) VALUES (?, ?, ?)`, leaseID, name, port); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, machine_port) VALUES (?, ?, ?)`, leaseID, name, port); err != nil {
 				return err
 			}
 		}
 		ok = true
-		return insertEvent(ctx, tx, now, leaseID, room.ID, "lease",
-			fmt.Sprintf("lease %s assigned to room %s slot %s", leaseID, room.Name, strings.Join(slots, ",")))
+		return insertEvent(ctx, tx, now, leaseID, machine.ID, "lease",
+			fmt.Sprintf("lease %s assigned to machine %s room %s", leaseID, machine.Name, strings.Join(rooms, ",")))
 	})
-	if errors.Is(err, errSlotTaken) {
+	if errors.Is(err, errRoomTaken) {
 		return false, nil
 	}
 	if err != nil {
@@ -242,7 +242,7 @@ func (s *Store) Assign(ctx context.Context, leaseID string, room Room, slots []s
 	return ok, nil
 }
 
-var errSlotTaken = errors.New("slot taken")
+var errRoomTaken = errors.New("room taken")
 
 // MoveLease changes the state if it is one of from (compare-and-set).
 func (s *Store) MoveLease(ctx context.Context, id string, from []string, to string, now time.Time) (bool, error) {
@@ -261,23 +261,23 @@ func (s *Store) MarkReady(ctx context.Context, id string, now, expires time.Time
 		`state = 'ready', ready_at = ?, expires_at = ?, last_activity_at = ?`, now.UnixMilli(), expires.UnixMilli(), now.UnixMilli())
 }
 
-// EndLease ends a lease that is in one of from. A lease with a slot goes to
-// cleaning with endState; a lease without a slot goes to endState at once.
+// EndLease ends a lease that is in one of from. A lease with a room goes to
+// cleaning with endState; a lease without a room goes to endState at once.
 func (s *Store) EndLease(ctx context.Context, id string, from []string, endState, reason string, now time.Time) (bool, error) {
 	ok := false
-	// The decision reads room_id in the same transaction as the update, so a
-	// concurrent assignment cannot leave a reserved slot behind.
+	// The decision reads machine_id in the same transaction as the update, so a
+	// concurrent assignment cannot leave a reserved room behind.
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		var state string
-		var roomID sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT state, room_id FROM leases WHERE id = ?`, id).Scan(&state, &roomID); err != nil {
+		var machineID sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT state, machine_id FROM leases WHERE id = ?`, id).Scan(&state, &machineID); err != nil {
 			return err
 		}
 		if !contains(from, state) {
 			return nil
 		}
 		var msg string
-		if roomID.Valid {
+		if machineID.Valid {
 			msg = fmt.Sprintf("→ cleaning (%s: %s)", endState, reason)
 			_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'cleaning', end_state = ?, end_reason = ?,
 				revision = revision + 1 WHERE id = ?`, endState, reason, id)
@@ -304,10 +304,10 @@ func (s *Store) EndLease(ctx context.Context, id string, from []string, endState
 	return ok, nil
 }
 
-// FinishCleaning moves a cleaning lease to its final state and sets its slots
-// to slotState (free, or broken after a failed cleanup; a broken slot keeps
+// FinishCleaning moves a cleaning lease to its final state and sets its rooms
+// to roomState (free, or broken after a failed cleanup; a broken room keeps
 // cleanupData for the repair).
-func (s *Store) FinishCleaning(ctx context.Context, id, slotState, cleanupData string, now time.Time) (bool, error) {
+func (s *Store) FinishCleaning(ctx context.Context, id, roomState, cleanupData string, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = end_state, ended_at = ?, revision = revision + 1
@@ -320,17 +320,17 @@ func (s *Store) FinishCleaning(ctx context.Context, id, slotState, cleanupData s
 		}
 		ok = true
 		leaseIDCol := "''"
-		if slotState != protocol.SlotFree {
+		if roomState != protocol.RoomFree {
 			leaseIDCol = "lease_id"
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE `+leaseSlots,
-			slotState, cleanupData, id, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE `+leaseRooms,
+			roomState, cleanupData, id, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
 			return err
 		}
-		return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s cleaned; slot %s", id, slotState))
+		return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s cleaned; room %s", id, roomState))
 	})
 	if err != nil {
 		return false, fmt.Errorf("finish cleaning of lease %s: %w", id, err)
@@ -341,13 +341,13 @@ func (s *Store) FinishCleaning(ctx context.Context, id, slotState, cleanupData s
 	return ok, nil
 }
 
-// leaseSlots selects the slots of a lease in its current room (two arguments:
-// the lease ID twice). A slot of an earlier room never matches.
-const leaseSlots = `lease_id = ? AND room_id = (SELECT room_id FROM leases WHERE id = ?)`
+// leaseRooms selects the rooms of a lease in its current machine (two arguments:
+// the lease ID twice). A room of an earlier machine never matches.
+const leaseRooms = `lease_id = ? AND machine_id = (SELECT machine_id FROM leases WHERE id = ?)`
 
-// SetSlots sets the state of the lease's slots.
-func (s *Store) SetSlots(ctx context.Context, leaseID, state string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE slots SET state = ? WHERE `+leaseSlots, state, leaseID, leaseID)
+// SetRooms sets the state of the lease's rooms.
+func (s *Store) SetRooms(ctx context.Context, leaseID, state string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET state = ? WHERE `+leaseRooms, state, leaseID, leaseID)
 	return err
 }
 
@@ -363,9 +363,9 @@ func (s *Store) Touch(ctx context.Context, id string, now time.Time) error {
 	return err
 }
 
-// LeaseTunnels returns the room port of each tunnel of a lease.
+// LeaseTunnels returns the machine port of each tunnel of a lease.
 func (s *Store) LeaseTunnels(ctx context.Context, id string) (map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, room_port FROM lease_tunnels WHERE lease_id = ?`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, machine_port FROM lease_tunnels WHERE lease_id = ?`, id)
 	if err != nil {
 		return nil, fmt.Errorf("read tunnels: %w", err)
 	}
@@ -424,7 +424,7 @@ func (s *Store) ResetTimers(ctx context.Context, now time.Time) error {
 // RecentDurations returns the durations (from ready to end) of the last n
 // ended leases on the machines ("<provider>/<machine>"), or, with a tool, of
 // the last n ended leases that asked for that tool.
-func (s *Store) RecentDurations(ctx context.Context, machines []string, tool string, n int) ([]time.Duration, error) {
+func (s *Store) RecentDurations(ctx context.Context, templates []string, tool string, n int) ([]time.Duration, error) {
 	query := `SELECT ended_at - ready_at FROM leases WHERE ready_at IS NOT NULL AND ended_at IS NOT NULL AND `
 	var args []any
 	if tool != "" {
@@ -432,8 +432,8 @@ func (s *Store) RecentDurations(ctx context.Context, machines []string, tool str
 		query += `EXISTS (SELECT 1 FROM json_each(leases.tools) WHERE value = ? OR value LIKE ?)`
 		args = append(args, tool, tool+":%")
 	} else {
-		query += `provider || '/' || machine IN (SELECT value FROM json_each(?))`
-		args = append(args, jsonText(nonNil(machines)))
+		query += `provider || '/' || template IN (SELECT value FROM json_each(?))`
+		args = append(args, jsonText(nonNil(templates)))
 	}
 	rows, err := s.db.QueryContext(ctx, query+` ORDER BY ended_at DESC LIMIT ?`, append(args, n)...)
 	if err != nil {
@@ -451,13 +451,13 @@ func (s *Store) RecentDurations(ctx context.Context, machines []string, tool str
 	return out, rows.Err()
 }
 
-// RoomTunnelPorts returns the room ports of the tunnels of other active
-// leases on a room.
-func (s *Store) RoomTunnelPorts(ctx context.Context, roomID int64, exceptLease string) (map[int]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT t.room_port FROM lease_tunnels t JOIN leases l ON l.id = t.lease_id
-		WHERE l.room_id = ? AND l.id != ? AND l.state NOT IN ('released', 'expired', 'cancelled', 'failed')`, roomID, exceptLease)
+// MachineTunnelPorts returns the machine ports of the tunnels of other active
+// leases on a machine.
+func (s *Store) MachineTunnelPorts(ctx context.Context, machineID int64, exceptLease string) (map[int]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT t.machine_port FROM lease_tunnels t JOIN leases l ON l.id = t.lease_id
+		WHERE l.machine_id = ? AND l.id != ? AND l.state NOT IN ('released', 'expired', 'cancelled', 'failed')`, machineID, exceptLease)
 	if err != nil {
-		return nil, fmt.Errorf("read room tunnels: %w", err)
+		return nil, fmt.Errorf("read machine tunnels: %w", err)
 	}
 	defer rows.Close()
 	out := map[int]bool{}
@@ -486,7 +486,7 @@ func (s *Store) SetTunnels(ctx context.Context, id string, req []protocol.Tunnel
 			return err
 		}
 		for name, port := range ports {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, room_port) VALUES (?, ?, ?)`, id, name, port); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, machine_port) VALUES (?, ?, ?)`, id, name, port); err != nil {
 				return err
 			}
 		}
@@ -504,11 +504,11 @@ func (s *Store) SetTunnels(ctx context.Context, id string, req []protocol.Tunnel
 }
 
 // Requeue returns a lease that was not ready to the queue (design, section 6).
-// Its slots get slotState (free, broken, or dirty with cleanupData). With
+// Its rooms get roomState (free, broken, or dirty with cleanupData). With
 // attempt, the lease's attempts increase; at maxAttempts it fails instead.
 // It reports the new state, or "" if the lease was not in one of from.
 func (s *Store) Requeue(ctx context.Context, id string, from []string, reason string, attempt bool, maxAttempts int,
-	slotState, cleanupData string, now time.Time) (string, error) {
+	roomState, cleanupData string, now time.Time) (string, error) {
 	newState := ""
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		var state string
@@ -522,10 +522,10 @@ func (s *Store) Requeue(ctx context.Context, id string, from []string, reason st
 		if attempt {
 			attempts++
 		}
-		// The lease can get another slot, so the old slot keeps no lease_id;
+		// The lease can get another room, so the old room keeps no lease_id;
 		// its cleanup_data has the lease data for the cleanup.
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = '', cleanup_data = ? WHERE `+leaseSlots,
-			slotState, cleanupData, id, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET state = ?, lease_id = '', cleanup_data = ? WHERE `+leaseRooms,
+			roomState, cleanupData, id, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
@@ -541,9 +541,9 @@ func (s *Store) Requeue(ctx context.Context, id string, from []string, reason st
 			return insertEvent(ctx, tx, now, id, 0, "lease", fmt.Sprintf("lease %s %s → failed after %d attempts: %s", id, state, attempts, reason))
 		}
 		newState = protocol.LeaseQueued
-		// The screen tools that started belong to the old slot: its cleanup
+		// The screen tools that started belong to the old room: its cleanup
 		// stopped them, or its cleanup_data has them.
-		_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'queued', room_id = NULL, slot_name = '', provider = '', machine = '',
+		_, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'queued', machine_id = NULL, room_name = '', provider = '', template = '',
 			began_at = NULL, started = '[]', attempts = ?, reason = ?, revision = revision + 1 WHERE id = ?`, attempts, reason, id)
 		if err != nil {
 			return err
@@ -559,9 +559,9 @@ func (s *Store) Requeue(ctx context.Context, id string, from []string, reason st
 	return newState, nil
 }
 
-// FailLease ends a lease at once, without cleanup (the room is lost or
-// unreachable). Its slots get slotState.
-func (s *Store) FailLease(ctx context.Context, id string, from []string, reason, slotState, cleanupData string, now time.Time) (bool, error) {
+// FailLease ends a lease at once, without cleanup (the machine is lost or
+// unreachable). Its rooms get roomState.
+func (s *Store) FailLease(ctx context.Context, id string, from []string, reason, roomState, cleanupData string, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		var state string
@@ -572,11 +572,11 @@ func (s *Store) FailLease(ctx context.Context, id string, from []string, reason,
 			return nil
 		}
 		leaseIDCol := "''"
-		if slotState != protocol.SlotFree {
+		if roomState != protocol.RoomFree {
 			leaseIDCol = "lease_id"
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE slots SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE `+leaseSlots,
-			slotState, cleanupData, id, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET state = ?, lease_id = `+leaseIDCol+`, cleanup_data = ? WHERE `+leaseRooms,
+			roomState, cleanupData, id, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM lease_tunnels WHERE lease_id = ?`, id); err != nil {
@@ -701,7 +701,7 @@ func (s *Store) UserTokenIDs(ctx context.Context, userID int64) ([]int64, error)
 	return out, rows.Err()
 }
 
-// TokenUserID returns the user of a token (0 for a room token).
+// TokenUserID returns the user of a token (0 for a machine token).
 func (s *Store) TokenUserID(ctx context.Context, tokenID int64) (int64, error) {
 	var id sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT user_id FROM tokens WHERE id = ?`, tokenID).Scan(&id)

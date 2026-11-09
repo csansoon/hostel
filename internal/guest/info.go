@@ -77,17 +77,17 @@ func Tools(args []string, stdout, stderr io.Writer) int {
 		if t.Screen {
 			screen = "yes"
 		}
-		var machines []string
-		for _, m := range t.Machines {
-			machines = append(machines, m.Key)
+		var templates []string
+		for _, m := range t.Templates {
+			templates = append(templates, m.Key)
 		}
-		free := fmt.Sprint(t.FreeSlots)
+		free := fmt.Sprint(t.FreeRooms)
 		wait := FormatWait(t.EstimatedWaitSeconds)
-		if t.FreeSlots == 0 && t.NewRoom {
-			free, wait = "-", wait+" (new room)"
+		if t.FreeRooms == 0 && t.NewMachine {
+			free, wait = "-", wait+" (new machine)"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", t.Name, dash(strings.Join(t.Options, ", ")), screen,
-			strings.Join(machines, ", "), free, t.Waiting, wait)
+			strings.Join(templates, ", "), free, t.Waiting, wait)
 	}
 	tw.Flush()
 	fmt.Fprintln(stdout, list.Note)
@@ -134,8 +134,8 @@ func printTool(w io.Writer, t protocol.Tool) {
 	if len(t.Env) > 0 {
 		fmt.Fprintf(w, "  environment  %s\n", strings.Join(t.Env, ", "))
 	}
-	var machines []string
-	for _, m := range t.Machines {
+	var templates []string
+	for _, m := range t.Templates {
 		desc := m.OS
 		if len(m.Options) > 0 {
 			desc = strings.Join(m.Options, ", ") + ", " + desc
@@ -149,10 +149,10 @@ func printTool(w io.Writer, t protocol.Tool) {
 		if !m.Online {
 			desc += "; offline"
 		}
-		machines = append(machines, m.Key+" ("+desc+")")
+		templates = append(templates, m.Key+" ("+desc+")")
 	}
-	fmt.Fprintf(w, "  machines     %s\n", strings.Join(machines, ", "))
-	fmt.Fprintf(w, "  free         %d slots, %d waiting, estimated wait %s\n", t.FreeSlots, t.Waiting, FormatWait(t.EstimatedWaitSeconds))
+	fmt.Fprintf(w, "  machines     %s\n", strings.Join(templates, ", "))
+	fmt.Fprintf(w, "  free         %d rooms, %d waiting, estimated wait %s\n", t.FreeRooms, t.Waiting, FormatWait(t.EstimatedWaitSeconds))
 	if g := strings.TrimSpace(t.Guide); g != "" {
 		fmt.Fprintf(w, "\n%s\n", g)
 	}
@@ -170,7 +170,7 @@ func Info(args []string, stdout, stderr io.Writer) int {
 	}
 	var pl protocol.Lease
 	if err := l.api.Do(context.Background(), "GET", "/v1/leases/"+l.st.LeaseID, nil, &pl); err == nil && pl.Access != nil {
-		l.st.Access, l.st.Started, l.st.Machine = pl.Access, pl.Started, pl.Provider+"/"+pl.Machine
+		l.st.Access, l.st.Started, l.st.Template = pl.Access, pl.Started, pl.Provider+"/"+pl.Template
 		if err := l.st.Save(); err != nil {
 			return l.fail(stderr, err)
 		}
@@ -227,7 +227,7 @@ func AgentGuide(args []string, stdout, stderr io.Writer) int {
 }
 
 const agentGuide = `Hostel: short, exclusive use of a remote machine for builds, UI QA, and
-device tests. Your code stays local; Hostel sends it to the room.
+device tests. Your code stays local; Hostel sends it to the machine.
 
 The rule
   Ask for the tools that you need. Ask for a screen tool (an emulator, a
@@ -243,7 +243,7 @@ The rule
 Start
   hostel tools [<tool>]                    the tools, their options, machines,
                                            and wait; one tool with its guide
-  hostel status                            rooms, leases, and the waiting line
+  hostel status                            machines, leases, and the waiting line
   hostel acquire <tool[:option]>... --task "..."
                                            one lease for this worktree; without
                                            tools: the tools of hostel.toml, or
@@ -275,7 +275,7 @@ Work
                                 a screen of the lease; --tool only when the
                                 lease has more than one screen
   hostel cp <local> :<path> | hostel cp :<path> <local>
-  hostel diff                   changes on the room since the last sync
+  hostel diff                   changes on the machine since the last sync
   hostel jobs | hostel attach <job> | hostel stop <job>
 
 Long commands
@@ -301,16 +301,16 @@ Facts and the local API
   screens that started (the guides below name them; acquire and "hostel
   info" list them). To tap, type, and read a screen, use the driver that its
   guide names (agent-device; winapp on Windows).
-  Tunnels in hostel.toml make your local servers reachable on the room at
+  Tunnels in hostel.toml make your local servers reachable on the machine at
   localhost:$HOSTEL_TUNNEL_<NAME>_PORT.
 
 End
   hostel release                when you are done. A lease also ends after
                                 10 minutes without a hostel command.
-Changes on the room are temporary. Make durable changes in your local files.
+Changes on the machine are temporary. Make durable changes in your local files.
 Cleanup deletes the work directory and the lease's files, but not the caches
 outside it (mise tools, $HOSTEL_CACHE_DIR, ~/.gradle, and other files in the
-home directory). The next lease on the room, also of another user, can read
+home directory). The next lease on the machine, also of another user, can read
 them. They make builds faster; never write a secret there.
 If a command says 'run "hostel update"', tell the user; do not update hostel
 yourself (other agents on this computer use the same binary).

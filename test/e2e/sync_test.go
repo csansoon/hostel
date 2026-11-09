@@ -20,9 +20,9 @@ func (f *fixture) remove(rel string) {
 	}
 }
 
-// work runs a shell command in the work directory on the room.
+// work runs a shell command in the work directory on the machine.
 func (f *fixture) work(cmd string) string {
-	return f.c.sh("cd /home/hostel/hostel/slots/a/work && " + cmd)
+	return f.c.sh("cd /home/hostel/hostel/rooms/a/work && " + cmd)
 }
 
 // TestSync is scenario 11.
@@ -36,11 +36,11 @@ func TestSync(t *testing.T) {
 		t.Fatalf("work directory after acquire: %q", got)
 	}
 
-	// A room command creates a file and changes a synced file.
-	f.e.mustHostel("run", "--", "echo built > build.out; echo room > a.txt")
+	// A machine command creates a file and changes a synced file.
+	f.e.mustHostel("run", "--", "echo built > build.out; echo machine > a.txt")
 	r := f.e.mustHostel("diff")
-	if !strings.Contains(r.stdout, "-hello") || !strings.Contains(r.stdout, "+room") || !strings.Contains(r.stdout, "+++ b/build.out") {
-		t.Fatalf("diff does not show the room changes:\n%s", r.stdout)
+	if !strings.Contains(r.stdout, "-hello") || !strings.Contains(r.stdout, "+machine") || !strings.Contains(r.stdout, "+++ b/build.out") {
+		t.Fatalf("diff does not show the machine changes:\n%s", r.stdout)
 	}
 
 	// The guest edits a.txt with the same size within one second, adds b.txt,
@@ -51,8 +51,8 @@ func TestSync(t *testing.T) {
 	if !strings.Contains(r.stderr, "2 files sent, 0 deleted") {
 		t.Fatalf("second sync: %s", r)
 	}
-	if !strings.Contains(r.stderr, "room changes were replaced by the local files: a.txt") {
-		t.Fatalf("sync does not list the overwritten room change: %s", r)
+	if !strings.Contains(r.stderr, "machine changes were replaced by the local files: a.txt") {
+		t.Fatalf("sync does not list the overwritten machine change: %s", r)
 	}
 	if got := f.work("cat a.txt b.txt build.out"); got != "HELLO\nnew\nbuilt" {
 		t.Fatalf("files after the second sync: %q", got)
@@ -63,7 +63,7 @@ func TestSync(t *testing.T) {
 		t.Fatalf("same-size edit: %s", r)
 	}
 
-	// Deleted local files are deleted on the room; room files stay.
+	// Deleted local files are deleted on the machine; machine files stay.
 	f.remove("b.txt")
 	r = f.e.mustHostel("sync")
 	if !strings.Contains(r.stderr, "0 files sent, 1 deleted") {
@@ -102,7 +102,7 @@ func TestSyncPathSafety(t *testing.T) {
 	}
 	f.e.mustHostel("sync")
 	if got := f.work("readlink l"); got != "/tmp/outside" {
-		t.Fatalf("link on the room: %q", got)
+		t.Fatalf("link on the machine: %q", got)
 	}
 	f.remove("l")
 	f.write("l/f", "inside\n")
@@ -139,8 +139,8 @@ func TestCopyDiffShell(t *testing.T) {
 	if r := f.e.hostel("cp", ":../etc/passwd", dst); r.code != 1 {
 		t.Fatalf("cp of a path outside work: %s", r)
 	}
-	r := f.e.mustHostel("ssh", "--", "echo $HOSTEL_SLOT $(pwd)")
-	if strings.TrimSpace(r.stdout) != "a /home/hostel/hostel/slots/a/work" {
+	r := f.e.mustHostel("ssh", "--", "echo $HOSTEL_ROOM $(pwd)")
+	if strings.TrimSpace(r.stdout) != "a /home/hostel/hostel/rooms/a/work" {
 		t.Fatalf("ssh: %s", r)
 	}
 	r = f.e.mustHostel("ssh-config")
@@ -150,7 +150,7 @@ func TestCopyDiffShell(t *testing.T) {
 
 	// ssh_config paths with a space and a "%" token.
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	f.e.newRepoNamed("my repo %d", defaultRepoFiles())
 	f.acquire()
 	if r := f.e.mustHostel("ssh", "--", "echo ok"); strings.TrimSpace(r.stdout) != "ok" {

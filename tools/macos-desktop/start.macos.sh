@@ -9,7 +9,7 @@ lsappinfo list | awk '
 	/ pid = [0-9]+ .*type="Foreground"/ { for (i = 1; i <= NF; i++) if ($i == "pid") print $(i+2), b }' |
 	while read -r pid bundle; do
 		echo "$pid $(ps -o lstart= -p "$pid" | tr -s ' ' '_') $bundle"
-	done > "$HOSTEL_SLOT_DIR/desktop-apps"
+	done > "$HOSTEL_ROOM_DIR/desktop-apps"
 if [ -d "$HOME/Applications" ]; then
 	find "$HOME/Applications" -mindepth 1 -maxdepth 1 -exec basename {} \;
-fi > "$HOSTEL_SLOT_DIR/desktop-applications"
+fi > "$HOSTEL_ROOM_DIR/desktop-applications"

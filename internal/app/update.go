@@ -97,7 +97,7 @@ func (m *model) startServerUpdate(tag string) tea.Cmd {
 
 // outOfDate reports a machine whose connect service is older than the
 // server.
-func (m *model) outOfDate(ms protocol.MachineStatus) bool {
+func (m *model) outOfDate(ms protocol.TemplateStatus) bool {
 	return ms.Connect && update.Older(ms.ConnectVersion, m.info.Version)
 }
 

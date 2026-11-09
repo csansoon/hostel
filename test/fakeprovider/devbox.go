@@ -21,7 +21,7 @@ import (
 )
 
 // devboxMain is a fake Namespace devbox CLI for the E2E tests. It makes Docker
-// rooms from test/roomimage and copies the output formats of the real CLI
+// machines from test/machineimage and copies the output formats of the real CLI
 // (devbox 0.0.204, docs/namespace.md): the list JSON, the text line of an
 // empty list, and the error lines. Environment: FAKE_RUN_ID, FAKE_STATE_DIR,
 // FAKE_IMAGE, and FAKE_LIMIT as for the provider mode, FAKE_DELAY (the boot
@@ -148,7 +148,7 @@ func devboxCreate(args []string) {
 	}
 	image := os.Getenv("FAKE_IMAGE")
 	if image == "" {
-		image = "hostel-e2e-room"
+		image = "hostel-e2e-machine"
 	}
 	port, err := freePort()
 	if err != nil {
@@ -219,7 +219,7 @@ func devboxList() {
 	fmt.Println(string(out))
 }
 
-// devboxProxy connects stdin and stdout to the room's SSH server.
+// devboxProxy connects stdin and stdout to the machine's SSH server.
 func devboxProxy(name string) {
 	if err := exists(name); err != nil {
 		devboxFail(fmt.Sprintf("rpc error: code = NotFound desc = no such devbox with id or name %q (rid=fake)", name))

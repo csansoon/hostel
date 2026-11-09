@@ -7,7 +7,7 @@ api="${HOSTEL_ANDROID_API:-36}"
 sdk="$HOSTEL_CACHE_DIR/android-sdk"
 "$sdk/platform-tools/adb" version >/dev/null
 if ! [ -f "$sdk/platforms/android-$api/android.jar" ]; then
-	echo "the SDK has no platform android-$api; repair the room to run install again" >&2
+	echo "the SDK has no platform android-$api; repair the machine to run install again" >&2
 	exit 1
 fi
 free_gb=$(df -Pk "$HOME" | awk 'NR == 2 { print int($4 / 1048576) }')

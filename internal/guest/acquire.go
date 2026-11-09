@@ -26,7 +26,7 @@ const pollWait = 50 * time.Second
 // backgroundLook bounds the look of acquire --background at the lease.
 const backgroundLook = 5 * time.Second
 
-// factsTimeout bounds the look at the room for the lease facts.
+// factsTimeout bounds the look at the machine for the lease facts.
 const factsTimeout = 40 * time.Second
 
 // maxPollRetry is the longest pause before a poll after a network error.
@@ -39,7 +39,7 @@ func keepNote(l protocol.Lease, background bool, stderr io.Writer) {
 		idle = FormatDuration(time.Duration(l.IdleTimeoutMS) * time.Millisecond)
 	}
 	if background {
-		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again at least every %s: it continues the lease, and takes the room when it is ready (a ready room waits only %s for you)\n", l.ID, idle, idle)
+		fmt.Fprintf(stderr, "hostel: Hostel keeps the place of lease %s in the background. Do other work, and run the same command again at least every %s: it continues the lease, and takes the machine when it is ready (a ready machine waits only %s for you)\n", l.ID, idle, idle)
 		return
 	}
 	keep := "a few minutes"
@@ -61,7 +61,7 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel acquire", stderr)
 	task := fs.String("task", "", "what the lease is for (required)")
 	priority := fs.String("priority", "normal", "low, normal, or high; change it only when the user asks for it")
-	fresh := fs.Bool("fresh", false, "use a new room with empty caches")
+	fresh := fs.Bool("fresh", false, "use a new machine with empty caches")
 	wait := fs.Duration("wait", 100*time.Second, "time to wait before returning; then run the same command again")
 	background := fs.Bool("background", false, "return at once and keep the place in the waiting line in the background; run the same command again to continue")
 	pos, err := cli.Parse(fs, args)
@@ -147,7 +147,7 @@ func Acquire(args []string, stdout, stderr io.Writer) int {
 		{StepPorts, func() (int, error) { return 0, startTunnels(st, rc, deadline) }},
 		{StepSynced, func() (int, error) { _, err := syncFiles(ctx, st, repo, rc, stderr); return 0, err }},
 		{StepSetup, func() (int, error) {
-			return runSetup(ctx, l, setupCommand(rc, st.leaseTools(), st.Access.RoomOS, true), deadline, stderr)
+			return runSetup(ctx, l, setupCommand(rc, st.leaseTools(), st.Access.MachineOS, true), deadline, stderr)
 		}},
 	}
 	order := []string{StepCreated, StepEnv, StepPorts, StepSynced, StepSetup, StepDone}
@@ -221,7 +221,7 @@ func createLease(ctx context.Context, api *client.Client, repo *Repo, rc *config
 	}
 	var tunnels []protocol.TunnelRequest
 	for _, name := range rc.TunnelNames() {
-		tunnels = append(tunnels, protocol.TunnelRequest{Name: name, RoomPort: rc.Tunnels[name].RoomPort})
+		tunnels = append(tunnels, protocol.TunnelRequest{Name: name, MachinePort: rc.Tunnels[name].MachinePort})
 	}
 	host, _ := os.Hostname()
 	req := protocol.CreateLeaseRequest{Tools: tools, Task: task, Priority: priority, Tunnels: tunnels, Fresh: fresh, PublicKey: pub,
@@ -304,7 +304,7 @@ func waitReady(ctx context.Context, l *lease, deadline time.Time, stderr io.Writ
 		}
 		switch {
 		case lease.State == protocol.LeaseReady:
-			l.st.Access, l.st.Started, l.st.Machine = lease.Access, lease.Started, lease.Provider+"/"+lease.Machine
+			l.st.Access, l.st.Started, l.st.Template = lease.Access, lease.Started, lease.Provider+"/"+lease.Template
 			if err := l.st.Save(); err != nil {
 				return fail(stderr, err)
 			}
@@ -359,8 +359,8 @@ func describe(l protocol.Lease) string {
 			s += fmt.Sprintf(", waiting behind %d leases, estimated wait %s", l.WaitingBehind, FormatWait(l.EstimatedWaitSeconds))
 		}
 	}
-	if l.Machine != "" && l.State != protocol.LeaseQueued {
-		s += " on " + l.Provider + "/" + l.Machine
+	if l.Template != "" && l.State != protocol.LeaseQueued {
+		s += " on " + l.Provider + "/" + l.Template
 	}
 	return s
 }
@@ -392,8 +392,8 @@ var miseFiles = []string{"mise.toml", ".mise.toml", "mise.local.toml", ".mise.lo
 // setupCommand returns the setup job: "mise install" (unless mise = false) and,
 // with full, the repository setup commands for the lease's tools. The first
 // failure stops the job.
-func setupCommand(rc *config.Repo, tools []string, roomOS string, full bool) string {
-	if roomOS == config.OSWindows {
+func setupCommand(rc *config.Repo, tools []string, machineOS string, full bool) string {
+	if machineOS == config.OSWindows {
 		return setupCommandPS(rc, tools, full)
 	}
 	var parts []string
@@ -475,16 +475,16 @@ func runSetup(ctx context.Context, l *lease, cmd string, deadline time.Time, std
 // the screen tools that started, and the next commands.
 func printFacts(st *State, rc *config.Repo, w io.Writer) {
 	a := st.Access
-	fmt.Fprintf(w, "Lease %s is ready on %s.\n", st.LeaseID, st.Machine)
-	machine := a.RoomOS
+	fmt.Fprintf(w, "Lease %s is ready on %s.\n", st.LeaseID, st.Template)
+	template := a.MachineOS
 	if a.Hardware != nil && a.Hardware.OSVersion != "" {
-		machine += " " + a.Hardware.OSVersion
+		template += " " + a.Hardware.OSVersion
 	}
-	machine += " (" + a.RoomArch + ")"
+	template += " (" + a.MachineArch + ")"
 	if size := a.Hardware.Size(); size != "" {
-		machine += ", " + size
+		template += ", " + size
 	}
-	fmt.Fprintf(w, "  machine:    %s\n", machine)
+	fmt.Fprintf(w, "  machine:    %s\n", template)
 	var tools, screens []string
 	for _, t := range a.Tools {
 		if t.Screen {
@@ -512,7 +512,7 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 	default:
 		fmt.Fprintf(w, "  started:    -   (this machine has no screen tools)\n")
 	}
-	fmt.Fprintf(w, "  slot:       %s\n", a.Slot)
+	fmt.Fprintf(w, "  room:       %s\n", a.Room)
 	fmt.Fprintf(w, "  work dir:   %s\n", a.WorkDir)
 	fmt.Fprintf(w, "  expires:    %s at the latest; without activity at %s (each hostel command extends it)\n",
 		a.ExpiresAt.Local().Format(time.DateTime), a.IdleExpiresAt.Local().Format(time.DateTime))
@@ -521,7 +521,7 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 		if resp, err := callPorts(st, portRequest{Op: "check"}); err == nil {
 			fmt.Fprintln(w, "  tunnels:")
 			for _, t := range resp.Tunnels {
-				fmt.Fprintf(w, "    %s: room port %d → local %s: %s\n", t.Name, t.RoomPort, t.Local, t.state())
+				fmt.Fprintf(w, "    %s: machine port %d → local %s: %s\n", t.Name, t.MachinePort, t.Local, t.state())
 			}
 		}
 	}

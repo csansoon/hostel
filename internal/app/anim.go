@@ -53,7 +53,7 @@ func (m *model) onFrame() tea.Cmd {
 }
 
 // moving reports a car, a glow, or a state whose glyph turns on the current
-// page (a lease that waits or gets ready, a room that starts).
+// page (a lease that waits or gets ready, a machine that starts).
 func (m *model) moving() bool {
 	if len(m.street.cars) > 0 {
 		return true
@@ -74,15 +74,15 @@ func (m *model) moving() bool {
 		return m.queued("")
 	case *toolPage:
 		t, _ := p.tool(m)
-		return m.queued(p.name) || slices.ContainsFunc(t.Machines, func(tm protocol.ToolMachine) bool { return m.starting(tm.Key) })
-	case *rooms, *roomAdmin:
+		return m.queued(p.name) || slices.ContainsFunc(t.Templates, func(tm protocol.ToolTemplate) bool { return m.starting(tm.Key) })
+	case *rooms:
 		return m.starting("")
-	case *machinePage:
+	case *templatePage:
 		var leases []protocol.LeaseStatus
-		for _, r := range machineRooms(m.st, p.machineKey) {
-			leases = append(leases, roomLeases(m.st, r.ID)...)
+		for _, r := range templateMachines(m.st, p.templateKey) {
+			leases = append(leases, machineLeases(m.st, r.ID)...)
 		}
-		return m.starting(p.machineKey) || slices.ContainsFunc(leases, func(l protocol.LeaseStatus) bool { return l.State != protocol.LeaseReady })
+		return m.starting(p.templateKey) || slices.ContainsFunc(leases, func(l protocol.LeaseStatus) bool { return l.State != protocol.LeaseReady })
 	}
 	return false
 }
@@ -94,11 +94,11 @@ func (m *model) queued(tool string) bool {
 	})
 }
 
-// starting reports a room that starts on the machine key ("" for any): the
+// starting reports a machine that starts on the machine key ("" for any): the
 // machine is Getting ready.
 func (m *model) starting(key string) bool {
-	return slices.ContainsFunc(m.st.Rooms, func(r protocol.RoomStatus) bool {
-		return (r.State == protocol.RoomProvisioning || r.State == protocol.RoomCreating) && (key == "" || r.Provider+"/"+r.Machine == key)
+	return slices.ContainsFunc(m.st.Machines, func(r protocol.MachineStatus) bool {
+		return (r.State == protocol.MachineProvisioning || r.State == protocol.MachineCreating) && (key == "" || r.Provider+"/"+r.Template == key)
 	})
 }
 

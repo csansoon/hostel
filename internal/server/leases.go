@@ -15,8 +15,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/machineops"
 	"github.com/csansoon/hostel/internal/protocol"
-	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/scheduler"
 	"github.com/csansoon/hostel/internal/store"
 )
@@ -62,7 +62,7 @@ func newLeaseID() string {
 func poolTunnels(tunnels []protocol.TunnelRequest) int {
 	n := 0
 	for _, t := range tunnels {
-		if t.RoomPort == 0 {
+		if t.MachinePort == 0 {
 			n++
 		}
 	}
@@ -113,12 +113,12 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 	}
 	view, err := s.loadToolView(r.Context())
 	if err != nil {
-		s.internalError(w, "read rooms", err)
+		s.internalError(w, "read machines", err)
 		return
 	}
-	machines := view.schedMachines()
-	if sreq := leaseRequest(cfg, l); len(scheduler.Candidates(machines, sreq)) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoMachine, noMachineMessage(machines, sreq))
+	templates := view.schedTemplates()
+	if sreq := leaseRequest(cfg, l); len(scheduler.Candidates(templates, sreq)) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, protocol.CodeNoTemplate, noTemplateMessage(templates, sreq))
 		return
 	}
 	now := time.Now()
@@ -139,11 +139,11 @@ func checkTunnels(tunnels []protocol.TunnelRequest) string {
 	seen := map[string]bool{}
 	fixed := map[int]string{}
 	for _, t := range tunnels {
-		if other, ok := fixed[t.RoomPort]; ok && t.RoomPort != 0 {
-			return fmt.Sprintf("tunnels %s and %s use the same room port %d", other, t.Name, t.RoomPort)
+		if other, ok := fixed[t.MachinePort]; ok && t.MachinePort != 0 {
+			return fmt.Sprintf("tunnels %s and %s use the same machine port %d", other, t.Name, t.MachinePort)
 		}
-		if t.RoomPort != 0 {
-			fixed[t.RoomPort] = t.Name
+		if t.MachinePort != 0 {
+			fixed[t.MachinePort] = t.Name
 		}
 		if !config.ValidName(t.Name) {
 			return fmt.Sprintf("tunnel name %q must match ^[a-z][a-z0-9-]*$", t.Name)
@@ -152,8 +152,8 @@ func checkTunnels(tunnels []protocol.TunnelRequest) string {
 			return fmt.Sprintf("tunnel %q is listed twice", t.Name)
 		}
 		seen[t.Name] = true
-		if t.RoomPort != 0 && (t.RoomPort < 1024 || t.RoomPort > 65535) {
-			return fmt.Sprintf("tunnel %s: room port %d is not between 1024 and 65535", t.Name, t.RoomPort)
+		if t.MachinePort != 0 && (t.MachinePort < 1024 || t.MachinePort > 65535) {
+			return fmt.Sprintf("tunnel %s: machine port %d is not between 1024 and 65535", t.Name, t.MachinePort)
 		}
 	}
 	return ""
@@ -282,7 +282,7 @@ func endState(l store.Lease) string {
 func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	out := protocol.Lease{ID: l.ID, State: l.State, Revision: l.Revision, Position: l.Position, Reason: l.Reason,
 		Tools: nonNil(l.Tools), Started: nonNilStarted(l.Started), Task: l.Task, Priority: protocol.PriorityName(l.Priority),
-		Provider: l.Provider, Machine: l.Machine, CreatedAt: l.CreatedAt, EndReason: l.EndReason,
+		Provider: l.Provider, Template: l.Template, CreatedAt: l.CreatedAt, EndReason: l.EndReason,
 		PollTimeoutMS: s.config().PollTimeout.D().Milliseconds(), IdleTimeoutMS: s.config().IdleTimeout.D().Milliseconds()}
 	if l.State == protocol.LeaseQueued {
 		out.EstimatedWaitSeconds, out.WaitingBehind = s.leaseWait(r.Context(), l)
@@ -290,7 +290,7 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	if l.State != protocol.LeaseReady {
 		return out
 	}
-	room, err := s.store.Room(r.Context(), l.RoomID)
+	machine, err := s.store.Machine(r.Context(), l.MachineID)
 	if err != nil {
 		return out
 	}
@@ -298,26 +298,26 @@ func (s *Server) apiLease(r *http.Request, l store.Lease) protocol.Lease {
 	if err != nil {
 		return out
 	}
-	home, err := s.slotHome(r.Context(), room, l.SlotName)
+	home, err := s.roomHome(r.Context(), machine, l.RoomName)
 	if err != nil {
 		return out
 	}
 	out.Access = &protocol.Access{
 		GatewayAddress:     s.gatewayAddr,
 		GatewayHostKey:     strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.gatewayKey.PublicKey()))),
-		HelperPath:         roomops.HelperPath(room.OS, home),
-		Slot:               l.SlotName,
-		WorkDir:            roomops.WorkDir(room.OS, home, l.SlotName),
+		HelperPath:         machineops.HelperPath(machine.OS, home),
+		Room:               l.RoomName,
+		WorkDir:            machineops.WorkDir(machine.OS, home, l.RoomName),
 		TunnelPorts:        ports,
-		RoomOS:             room.OS,
-		RoomArch:           room.Arch,
+		MachineOS:          machine.OS,
+		MachineArch:        machine.Arch,
 		TunnelCheck:        s.config().Intervals.TunnelCheck.D().String(),
 		PortProcessOffline: s.config().PortProcessOffline.D().String(),
 		ReadyAt:            l.ReadyAt,
 		ExpiresAt:          l.ExpiresAt,
 		IdleExpiresAt:      l.LastActivityAt.Add(s.config().IdleTimeout.D()),
 	}
-	out.Access.Hardware, out.Access.Tools = s.roomFacts(r.Context(), room)
+	out.Access.Hardware, out.Access.Tools = s.machineFacts(r.Context(), machine)
 	out.Access.LeaseTools = leaseToolNames(s.config(), l.Tools)
 	return out
 }
@@ -329,12 +329,12 @@ func nonNilStarted(v []protocol.StartedTool) []protocol.StartedTool {
 	return v
 }
 
-// roomFacts returns the hardware and the inventory of a room.
-func (s *Server) roomFacts(ctx context.Context, room store.Room) (*protocol.Hardware, []protocol.InventoryTool) {
-	rts, err := s.store.RoomTools(ctx)
+// machineFacts returns the hardware and the inventory of a machine.
+func (s *Server) machineFacts(ctx context.Context, machine store.Machine) (*protocol.Hardware, []protocol.InventoryTool) {
+	rts, err := s.store.MachineTools(ctx)
 	if err != nil {
 		return nil, []protocol.InventoryTool{}
 	}
-	rs := roomStatus(s.config(), room, nil, rts)
+	rs := machineStatus(s.config(), machine, nil, rts)
 	return rs.Hardware, rs.Tools
 }

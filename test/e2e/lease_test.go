@@ -12,7 +12,7 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// fixture is a server with one static Docker room that has the test tools
+// fixture is a server with one static Docker machine that has the test tools
 // fake-screen and fake-sdk (its need), and a test repository.
 type fixture struct {
 	e *env
@@ -28,19 +28,19 @@ env = { REPO_VAR = "repo-value" }
 // fixtureOpts changes the fixture: server keys (top level of server.toml),
 // keys of the machine "box", and the repository files.
 type fixtureOpts struct {
-	serverKeys  string
-	machineKeys string
-	files       map[string]string
-	agentDevice bool
+	serverKeys   string
+	templateKeys string
+	files        map[string]string
+	agentDevice  bool
 	// tools are extra or changed tool files: tool → file → content.
 	tools map[string]map[string]string
 	// machineTools are the tools of the machine box (default fake-screen).
-	machineTools []string
+	templateTools []string
 	// noTools: the server has no test tools (the machine none), so its first
 	// start imports server.toml with the machine.
 	noTools bool
-	// slotUsers are extra users of the room container.
-	slotUsers []string
+	// roomUsers are extra users of the machine container.
+	roomUsers []string
 	// helperDir replaces the shared helper_dir (a test that changes it).
 	helperDir string
 }
@@ -68,19 +68,19 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	if opts == nil {
 		opts = &fixtureOpts{}
 	}
-	e.slotUsers = opts.slotUsers
-	c := e.startStaticRoom("box")
+	e.roomUsers = opts.roomUsers
+	c := e.startStaticMachine("box")
 	if opts.noTools {
-		opts.machineTools = []string{}
+		opts.templateTools = []string{}
 	} else {
 		e.useTools("fake-sdk", "fake-screen", "fake-desktop")
 	}
 	for name, files := range opts.tools {
 		e.writeTool(name, files)
 	}
-	machineTools := opts.machineTools
-	if machineTools == nil {
-		machineTools = []string{"fake-screen"}
+	templateTools := opts.templateTools
+	if templateTools == nil {
+		templateTools = []string{"fake-screen"}
 	}
 	header := serverHeaderWith(opts.agentDevice)
 	if opts.helperDir != "" {
@@ -95,9 +95,9 @@ address = %q
 os = "linux"
 tools = %s
 env = { MACHINE_VAR = "machine-value" }
-`, c.address(), tomlList(machineTools)) + opts.machineKeys)
+`, c.address(), tomlList(templateTools)) + opts.templateKeys)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
 	e.useGuestToken()
 	files := opts.files
 	if files == nil {
@@ -142,21 +142,21 @@ func (f *fixture) acquire(args ...string) string {
 	return m[1]
 }
 
-// slotExists reports whether the slot directory exists on the room.
-func (f *fixture) slotExists() bool {
-	return f.c.sh("test -e /home/hostel/hostel/slots/a && echo yes || echo no") == "yes"
+// roomExists reports whether the room directory exists on the machine.
+func (f *fixture) roomExists() bool {
+	return f.c.sh("test -e /home/hostel/hostel/rooms/a && echo yes || echo no") == "yes"
 }
 
-// waitSlotFree waits until cleanup freed the slot.
-func (f *fixture) waitSlotFree() {
+// waitRoomFree waits until cleanup freed the room.
+func (f *fixture) waitRoomFree() {
 	f.e.t.Helper()
-	f.e.waitFor("slot a free", time.Minute, func() bool {
-		r := f.s.room("home/box")
-		return len(r.Slots) == 1 && r.Slots[0].State == protocol.SlotFree && r.Slots[0].LeaseID == ""
+	f.e.waitFor("room a free", time.Minute, func() bool {
+		r := f.s.machine("home/box")
+		return len(r.Rooms) == 1 && r.Rooms[0].State == protocol.RoomFree && r.Rooms[0].LeaseID == ""
 	})
 }
 
-// TestAcquireRunRelease is scenario 1: acquire, sync, run, release. The slot
+// TestAcquireRunRelease is scenario 1: acquire, sync, run, release. The room
 // directory no longer exists after cleanup.
 func TestAcquireRunRelease(t *testing.T) {
 	t.Parallel()
@@ -188,14 +188,14 @@ func TestAcquireRunRelease(t *testing.T) {
 	if r := f.e.mustHostel("run", "--", "mise", "--version"); !strings.HasPrefix(r.stdout, "2026.10.17") {
 		t.Fatalf("mise in the job PATH: %s", r)
 	}
-	if !f.slotExists() {
-		t.Fatal("the slot directory does not exist during the lease")
+	if !f.roomExists() {
+		t.Fatal("the room directory does not exist during the lease")
 	}
 
 	f.e.mustHostel("release")
-	f.waitSlotFree()
-	if f.slotExists() {
-		t.Fatal("the slot directory still exists after cleanup")
+	f.waitRoomFree()
+	if f.roomExists() {
+		t.Fatal("the room directory still exists after cleanup")
 	}
 	if got := f.c.sh("cat /home/hostel/hostel/cache/fake-screen.log"); !strings.Contains(got, "start linux") || !strings.Contains(got, "stop linux") {
 		t.Fatalf("tool scripts: %q, want start and stop", got)

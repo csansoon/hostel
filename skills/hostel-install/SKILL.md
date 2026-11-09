@@ -5,10 +5,10 @@ description: 'Install, update, or check the hostel CLI on macOS, Linux, or Windo
 
 # Install the Hostel CLI and connect
 
-The `hostel` binary is the same for people, agents, the server, and room
+The `hostel` binary is the same for people, agents, the server, and
 machines. This skill installs it on a person's computer and connects that
 computer to a server. For a server machine, see `hostel-server-setup`. For a
-room machine, see `hostel-rooms`.
+machine, see `hostel-machines`.
 
 ## macOS and Linux
 
@@ -25,7 +25,7 @@ Options (put them after `sh -s --`):
 |---|---|
 | `--dir DIR` | Install the binary into `DIR` (default `~/.local/bin`). |
 | `--version vX.Y.Z` | Install this release (default: the latest). |
-| `--server DIR` | Also install the room binaries into `DIR/helpers`. Only for a server machine (the server uses the tools in its binary). |
+| `--server DIR` | Also install the machine binaries into `DIR/helpers`. Only for a server machine (the server uses the tools in its binary). |
 
 Examples:
 
@@ -108,14 +108,20 @@ and `HOSTEL_SERVER_KEY` override the file.
 Run `hostel` with no arguments in a terminal. It opens a full-screen app:
 
 - Not connected: *Check in* (paste the invite code, then your name) or *Leave*.
-- *Lobby*: the tools (screen tools first), their free machines, the waiting
-  line, and the wait.
-- *Rooms*: the machines, their state, and who uses them.
-- *Front desk*: the server and you; *Invite a guest* (admins), *Add your other
-  computer* (members), *Guest list*, *Add a room* (admins), *Check out*
-  (disconnect).
+- *Front desk*: *Guests* (*Invite a guest* for admins, *Add your other
+  computer*), *This server* (with *Update the server* when it applies), and
+  *Check out* (disconnect).
+- *Lobby*: the one waiting line first (each queued lease with its estimated
+  wait), then Screens (one line each), then Software in a short wrapped list.
+  Enter on a tool opens its page; enter on a waiting lease opens the page of its
+  first tool.
+- *Rooms*: one list, provider › machine › room. A small square for each room
+  (blue occupied, green vacant, yellow in setup or cleanup, red broken), one line
+  for each guest, and CPU and memory gauges. Enter opens the machine, the room,
+  an on-demand provider, or a template. Admins: `a` machine actions (stop new
+  leases, repair), `+` add a machine.
 
-Keys: `1` `2` `3` go to Lobby, Rooms, Front desk; `?` lists all keys; `q` quits.
+Keys: `1` `2` `3` go to Front desk, Lobby, Rooms; `?` lists all keys; `q` quits.
 `NO_COLOR=1` turns colors off. Without a terminal (an agent, a pipe), `hostel`
 prints the help instead. Agents use `hostel status` (plain text).
 
@@ -150,5 +156,5 @@ For the server machine, also restart the service after the update
 
 ## Next
 
-- Use a room: `hostel-use`.
+- Use a machine: `hostel-use`.
 - Something fails: `hostel-troubleshoot`.

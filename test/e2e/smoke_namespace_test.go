@@ -29,7 +29,7 @@ func TestSmokeNamespace(t *testing.T) {
 		t.Skip("set HOSTEL_SMOKE_NAMESPACE=1 to run it against the real Namespace account (it costs money)")
 	}
 	e, s, prefix := namespaceDevboxSmoke(t, `warm_running = "1m"`, `
-[providers.ns.machines.mac]
+[providers.ns.templates.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
 tools = ["macos-desktop"]
 max_lifetime = "3h"
@@ -83,7 +83,7 @@ max_lifetime = "3h"
 // stops if a devbox exists (the plan allows one; another one can be the
 // owner's), and deletes the test's devboxes at the end, also when the test
 // fails. It returns the devbox name prefix of the test.
-func namespaceDevboxSmoke(t *testing.T, providerKeys, machines string, agentDevice bool) (*env, *serverProc, string) {
+func namespaceDevboxSmoke(t *testing.T, providerKeys, templates string, agentDevice bool) (*env, *serverProc, string) {
 	t.Helper()
 	if names := realDevboxes(t); len(names) > 0 {
 		t.Fatalf("devboxes exist (%s); the test needs an account without devboxes", strings.Join(names, ", "))
@@ -126,7 +126,7 @@ mise = { agent_device = %t }
 [providers.ns]
 kind = "namespace"
 %s
-%s`, id, dist, agentDevice, providerKeys, machines))
+%s`, id, dist, agentDevice, providerKeys, templates))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
 	return e, s, prefix
@@ -169,8 +169,8 @@ func realDevboxes(t *testing.T) []string {
 // HOSTEL_SMOKE_NAMESPACE=1 ("make test-smoke-namespace"). The nsc CLI must be
 // installed and logged in.
 //
-// A lease on a new instance in the default room container: a command as the
-// room user, a tunnel to a guest server, kill -9 of the server and a restart
+// A lease on a new instance in the default machine container: a command as the
+// machine user, a tunnel to a guest server, kill -9 of the server and a restart
 // during the lease, release. At the end no instance of the test remains, also
 // when the test fails.
 func TestSmokeNamespaceInstance(t *testing.T) {
@@ -218,7 +218,7 @@ mise = { agent_device = false }
 kind = "namespace"
 warm_running = "1m"
 
-[providers.ns.machines.lx]
+[providers.ns.templates.lx]
 spec = { product = "instance", machine_type = "linux/amd64:2x4" }
 `, id, dist))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])

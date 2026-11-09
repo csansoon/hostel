@@ -29,7 +29,7 @@ func TestGatewayWebSocket(t *testing.T) {
 		t.Fatalf("run: %q", r.stdout)
 	}
 	localHTTP(t, fmt.Sprintf("127.0.0.1:%d", free), "guest")
-	if r := f.roomGet("$HOSTEL_TUNNEL_API_PORT", "/ws"); !strings.Contains(r.stdout, "hello from guest /ws") {
+	if r := f.machineGet("$HOSTEL_TUNNEL_API_PORT", "/ws"); !strings.Contains(r.stdout, "hello from guest /ws") {
 		t.Fatalf("tunnel over the WebSocket gateway: %s", r)
 	}
 	r := f.e.mustHostel("ssh-config")
@@ -37,7 +37,7 @@ func TestGatewayWebSocket(t *testing.T) {
 	if err != nil || !strings.Contains(string(cfg), "ProxyCommand ") || !strings.Contains(string(cfg), " gateway-proxy 'wss://127.0.0.1:") {
 		t.Fatalf("ssh_config for a WebSocket gateway: %q, %v", cfg, err)
 	}
-	if r := f.e.mustHostel("ssh", "--", "echo $HOSTEL_SLOT"); strings.TrimSpace(r.stdout) != "a" {
+	if r := f.e.mustHostel("ssh", "--", "echo $HOSTEL_ROOM"); strings.TrimSpace(r.stdout) != "a" {
 		t.Fatalf("system ssh through gateway-proxy: %s", r)
 	}
 }

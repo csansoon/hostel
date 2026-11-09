@@ -54,8 +54,8 @@ func (s *Server) expire(ctx context.Context, leases []store.Lease) error {
 // medianDuration returns the median of the last 50 lease durations on the
 // machines (or, with a tool, of the leases that asked for it), or the
 // fallback when there are none.
-func (s *Server) medianDuration(ctx context.Context, machines []string, tool string, fallback time.Duration) time.Duration {
-	ds, err := s.store.RecentDurations(ctx, machines, tool, 50)
+func (s *Server) medianDuration(ctx context.Context, templates []string, tool string, fallback time.Duration) time.Duration {
+	ds, err := s.store.RecentDurations(ctx, templates, tool, 50)
 	if err != nil || len(ds) == 0 {
 		return fallback
 	}
@@ -64,9 +64,9 @@ func (s *Server) medianDuration(ctx context.Context, machines []string, tool str
 }
 
 // medianCreation returns the median of the creation times of the last 20
-// rooms of the machines, or 5 minutes when there are none.
-func (s *Server) medianCreation(ctx context.Context, machines []string) time.Duration {
-	ds, err := s.store.RecentCreationTimes(ctx, machines, 20)
+// machines of the machines, or 5 minutes when there are none.
+func (s *Server) medianCreation(ctx context.Context, templates []string) time.Duration {
+	ds, err := s.store.RecentCreationTimes(ctx, templates, 20)
 	if err != nil || len(ds) == 0 {
 		return 5 * time.Minute
 	}
@@ -76,20 +76,20 @@ func (s *Server) medianCreation(ctx context.Context, machines []string) time.Dur
 
 // estimatedWait estimates the wait of a lease with behind leases before it
 // on its candidate machines (design, section 5): the leases × the median lease
-// duration on the machines ÷ their slots. When the lease needs a new room
-// (newRoom), it waits for the leases before it and the creation of the room,
+// duration on the machines ÷ their rooms. When the lease needs a new machine
+// (newMachine), it waits for the leases before it and the creation of the machine,
 // not for a lease of its own position. It is an estimate.
-func (s *Server) estimatedWait(ctx context.Context, machines []string, behind, slots int, newRoom bool) time.Duration {
-	if slots <= 0 {
-		slots = 1
+func (s *Server) estimatedWait(ctx context.Context, templates []string, behind, rooms int, newMachine bool) time.Duration {
+	if rooms <= 0 {
+		rooms = 1
 	}
 	leases := behind
-	if !newRoom {
+	if !newMachine {
 		leases++
 	}
-	wait := time.Duration(leases) * s.medianDuration(ctx, machines, "", 15*time.Minute) / time.Duration(slots)
-	if newRoom {
-		wait += s.medianCreation(ctx, machines)
+	wait := time.Duration(leases) * s.medianDuration(ctx, templates, "", 15*time.Minute) / time.Duration(rooms)
+	if newMachine {
+		wait += s.medianCreation(ctx, templates)
 	}
 	return wait
 }

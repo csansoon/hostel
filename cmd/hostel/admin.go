@@ -35,8 +35,8 @@ func adminCmd(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "pubkey":
 			return adminPubkey(args[1:], stdout, stderr)
-		case "room":
-			return adminRoom(args[1:], stdout, stderr)
+		case "machine":
+			return adminMachine(args[1:], stdout, stderr)
 		case "lease":
 			if len(args) == 3 && args[1] == "release" {
 				return adminLeaseRelease(args[2], stdout, stderr)
@@ -50,26 +50,26 @@ func adminCmd(args []string, stdout, stderr io.Writer) int {
 			if len(args) >= 2 && args[1] == "revoke" {
 				return adminTokenRevoke(args[2:], stdout, stderr)
 			}
-			fmt.Fprintln(stderr, "hostel: usage: hostel admin token create --name <name> [--role guest|admin|room] [--machine <provider>/<machine>] | revoke <id>")
+			fmt.Fprintln(stderr, "hostel: usage: hostel admin token create --name <name> [--role guest|admin|machine] [--machine <provider>/<machine>] | revoke <id>")
 			return 2
 		}
 	}
-	fmt.Fprintf(stderr, "hostel: unknown admin command %q; commands: config, token, pubkey, lease release, room\n", strings.Join(args, " "))
+	fmt.Fprintf(stderr, "hostel: unknown admin command %q; commands: config, token, pubkey, lease release, machine\n", strings.Join(args, " "))
 	return 2
 }
 
-func adminRoom(args []string, stdout, stderr io.Writer) int {
-	fs := cli.NewFlagSet("hostel admin room", stderr)
-	accept := fs.Bool("accept-host-key", false, "repair: accept a changed room host key")
+func adminMachine(args []string, stdout, stderr io.Writer) int {
+	fs := cli.NewFlagSet("hostel admin machine", stderr)
+	accept := fs.Bool("accept-host-key", false, "repair: accept a changed machine host key")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 2 {
-		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room name or ID> [--accept-host-key]")
+		fmt.Fprintln(stderr, "hostel: usage: hostel admin machine drain|undrain|repair|destroy <machine name or ID> [--accept-host-key]")
 		return 2
 	}
 	switch pos[0] {
 	case "drain", "undrain", "repair", "destroy":
 	default:
-		fmt.Fprintln(stderr, "hostel: usage: hostel admin room drain|undrain|repair|destroy <room name or ID> [--accept-host-key]")
+		fmt.Fprintln(stderr, "hostel: usage: hostel admin machine drain|undrain|repair|destroy <machine name or ID> [--accept-host-key]")
 		return 2
 	}
 	c, err := apiClient()
@@ -86,22 +86,22 @@ func adminRoom(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "hostel:", err)
 			return 1
 		}
-		i := slices.IndexFunc(st.Rooms, func(r protocol.RoomStatus) bool { return r.Name == id })
+		i := slices.IndexFunc(st.Machines, func(r protocol.MachineStatus) bool { return r.Name == id })
 		if i < 0 {
-			fmt.Fprintf(stderr, "hostel: no room %q; \"hostel status\" lists the rooms\n", id)
+			fmt.Fprintf(stderr, "hostel: no machine %q; \"hostel status\" lists the machines\n", id)
 			return 1
 		}
-		id = strconv.FormatInt(st.Rooms[i].ID, 10)
+		id = strconv.FormatInt(st.Machines[i].ID, 10)
 	}
 	var body any
 	if pos[0] == "repair" {
 		body = map[string]bool{"accept_host_key": *accept}
 	}
-	if err := c.Do(ctx, "POST", "/v1/rooms/"+url.PathEscape(id)+"/"+pos[0], body, nil); err != nil {
+	if err := c.Do(ctx, "POST", "/v1/machines/"+url.PathEscape(id)+"/"+pos[0], body, nil); err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "room %s: %s requested\n", pos[1], pos[0])
+	fmt.Fprintf(stdout, "machine %s: %s requested\n", pos[1], pos[0])
 	return 0
 }
 
@@ -128,8 +128,8 @@ func adminTokenCreate(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel admin token create", stderr)
 	req := protocol.CreateTokenRequest{}
 	fs.StringVar(&req.Name, "name", "", "token name (required), for example the agent machine")
-	fs.StringVar(&req.Role, "role", protocol.RoleRoom, "room (users connect with invite codes)")
-	fs.StringVar(&req.Machine, "machine", "", "for a room token: <provider>/<machine>")
+	fs.StringVar(&req.Role, "role", protocol.RoleMachine, "machine (users connect with invite codes)")
+	fs.StringVar(&req.Template, "machine", "", "for a machine token: <provider>/<machine>")
 	if _, err := cli.Parse(fs, args); err != nil {
 		return 2
 	}
@@ -210,14 +210,14 @@ func adminConfigCheck(args []string, stdout, stderr io.Writer) int {
 	if cfg.PlatformsDir != "" {
 		fmt.Fprintln(stderr, "hostel: warning:", config.PlatformsDirWarning)
 	}
-	out, err := toml.Marshal(cfg)
+	out, err := cfg.Effective()
 	if err != nil {
 		fmt.Fprintln(stderr, "hostel: print the configuration:", err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "# %s: ok. Effective configuration with all defaults:\n", file)
 	stdout.Write(out)
-	for _, m := range cfg.Machines() {
+	for _, m := range cfg.Templates() {
 		var added []string
 		for _, t := range m.ToolList {
 			if t.Need {

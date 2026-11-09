@@ -26,7 +26,7 @@ import (
 const (
 	nscCreateTimeout = 2 * time.Minute
 	nscCallTimeout   = time.Minute
-	// nscRunTimeout bounds the start of the room container, with the image
+	// nscRunTimeout bounds the start of the machine container, with the image
 	// pull.
 	nscRunTimeout = 10 * time.Minute
 	// portForwardTimeout bounds the start of "nsc instance port-forward".
@@ -39,20 +39,21 @@ const (
 // errNscTimeout: an nsc call reached its deadline.
 var errNscTimeout = errors.New("timed out")
 
-// The room of an instance is a container with OpenSSH on this port: the
+// The machine of an instance is a container with OpenSSH on this port: the
 // instance's own SSH server (the Namespace agent) refuses remote forwards,
 // which tunnels need.
 const (
-	instanceSSHPort      = 2222
+	instanceSSHPort = 2222
+	// The name stays across versions: a retry finds the container that an older server made.
 	instanceContainer    = "hostel-room"
 	defaultInstanceImage = "ubuntu:24.04"
 	instanceUser         = "hostel"
 )
 
-// instanceRoomScript runs as root in the room container at each start. It
+// instanceMachineScript runs as root in the machine container at each start. It
 // installs the programs that the image does not have (an image with apt-get),
-// creates the room user, writes the server key, and runs sshd.
-const instanceRoomScript = `set -e
+// creates the machine user, writes the server key, and runs sshd.
+const instanceMachineScript = `set -e
 missing=""
 [ -x /usr/sbin/sshd ] || missing="$missing openssh-server"
 command -v sudo >/dev/null || missing="$missing sudo"
@@ -154,13 +155,13 @@ func (n *Namespace) findInstance(ctx context.Context, name string) (nscInstance,
 }
 
 // provisionInstance creates a bare instance with the request's deadline as its
-// duration, starts the room container, and waits until its SSH server accepts
+// duration, starts the machine container, and waits until its SSH server accepts
 // the server key. Each step is idempotent by name.
-func (n *Namespace) provisionInstance(ctx context.Context, req ProvisionRequest) (RoomRef, error) {
-	ref := RoomRef{Name: req.Name, Machine: req.Machine}
+func (n *Namespace) provisionInstance(ctx context.Context, req ProvisionRequest) (MachineRef, error) {
+	ref := MachineRef{Name: req.Name, Template: req.Template}
 	id, err := n.createInstance(ctx, req)
 	if err != nil {
-		return RoomRef{}, err
+		return MachineRef{}, err
 	}
 	ref.ID = id
 	image, _ := req.Spec["image"].(string)
@@ -169,7 +170,7 @@ func (n *Namespace) provisionInstance(ctx context.Context, req ProvisionRequest)
 	}
 	if _, err := n.nsc(ctx, nscRunTimeout, "ssh", id, "-T", "--", instanceRunCommand(image, req.ServerKey)); err != nil &&
 		!strings.Contains(err.Error(), "is already in use") {
-		return RoomRef{}, fmt.Errorf("start the room container: %w", err)
+		return MachineRef{}, fmt.Errorf("start the machine container: %w", err)
 	}
 	return ref, n.waitReady(ctx, ref)
 }
@@ -181,7 +182,7 @@ func (n *Namespace) createInstance(ctx context.Context, req ProvisionRequest) (s
 	} else if !errors.Is(err, ErrNotFound) {
 		return "", err
 	}
-	// --ssh_key takes a file. The instance's agent accepts the key; the room
+	// --ssh_key takes a file. The instance's agent accepts the key; the machine
 	// container gets it in its environment.
 	keyFile, err := os.CreateTemp("", "hostel-server-key-*.pub")
 	if err != nil {
@@ -195,12 +196,12 @@ func (n *Namespace) createInstance(ctx context.Context, req ProvisionRequest) (s
 	if err := keyFile.Close(); err != nil {
 		return "", err
 	}
-	machineType, _ := req.Spec["machine_type"].(string)
+	templateType, _ := req.Spec["machine_type"].(string)
 	minutes := int(math.Ceil(time.Until(req.Deadline).Minutes()))
-	out, cerr := n.nsc(ctx, nscCreateTimeout, "create", "--bare", "--machine_type", machineType,
+	out, cerr := n.nsc(ctx, nscCreateTimeout, "create", "--bare", "--machine_type", templateType,
 		"--duration", fmt.Sprintf("%dm", max(minutes, 10)), "--ssh_key", keyFile.Name(),
-		"--label", "hostel.name="+req.Name, "--label", "hostel.machine="+req.Machine,
-		"--purpose", "hostel room "+req.Name, "-o", "json")
+		"--label", "hostel.name="+req.Name, "--label", "hostel.machine="+req.Template,
+		"--purpose", "hostel machine "+req.Name, "-o", "json")
 	if cerr == nil {
 		var created struct {
 			ID string `json:"instance_id"`
@@ -224,9 +225,9 @@ func (n *Namespace) createInstance(ctx context.Context, req ProvisionRequest) (s
 	return "", fmt.Errorf("nsc create %s: no instance_id in the output and the instance is not in the list", req.Name)
 }
 
-// destroyOthers destroys other instances with the room's name: a create call
+// destroyOthers destroys other instances with the machine's name: a create call
 // of a killed server can still have made one that the list did not show yet.
-// Reconcile destroys one that appears later, when the room is destroyed.
+// Reconcile destroys one that appears later, when the machine is destroyed.
 func (n *Namespace) destroyOthers(ctx context.Context, name, keep string) {
 	list, err := n.instances(ctx)
 	if err != nil {
@@ -234,26 +235,26 @@ func (n *Namespace) destroyOthers(ctx context.Context, name, keep string) {
 	}
 	for _, i := range list {
 		if i.Labels["hostel.name"] == name && i.ID != keep {
-			n.log.Warn("destroy a second instance of a room", "provider", n.cfg.Name, "room", name, "instance", i.ID)
+			n.log.Warn("destroy a second instance of a machine", "provider", n.cfg.Name, "machine", name, "instance", i.ID)
 			n.nsc(ctx, nscCallTimeout, "destroy", i.ID, "--force")
 		}
 	}
 }
 
-// instanceRunCommand is the shell command on the instance that starts the room
+// instanceRunCommand is the shell command on the instance that starts the machine
 // container. "nsc ssh" runs it with the instance's shell.
 func instanceRunCommand(image, serverKey string) string {
 	return fmt.Sprintf("docker run -d --name %s --restart unless-stopped --network host $([ -e /dev/kvm ] && echo --device /dev/kvm) "+
 		"-e HOSTEL_AUTHORIZED_KEY=%s -e HOSTEL_SSH_PORT=%d --entrypoint /bin/sh %s -c %s",
-		instanceContainer, shellQuote(serverKey), instanceSSHPort, shellQuote(image), shellQuote(instanceRoomScript))
+		instanceContainer, shellQuote(serverKey), instanceSSHPort, shellQuote(image), shellQuote(instanceMachineScript))
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-func (n *Namespace) destroyInstance(ctx context.Context, room RoomRef) error {
-	id := room.ID
+func (n *Namespace) destroyInstance(ctx context.Context, machine MachineRef) error {
+	id := machine.ID
 	if id == "" {
-		i, err := n.findInstance(ctx, room.Name)
+		i, err := n.findInstance(ctx, machine.Name)
 		if err != nil {
 			return err
 		}
@@ -263,31 +264,31 @@ func (n *Namespace) destroyInstance(ctx context.Context, room RoomRef) error {
 	return err
 }
 
-func (n *Namespace) listInstances(ctx context.Context, prefix string) ([]RoomRef, error) {
+func (n *Namespace) listInstances(ctx context.Context, prefix string) ([]MachineRef, error) {
 	list, err := n.instances(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var out []RoomRef
+	var out []MachineRef
 	for _, i := range list {
 		if name := i.Labels["hostel.name"]; strings.HasPrefix(name, prefix) {
-			out = append(out, RoomRef{Name: name, Machine: i.Labels["hostel.machine"], ID: i.ID})
+			out = append(out, MachineRef{Name: name, Template: i.Labels["hostel.machine"], ID: i.ID})
 		}
 	}
 	return out, nil
 }
 
-func (n *Namespace) extendInstance(ctx context.Context, room RoomRef, deadline time.Time) error {
+func (n *Namespace) extendInstance(ctx context.Context, machine MachineRef, deadline time.Time) error {
 	minutes := int(math.Ceil(time.Until(deadline).Minutes()))
-	_, err := n.nsc(ctx, nscCallTimeout, "instance", "extend-duration", room.ID, "--ensure_minimum", fmt.Sprintf("%dm", max(minutes, 1)))
+	_, err := n.nsc(ctx, nscCallTimeout, "instance", "extend-duration", machine.ID, "--ensure_minimum", fmt.Sprintf("%dm", max(minutes, 1)))
 	return err
 }
 
-func (n *Namespace) instanceAccess(room RoomRef) RoomAccess {
-	return RoomAccess{User: instanceUser, Dial: n.portForwardDial(room.ID), Signers: []ssh.Signer{n.serverKey}}
+func (n *Namespace) instanceAccess(machine MachineRef) MachineAccess {
+	return MachineAccess{User: instanceUser, Dial: n.portForwardDial(machine.ID), Signers: []ssh.Signer{n.serverKey}}
 }
 
-// portForwardDial starts "nsc instance port-forward" to the room's SSH port for
+// portForwardDial starts "nsc instance port-forward" to the machine's SSH port for
 // each connection, connects to the local port that it prints, and stops it
 // when the connection closes.
 func (n *Namespace) portForwardDial(id string) func(ctx context.Context) (net.Conn, error) {

@@ -11,13 +11,13 @@ import (
 	"time"
 )
 
-// Token roles: a user token has the role of its user; a room token has
-// RoleRoom.
+// Token roles: a user token has the role of its user; a machine token has
+// RoleMachine.
 const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
-	RoleRoom   = "room"
-	tokenUser  = "user"
+	RoleAdmin   = "admin"
+	RoleMember  = "member"
+	RoleMachine = "machine"
+	tokenUser   = "user"
 )
 
 var (
@@ -45,7 +45,7 @@ type User struct {
 const (
 	InviteUser     = "user"
 	InviteComputer = "computer"
-	InviteMachine  = "machine"
+	InviteTemplate = "machine"
 )
 
 type Invite struct {
@@ -53,7 +53,7 @@ type Invite struct {
 	Role string
 	Name string
 	// Machine is the machine of a machine invite (JSON).
-	Machine   string
+	Template  string
 	UserID    int64
 	CreatedBy int64
 	ExpiresAt time.Time
@@ -115,7 +115,7 @@ func insertUserToken(ctx context.Context, tx *sql.Tx, userID int64, computer str
 	if err != nil {
 		return 0, "", err
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO tokens (name, role, machine, sha256, created_at, user_id, computer) VALUES (?, ?, '', ?, ?, ?, ?)`,
+	res, err := tx.ExecContext(ctx, `INSERT INTO tokens (name, role, template, sha256, created_at, user_id, computer) VALUES (?, ?, '', ?, ?, ?, ?)`,
 		computer, tokenUser, hashSecret(secret), now.UnixMilli(), userID, computer)
 	if err != nil {
 		return 0, "", fmt.Errorf("insert token: %w", err)
@@ -134,9 +134,9 @@ func (s *Store) CreateInvite(ctx context.Context, inv Invite, now time.Time) ([]
 	if _, err := rand.Read(secret); err != nil {
 		return nil, err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO invites (kind, secret_sha256, role, name, user_id, created_by, created_at, expires_at, machine)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO invites (kind, secret_sha256, role, name, user_id, created_by, created_at, expires_at, template)
 		VALUES (?, ?, ?, ?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?)`,
-		inv.Kind, hashSecret(string(secret)), inv.Role, inv.Name, inv.UserID, inv.CreatedBy, now.UnixMilli(), inv.ExpiresAt.UnixMilli(), inv.Machine)
+		inv.Kind, hashSecret(string(secret)), inv.Role, inv.Name, inv.UserID, inv.CreatedBy, now.UnixMilli(), inv.ExpiresAt.UnixMilli(), inv.Template)
 	if err != nil {
 		return nil, fmt.Errorf("insert invite: %w", err)
 	}
@@ -203,15 +203,15 @@ func (s *Store) UseInvite(ctx context.Context, secret []byte, name, computer str
 // its machine (JSON), and its creator. ErrInviteInvalid if there is none.
 func (s *Store) MachineInvite(ctx context.Context, secret []byte, now time.Time) (int64, string, int64, error) {
 	var id int64
-	var machine string
+	var template string
 	var createdBy sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id, machine, created_by FROM invites
+	err := s.db.QueryRowContext(ctx, `SELECT id, template, created_by FROM invites
 		WHERE secret_sha256 = ? AND used_at IS NULL AND expires_at > ? AND kind = 'machine'`, hashSecret(string(secret)), now.UnixMilli()).
-		Scan(&id, &machine, &createdBy)
+		Scan(&id, &template, &createdBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", 0, ErrInviteInvalid
 	}
-	return id, machine, createdBy.Int64, err
+	return id, template, createdBy.Int64, err
 }
 
 // ReopenMachineInvite makes a machine invite usable again after a join that
@@ -316,7 +316,7 @@ func (s *Store) SetUserRole(ctx context.Context, id int64, role string) error {
 // is demoted or removed: they must not let anybody in later.
 func closeInvites(ctx context.Context, tx *sql.Tx, adminID int64, now time.Time) error {
 	_, err := tx.ExecContext(ctx, `UPDATE invites SET used_at = ? WHERE created_by = ? AND kind IN (?, ?) AND used_at IS NULL`,
-		now.UnixMilli(), adminID, InviteUser, InviteMachine)
+		now.UnixMilli(), adminID, InviteUser, InviteTemplate)
 	return err
 }
 

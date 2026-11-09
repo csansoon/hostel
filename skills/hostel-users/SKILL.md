@@ -13,10 +13,10 @@ Agents on a computer use that computer's connection: they are not users.
 
 | Action | member | admin |
 |---|---|---|
-| See status, rooms, the waiting line, tools, users, configuration | yes | yes |
+| See status, machines, the waiting line, tools, users, configuration | yes | yes |
 | Acquire and use leases; release their own lease | yes | yes |
 | Release, move, or change the priority of another user's lease | no | yes |
-| Change tools, rooms, providers, settings | no | yes |
+| Change tools, machines, providers, settings | no | yes |
 | Invite, change, or remove users | no | yes |
 
 - Members see the configuration with secret values (`env`, `command_env`,
@@ -29,7 +29,7 @@ Agents on a computer use that computer's connection: they are not users.
 hostel config users          # NAME, ROLE, COMPUTERS, SINCE
 ```
 
-In the app: Front desk › Guest list.
+In the app: Front desk › Guests.
 
 ## Invite a person (admin)
 
@@ -52,7 +52,7 @@ The code works once, for 24 hours.
 Without `--name`, the user gives their name at connect (default:
 `git config user.name`). The server refuses a name that another user has.
 
-In the app: Front desk › Invite a guest, then `m` (member) or `a` (admin). The
+In the app: Front desk › Guests › Invite a guest, then `m` (member) or `a` (admin). The
 app shows the code once, and prints it again when you quit, to copy.
 
 Send the person to `hostel-install`: they install `hostel` and run the
@@ -65,7 +65,7 @@ hostel config users code
 ```
 
 Run the printed `hostel connect hostel1-...` on the other computer. It connects
-as the same user, with its own token. In the app (members): Front desk › Add
+as the same user, with its own token. In the app: Front desk › Guests › Add
 your other computer.
 
 ## Change a role (admin)
@@ -75,7 +75,7 @@ hostel config users set "Alice Example" --role admin
 hostel config users set "Alice Example" --role member
 ```
 
-In the app: Front desk › Guest list, select the user, `r`.
+In the app: Front desk › Guests, select the user, `r`.
 
 ## Remove one computer (admin)
 
@@ -99,7 +99,7 @@ hostel config users remove "Alice Example"
 
 The server deletes their tokens (all their computers are disconnected),
 removes their queue entries, and ends their active leases with cleanup. In the
-app: Front desk › Guest list, select the user, `x`.
+app: Front desk › Guests, select the user, `x`.
 
 ## When nobody can sign in as admin
 
@@ -120,8 +120,8 @@ It reads the database directly and does not need the API or a connection.
   change, make new codes.
 - Repeated wrong codes from one address are rate limited ("too many failed
   attempts; wait a minute").
-- Room machines do not use user invites. They use machine codes from
-  `hostel config rooms add` (`hostel-rooms`).
-- `hostel admin token create --name <name> --role room --machine <provider>/<machine>`
-  makes a room token for a machine that you connect by hand. Users always
+- Machines do not use user invites. They use machine codes from
+  `hostel config machines add` (`hostel-machines`).
+- `hostel admin token create --name <name> --role machine --machine <provider>/<machine>`
+  makes a machine token for a machine that you connect by hand. Users always
   connect with invite codes.

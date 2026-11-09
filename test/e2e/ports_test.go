@@ -33,8 +33,8 @@ func localHTTP(t *testing.T, addr, name string) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// roomGet sends an HTTP request from the room to a room port (a tunnel).
-func (f *fixture) roomGet(port, path string) result {
+// machineGet sends an HTTP request from the machine to a machine port (a tunnel).
+func (f *fixture) machineGet(port, path string) result {
 	return f.e.hostel("run", "--", fmt.Sprintf(`printf 'GET %s HTTP/1.0\r\n\r\n' | nc -N -w 5 127.0.0.1 %s`, path, port))
 }
 
@@ -81,13 +81,13 @@ func TestTunnels(t *testing.T) {
 	if r := f.e.mustHostel("run", "--", "echo $API_URL $HOSTEL_TUNNEL_API_PORT"); r.stdout != "http://localhost:7500 7500\n" {
 		t.Fatalf("tunnel environment: %q", r.stdout)
 	}
-	// The room side alone does not make a tunnel work: the state and the
+	// The machine side alone does not make a tunnel work: the state and the
 	// facts say what is missing, and the lease goes on.
 	nothing := fmt.Sprintf("nothing listens on local port %d", free)
 	if r := f.e.mustHostel("tunnel", "list"); !strings.Contains(r.stdout, nothing) || strings.Contains(r.stdout, "confirmed") {
 		t.Fatalf("tunnel list without a local server:\n%s", r.stdout)
 	}
-	if r := f.e.mustHostel("info"); !strings.Contains(r.stdout, fmt.Sprintf("api: room port 7500 → local $PORT (%d): %s", free, nothing)) {
+	if r := f.e.mustHostel("info"); !strings.Contains(r.stdout, fmt.Sprintf("api: machine port 7500 → local $PORT (%d): %s", free, nothing)) {
 		t.Fatalf("facts without a local server:\n%s", r.stdout)
 	}
 	if r := f.e.mustHostel("tunnel", "add", "ghost", "--local-port-env", "HOSTEL_NOT_SET"); !strings.Contains(r.stdout, "no local port: HOSTEL_NOT_SET is not set") {
@@ -99,7 +99,7 @@ func TestTunnels(t *testing.T) {
 	if r := f.e.mustHostel("tunnel", "list"); !strings.Contains(r.stdout, "confirmed") {
 		t.Fatalf("tunnel list with a local server:\n%s", r.stdout)
 	}
-	if r := f.roomGet("$HOSTEL_TUNNEL_API_PORT", "/a"); !strings.Contains(r.stdout, "hello from first /a") {
+	if r := f.machineGet("$HOSTEL_TUNNEL_API_PORT", "/a"); !strings.Contains(r.stdout, "hello from first /a") {
 		t.Fatalf("tunnel: %s", r)
 	}
 	// The guest moves its server to another port, on ::1 only: .env changes,
@@ -107,45 +107,45 @@ func TestTunnels(t *testing.T) {
 	v6 := freePort(t)
 	localHTTP(t, fmt.Sprintf("[::1]:%d", v6), "second")
 	f.write(".env", fmt.Sprintf("PORT=%d\n", v6))
-	if r := f.roomGet("7500", "/b"); !strings.Contains(r.stdout, "hello from second /b") {
+	if r := f.machineGet("7500", "/b"); !strings.Contains(r.stdout, "hello from second /b") {
 		t.Fatalf("tunnel after the .env change: %s", r)
 	}
-	// A room client on ::1 reaches the tunnel too.
+	// A machine client on ::1 reaches the tunnel too.
 	if r := f.e.hostel("run", "--", "printf 'GET /v6 HTTP/1.0\\r\\n\\r\\n' | nc -N -w 5 ::1 7500"); !strings.Contains(r.stdout, "hello from second /v6") {
-		t.Fatalf("tunnel from ::1 on the room: %s", r)
+		t.Fatalf("tunnel from ::1 on the machine: %s", r)
 	}
 	f.e.mustHostel("tunnel", "set", "api", "--local-port", fmt.Sprint(free))
-	if r := f.roomGet("7500", "/c"); !strings.Contains(r.stdout, "hello from first /c") {
+	if r := f.machineGet("7500", "/c"); !strings.Contains(r.stdout, "hello from first /c") {
 		t.Fatalf("tunnel after tunnel set --local-port: %s", r)
 	}
 
-	// Runtime tunnels with a fixed room port.
-	f.e.mustHostel("tunnel", "add", "web", "--local-port", fmt.Sprint(free), "--room-port", "7600")
+	// Runtime tunnels with a fixed machine port.
+	f.e.mustHostel("tunnel", "add", "web", "--local-port", fmt.Sprint(free), "--machine-port", "7600")
 	if r := f.e.mustHostel("run", "--", "echo $HOSTEL_TUNNEL_WEB_PORT"); r.stdout != "7600\n" {
 		t.Fatalf("new tunnel variable: %q", r.stdout)
 	}
-	if r := f.roomGet("7600", "/web"); !strings.Contains(r.stdout, "hello from first /web") {
+	if r := f.machineGet("7600", "/web"); !strings.Contains(r.stdout, "hello from first /web") {
 		t.Fatalf("new tunnel: %s", r)
 	}
-	f.e.mustHostel("tunnel", "set", "web", "--room-port", "7601")
-	if r := f.roomGet("$HOSTEL_TUNNEL_WEB_PORT", "/moved"); !strings.Contains(r.stdout, "hello from first /moved") {
+	f.e.mustHostel("tunnel", "set", "web", "--machine-port", "7601")
+	if r := f.machineGet("$HOSTEL_TUNNEL_WEB_PORT", "/moved"); !strings.Contains(r.stdout, "hello from first /moved") {
 		t.Fatalf("moved tunnel: %s", r)
 	}
 	if r := f.e.mustHostel("run", "--", "nc -z 127.0.0.1 7600 && echo open || echo closed"); r.stdout != "closed\n" {
-		t.Fatalf("old room port after tunnel set --room-port: %q", r.stdout)
+		t.Fatalf("old machine port after tunnel set --machine-port: %q", r.stdout)
 	}
 	f.e.mustHostel("tunnel", "remove", "web")
 	if r := f.e.mustHostel("run", "--", "echo \"[$HOSTEL_TUNNEL_WEB_PORT]\"; nc -z 127.0.0.1 7601 && echo open || echo closed"); r.stdout != "[]\nclosed\n" {
 		t.Fatalf("after tunnel remove: %q", r.stdout)
 	}
-	// A fixed port that a room service uses fails with a clear message.
+	// A fixed port that a machine service uses fails with a clear message.
 	f.e.mustHostel("run", "--detach", "--", "nc -lk 127.0.0.1 7650")
-	f.e.waitFor("room service listens", time.Minute, func() bool {
+	f.e.waitFor("machine service listens", time.Minute, func() bool {
 		return f.e.hostel("run", "--", "nc -z 127.0.0.1 7650").code == 0
 	})
-	r := f.e.hostel("tunnel", "add", "busy", "--local-port", fmt.Sprint(free), "--room-port", "7650")
+	r := f.e.hostel("tunnel", "add", "busy", "--local-port", fmt.Sprint(free), "--machine-port", "7650")
 	if r.code != 1 || !strings.Contains(r.stderr, "refused to listen on port 7650") {
-		t.Fatalf("tunnel on a used room port: %s", r)
+		t.Fatalf("tunnel on a used machine port: %s", r)
 	}
 	if r := f.e.mustHostel("tunnel", "list"); strings.Contains(r.stdout, "busy") || !strings.Contains(r.stdout, "api     7500") {
 		t.Fatalf("tunnel list after the refused tunnel:\n%s", r.stdout)
@@ -154,7 +154,7 @@ func TestTunnels(t *testing.T) {
 	// The tunnel reconnects after a drop (server restart).
 	f.s = f.s.restart()
 	f.e.waitFor("tunnel after the restart", time.Minute, func() bool {
-		return strings.Contains(f.roomGet("7500", "/again").stdout, "hello from first /again")
+		return strings.Contains(f.machineGet("7500", "/again").stdout, "hello from first /again")
 	})
 }
 
@@ -178,7 +178,7 @@ setup = ["printf 'GET /setup HTTP/1.0\\r\\n\\r\\n' | nc -N -w 5 127.0.0.1 $HOSTE
 }
 
 // TestForwards is scenario 14 (forwards and gateway checks): hostel forward
-// reaches a room server; the gateway refuses unregistered remote forwards; an
+// reaches a machine server; the gateway refuses unregistered remote forwards; an
 // open forward or tunnel does not prevent idle expiry.
 func TestForwards(t *testing.T) {
 	t.Parallel()
@@ -187,7 +187,7 @@ func TestForwards(t *testing.T) {
 		"hostel.toml": "[tunnels.api]\nlocal_port = " + fmt.Sprint(port) + "\n",
 	}})
 	f.acquire()
-	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-room | nc -N -l 127.0.0.1 7700; done")
+	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-machine | nc -N -l 127.0.0.1 7700; done")
 	r := f.e.mustHostel("forward", "7700")
 	local := strings.TrimSpace(r.stdout)
 	var got string
@@ -202,7 +202,7 @@ func TestForwards(t *testing.T) {
 		got = string(b)
 		return got != ""
 	})
-	if got != "hello-room\n" {
+	if got != "hello-machine\n" {
 		t.Fatalf("forward: %q", got)
 	}
 	if r := f.e.mustHostel("forward", "list"); !strings.Contains(r.stdout, "7700") {
@@ -233,7 +233,7 @@ func TestForwards(t *testing.T) {
 	cmd.Close()
 
 	// The forward and the tunnel do not keep the lease alive.
-	f.waitSlotFree()
+	f.waitRoomFree()
 	f.e.waitFor("port process stops", time.Minute, func() bool {
 		_, err := net.DialTimeout("tcp", local, time.Second)
 		return err != nil
@@ -265,10 +265,10 @@ func TestEndOfAccess(t *testing.T) {
 	}})
 	first := f.acquire()
 	key1 := f.leaseKey()
-	room := fmt.Sprintf("127.0.0.1:%d", f.c.port)
-	if c, err := sshDial(room, "hostel", key1); err == nil {
+	machine := fmt.Sprintf("127.0.0.1:%d", f.c.port)
+	if c, err := sshDial(machine, "hostel", key1); err == nil {
 		c.Close()
-		t.Fatal("the room accepted the lease key directly")
+		t.Fatal("the machine accepted the lease key directly")
 	}
 	shell := make(chan result, 1)
 	go func() { shell <- f.e.hostel("ssh", "--", "sleep 60") }()
@@ -288,14 +288,14 @@ func TestEndOfAccess(t *testing.T) {
 		c.Close()
 		t.Fatal("the gateway accepted the key of a released lease")
 	}
-	f.waitSlotFree()
+	f.waitRoomFree()
 	if got := f.c.sh("nc -z 127.0.0.1 7500 && echo open || echo closed"); got != "closed" {
 		t.Fatalf("tunnel port after the release: %s", got)
 	}
 
-	// The next lease on the same slot binds the same tunnel port.
+	// The next lease on the same room binds the same tunnel port.
 	second := f.acquire()
-	if r := f.roomGet("$HOSTEL_TUNNEL_API_PORT", "/next"); !strings.Contains(r.stdout, "hello from guest /next") || !strings.Contains(f.e.mustHostel("run", "--", "echo $HOSTEL_TUNNEL_API_PORT").stdout, "7500") {
+	if r := f.machineGet("$HOSTEL_TUNNEL_API_PORT", "/next"); !strings.Contains(r.stdout, "hello from guest /next") || !strings.Contains(f.e.mustHostel("run", "--", "echo $HOSTEL_TUNNEL_API_PORT").stdout, "7500") {
 		t.Fatalf("tunnel of the next lease: %s", r)
 	}
 	if c, err := sshDial(f.s.gateway, second+".cmd", key1); err == nil {
@@ -303,9 +303,9 @@ func TestEndOfAccess(t *testing.T) {
 		t.Fatal("the gateway accepted the key of another lease")
 	}
 	key2 := f.leaseKey()
-	if c, err := sshDial(room, "hostel", key2); err == nil {
+	if c, err := sshDial(machine, "hostel", key2); err == nil {
 		c.Close()
-		t.Fatal("the room accepted the lease key directly")
+		t.Fatal("the machine accepted the lease key directly")
 	}
 
 	// An admin release closes an active guest shell at once.
@@ -321,9 +321,9 @@ func TestEndOfAccess(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("the open shell did not close at the admin release")
 	}
-	f.waitSlotFree()
-	if c, err := sshDial(room, "hostel", key2); err == nil {
+	f.waitRoomFree()
+	if c, err := sshDial(machine, "hostel", key2); err == nil {
 		c.Close()
-		t.Fatal("the room accepted the lease key after the lease")
+		t.Fatal("the machine accepted the lease key after the lease")
 	}
 }

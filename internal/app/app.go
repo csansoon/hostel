@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -105,6 +106,11 @@ type model struct {
 	latest  string
 	updated bool
 
+	// usage is the last sample of GET /v1/usage, by machine name.
+	usage                      map[string]protocol.Usage
+	usageRead                  time.Time
+	usageLoading, usageTicking bool
+
 	pages []page
 	// err is the last data error; msg is the result of the last action.
 	err, msg string
@@ -166,6 +172,7 @@ func (m *model) useGuest(g *config.Guest) {
 	}
 	m.guest, m.c = g, c
 	m.gen++
+	m.usage, m.usageRead, m.usageLoading, m.usageTicking = nil, time.Time{}, false, false
 	m.st, m.loaded, m.tools, m.info = protocol.Status{}, false, nil, protocol.Info{}
 	m.toolsRead, m.toolsErr = false, ""
 }
@@ -269,8 +276,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pop, m.msg = nil, "The queue changed: the question is cancelled. Look again, and try again."
 		}
 		now := time.Now()
-		for _, ms := range msg.st.Machines {
-			m.note("m:"+ms.Key, machineState(msg.st, ms, now).word)
+		for _, ms := range msg.st.Templates {
+			m.note("m:"+ms.Key, templateState(msg.st, ms, now).word)
 		}
 		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readTools(), m.frame()}
 		// The server info, until a read of it works.
@@ -281,6 +288,28 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, l.load(m))
 		}
 		return m, tea.Batch(cmds...)
+	case usageMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.usageLoading, m.usageRead = false, time.Now()
+		if msg.err == nil {
+			m.usage = msg.list.Machines
+		}
+		return m, m.usageTick()
+	case usageTickMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
+		m.usageTicking = false
+		if _, ok := m.top().(*rooms); ok {
+			return m, m.readUsage()
+		}
+		// A page above Rooms: the gauges continue when it closes.
+		if slices.ContainsFunc(m.pages, func(p page) bool { _, ok := p.(*rooms); return ok }) {
+			return m, m.usageTick()
+		}
+		return m, nil
 	case pollMsg:
 		if msg.gen != m.gen {
 			return m, nil
@@ -298,7 +327,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.tools, m.toolsRead = msg.p, true
 		for _, t := range m.tools {
-			m.note("t:"+t.Name, fmt.Sprint(freeMachines(m, t), t.Waiting))
+			m.note("t:"+t.Name, fmt.Sprint(freeTemplates(m, t), t.Waiting))
 		}
 		return m, m.frame()
 	case toolsRetryMsg:
@@ -329,7 +358,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err == nil {
 			r := msg.resp
-			m.keepText(fmt.Sprintf("Run one of these on the machine %s (as an administrator):\n\nmacOS or Linux:\n  %s\n\nWindows (PowerShell):\n  %s", r.Machine, r.Unix, r.Windows))
+			m.keepText(fmt.Sprintf("Run one of these on the machine %s (as an administrator):\n\nmacOS or Linux:\n  %s\n\nWindows (PowerShell):\n  %s", r.Template, r.Unix, r.Windows))
 		}
 		if a, ok := m.top().(*addMachine); ok {
 			a.done(msg)
@@ -625,7 +654,7 @@ func (m *model) keyList() string {
 	return b.String() + "\n" + note("Press ? or esc to close.")
 }
 
-// plural is "1 room" or "2 rooms".
+// plural is "1 machine" or "2 machines".
 func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word

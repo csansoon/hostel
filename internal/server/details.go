@@ -14,34 +14,34 @@ import (
 )
 
 // detailsJobsTimeout bounds all job lists of one details request: a slow or
-// offline room must not block the details.
+// offline machine must not block the details.
 const detailsJobsTimeout = 10 * time.Second
 
-// handleRoomDetails is GET /v1/rooms/{name} (M10): the room, its machine, its
-// leases with their jobs (from the room's helper; the server does not store
+// handleMachineDetails is GET /v1/machines/{name} (M10): the machine, its template, its
+// leases with their jobs (from the machine's helper; the server does not store
 // jobs), the waiting leases that it can serve, and its last events.
-func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleMachineDetails(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := r.PathValue("name")
+	machines, err := s.store.Machines(ctx)
+	if err != nil {
+		s.internalError(w, "read machines", err)
+		return
+	}
+	i := slices.IndexFunc(machines, func(rm store.Machine) bool { return rm.Name == name })
+	if i < 0 {
+		writeError(w, http.StatusNotFound, "", fmt.Sprintf("no machine %q; \"hostel status\" lists the machines", name))
+		return
+	}
+	machine := machines[i]
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		s.internalError(w, "read rooms", err)
 		return
 	}
-	i := slices.IndexFunc(rooms, func(rm store.Room) bool { return rm.Name == name })
-	if i < 0 {
-		writeError(w, http.StatusNotFound, "", fmt.Sprintf("no room %q; \"hostel status\" lists the rooms", name))
-		return
-	}
-	room := rooms[i]
-	slots, err := s.store.Slots(ctx)
+	rts, err := s.store.MachineTools(ctx)
 	if err != nil {
-		s.internalError(w, "read slots", err)
-		return
-	}
-	rts, err := s.store.RoomTools(ctx)
-	if err != nil {
-		s.internalError(w, "read room tools", err)
+		s.internalError(w, "read machine tools", err)
 		return
 	}
 	leases, err := s.store.ActiveLeases(ctx)
@@ -54,26 +54,26 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read users", err)
 		return
 	}
-	out := protocol.RoomDetails{Room: roomStatus(s.config(), room, slots, rts), Leases: []protocol.LeaseStatus{},
+	out := protocol.MachineDetails{Machine: machineStatus(s.config(), machine, rooms, rts), Leases: []protocol.LeaseStatus{},
 		Jobs: map[string][]protocol.JobInfo{}, Queue: []protocol.LeaseStatus{}, Events: []protocol.Event{}}
-	m := s.config().Machine(room.Provider + "/" + room.Machine)
+	m := s.config().Template(machine.Provider + "/" + machine.Template)
 	if m != nil {
-		ms := machineStatus(m)
-		out.Machine = &ms
+		ms := templateStatus(m)
+		out.Template = &ms
 	}
 	view, err := s.loadToolView(ctx)
 	if err != nil {
-		s.internalError(w, "read rooms", err)
+		s.internalError(w, "read machines", err)
 		return
 	}
-	machines := view.schedMachines()
-	var onRoom []store.Lease
+	templates := view.schedTemplates()
+	var onMachine []store.Lease
 	for _, l := range leases {
 		switch {
-		case l.RoomID == room.ID:
+		case l.MachineID == machine.ID:
 			out.Leases = append(out.Leases, leaseStatus(l, users))
-			onRoom = append(onRoom, l)
-		case l.State == protocol.LeaseQueued && m != nil && slices.Contains(scheduler.Candidates(machines, leaseRequest(view.lc.cfg, l)), m.Key()):
+			onMachine = append(onMachine, l)
+		case l.State == protocol.LeaseQueued && m != nil && slices.Contains(scheduler.Candidates(templates, leaseRequest(view.lc.cfg, l)), m.Key()):
 			ls := leaseStatus(l, users)
 			ls.EstimatedWaitSeconds, _ = s.leaseWait(ctx, l)
 			out.Queue = append(out.Queue, ls)
@@ -94,7 +94,7 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 	tok := requestToken(r)
 	visible := map[string]bool{}
 	var ready []store.Lease
-	for _, l := range onRoom {
+	for _, l := range onMachine {
 		if tok.Role == protocol.RoleAdmin || s.ownLease(r, tok, l) {
 			visible[l.ID] = true
 			if l.State == protocol.LeaseReady {
@@ -102,13 +102,13 @@ func (s *Server) handleRoomDetails(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// The live use and the jobs come from the room at the same time.
+	// The live use and the jobs come from the machine at the same time.
 	usage := make(chan *protocol.Usage, 1)
-	go func() { usage <- s.roomUsage(ctx, room) }()
-	jobs, jobsErr := s.roomJobs(ctx, ready)
+	go func() { usage <- s.machineUsage(ctx, machine) }()
+	jobs, jobsErr := s.machineJobs(ctx, ready)
 	out.Jobs, out.JobsError = jobs, jobsErr
 	out.Usage = <-usage
-	events, err := s.store.RoomEvents(ctx, room.ID, 10)
+	events, err := s.store.MachineEvents(ctx, machine.ID, 10)
 	if err != nil {
 		s.internalError(w, "read events", err)
 		return
@@ -132,9 +132,9 @@ func (s *Server) ownEvent(r *http.Request, tok store.Token, e store.Event) bool 
 	return err == nil && s.ownLease(r, tok, l)
 }
 
-// roomJobs asks the room's helper for the jobs of each lease's slot, in
+// machineJobs asks the machine's helper for the jobs of each lease's room, in
 // parallel and under one deadline.
-func (s *Server) roomJobs(ctx context.Context, leases []store.Lease) (map[string][]protocol.JobInfo, string) {
+func (s *Server) machineJobs(ctx context.Context, leases []store.Lease) (map[string][]protocol.JobInfo, string) {
 	ctx, cancel := context.WithTimeout(ctx, detailsJobsTimeout)
 	defer cancel()
 	out := map[string][]protocol.JobInfo{}
@@ -164,38 +164,108 @@ func (s *Server) roomJobs(ctx context.Context, leases []store.Lease) (map[string
 	return out, ""
 }
 
-// leaseJobs asks the room's helper for the jobs of a lease's slot.
+// leaseJobs asks the machine's helper for the jobs of a lease's room.
 func (s *Server) leaseJobs(ctx context.Context, l store.Lease) ([]protocol.JobInfo, error) {
-	room, _, err := s.openSlot(ctx, l.RoomID, l.SlotName)
+	machine, _, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
 		return nil, err
 	}
-	defer room.Conn.Close()
+	defer machine.Conn.Close()
 	var list struct {
 		Jobs []protocol.JobInfo `json:"jobs"`
 	}
-	if err := room.Helper(ctx, []string{"job", "list", "--slot", l.SlotName}, nil, &list); err != nil {
+	if err := machine.Helper(ctx, []string{"job", "list", "--room", l.RoomName}, nil, &list); err != nil {
 		return nil, err
 	}
 	return list.Jobs, nil
 }
 
-// roomUsage asks the room's helper for its live use (M10b); nil when the room
+// machineUsage asks the machine's helper for its live use (M10b); nil when the machine
 // does not run or does not answer within detailsJobsTimeout.
-func (s *Server) roomUsage(ctx context.Context, r store.Room) *protocol.Usage {
-	if r.State != protocol.RoomRunning {
+func (s *Server) machineUsage(ctx context.Context, r store.Machine) *protocol.Usage {
+	if r.State != protocol.MachineRunning {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, detailsJobsTimeout)
 	defer cancel()
-	room, _, err := s.openRoom(ctx, r.ID)
+	machine, _, err := s.openMachine(ctx, r.ID)
 	if err != nil {
 		return nil
 	}
-	defer room.Conn.Close()
+	defer machine.Conn.Close()
 	var u protocol.Usage
-	if err := room.Helper(ctx, []string{"usage"}, nil, &u); err != nil {
+	if err := machine.Helper(ctx, []string{"usage"}, nil, &u); err != nil {
 		return nil
 	}
 	return &u
+}
+
+// usageMaxAge is how long a sample of the machines' use stays valid: the app
+// polls GET /v1/usage, and each sample opens SSH to each running machine.
+const usageMaxAge = 8 * time.Second
+
+// usageParallel bounds the SSH connections of one sample.
+const usageParallel = 8
+
+// usageSampleTimeout bounds one sample, below the app's request timeout.
+const usageSampleTimeout = 20 * time.Second
+
+// usageCache holds the last sample. The server samples only while a client
+// asks. busy has room for one: clients wait for the sample of another client,
+// and each one can leave when its request ends.
+type usageCache struct {
+	busy     chan struct{}
+	at       time.Time
+	machines map[string]protocol.Usage
+}
+
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	select {
+	case s.usage.busy <- struct{}{}:
+		defer func() { <-s.usage.busy }()
+	case <-r.Context().Done():
+		return
+	}
+	if time.Since(s.usage.at) >= usageMaxAge {
+		// Not the context of this request: others share this sample, also
+		// when this client leaves.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), usageSampleTimeout)
+		defer cancel()
+		machines, err := s.store.Machines(ctx)
+		if err != nil {
+			s.internalError(w, "read machines", err)
+			return
+		}
+		s.usage.machines, s.usage.at = s.sampleUsage(ctx, machines), time.Now()
+	}
+	writeJSON(w, http.StatusOK, protocol.UsageList{Machines: s.usage.machines})
+}
+
+// sampleUsage asks each running machine for its use; each read has the
+// deadline of machineUsage. A machine that does not answer has no entry.
+func (s *Server) sampleUsage(ctx context.Context, machines []store.Machine) map[string]protocol.Usage {
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		out = map[string]protocol.Usage{}
+		sem = make(chan struct{}, usageParallel)
+	)
+	for _, m := range machines {
+		if m.State != protocol.MachineRunning {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if u := s.machineUsage(ctx, m); u != nil {
+				mu.Lock()
+				out[m.Name] = *u
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return out
 }

@@ -7,19 +7,20 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/machineops"
 	"github.com/csansoon/hostel/internal/protocol"
-	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/store"
 )
 
 // leaseStepTimeout bounds one lease step without its scripts.
 const leaseStepTimeout = 10 * time.Minute
 
-// roomWait is the poll interval of a lease that waits for its room.
-const roomWait = 500 * time.Millisecond
+// machineWait is the poll interval of a lease that waits for its machine.
+const machineWait = 500 * time.Millisecond
 
 // runLease drives a lease through its transitional states. Each step reads the
 // row, does its I/O, and writes the result with a compare-and-set; if another
@@ -61,50 +62,50 @@ func (s *Server) leaseStepFailed(ctx context.Context, l store.Lease, stepErr err
 	from := []string{l.State}
 	// Read the lease again: the step can have set began_at. A release or an
 	// expiry during the step changed the state: the cleaning step owns the
-	// lease now, so this step does not break the room or clean up.
+	// lease now, so this step does not break the machine or clean up.
 	cur, err := s.store.Lease(ctx, l.ID)
 	if err != nil || cur.State != l.State {
 		return
 	}
 	l = cur
-	r, err := s.store.Room(ctx, l.RoomID)
+	r, err := s.store.Machine(ctx, l.MachineID)
 	if err != nil {
-		s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, protocol.SlotFree, "", now)
+		s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, protocol.RoomFree, "", now)
 		return
 	}
-	m, err := s.machineOf(r)
+	m, err := s.templateOf(r)
 	if err != nil {
-		s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, protocol.SlotFree, "", now)
+		s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, protocol.RoomFree, "", now)
 		return
 	}
 	began := !l.BeganAt.IsZero()
-	if errors.Is(stepErr, roomops.ErrUnreachable) {
+	if errors.Is(stepErr, machineops.ErrUnreachable) {
 		if m.OnDemand() {
 			// An attempt, so a machine with a bad SSH setup cannot create
-			// rooms without limit.
-			s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomDestroying, reasonUnreachable, now)
-			s.store.Requeue(ctx, l.ID, from, "room unreachable", true, maxAttempts, protocol.SlotFree, "", now)
+			// machines without limit.
+			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineDestroying, reasonUnreachable, now)
+			s.store.Requeue(ctx, l.ID, from, "machine unreachable", true, maxAttempts, protocol.RoomFree, "", now)
 			return
 		}
-		s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomBroken, reasonUnreachable, now)
-		slotState, data := protocol.SlotFree, ""
+		s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineBroken, reasonUnreachable, now)
+		roomState, data := protocol.RoomFree, ""
 		if began {
-			slotState, data = protocol.SlotDirty, s.cleanupData(ctx, l)
+			roomState, data = protocol.RoomDirty, s.cleanupData(ctx, l)
 		}
-		s.store.Requeue(ctx, l.ID, from, "room unreachable", false, maxAttempts, slotState, data, now)
+		s.store.Requeue(ctx, l.ID, from, "machine unreachable", false, maxAttempts, roomState, data, now)
 		return
 	}
-	// A script, upload, or helper failure: clean the slot if the lease began,
-	// mark the room broken, and requeue the lease as an attempt.
-	slotState, data := protocol.SlotFree, ""
+	// A script, upload, or helper failure: clean the room if the lease began,
+	// mark the machine broken, and requeue the lease as an attempt.
+	roomState, data := protocol.RoomFree, ""
 	if began {
 		if err := s.cleanupLease(ctx, l); err != nil {
 			s.log.Warn("cleanup after a failed lease step", "lease_id", l.ID, "err", err)
-			slotState, data = protocol.SlotBroken, s.cleanupData(ctx, l)
+			roomState, data = protocol.RoomBroken, s.cleanupData(ctx, l)
 		}
 	}
-	s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomBroken, stepErr.Error(), now)
-	s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, slotState, data, now)
+	s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineBroken, stepErr.Error(), now)
+	s.store.Requeue(ctx, l.ID, from, stepErr.Error(), true, maxAttempts, roomState, data, now)
 }
 
 // endLease ends a lease by guest or admin request: a lease that is not yet
@@ -127,18 +128,18 @@ func (s *Server) endLease(ctx context.Context, id, reason string) error {
 	return nil
 }
 
-func (s *Server) machineOf(r store.Room) (*config.Machine, error) {
-	m := s.config().Machine(r.Provider + "/" + r.Machine)
+func (s *Server) templateOf(r store.Machine) (*config.Template, error) {
+	m := s.config().Template(r.Provider + "/" + r.Template)
 	if m == nil {
-		return nil, fmt.Errorf("machine %s/%s is not in the configuration", r.Provider, r.Machine)
+		return nil, fmt.Errorf("machine %s/%s is not in the configuration", r.Provider, r.Template)
 	}
 	return m, nil
 }
 
-// openRoom connects to a room and returns it with the probe data from the
+// openMachine connects to a machine and returns it with the probe data from the
 // database.
-func (s *Server) openRoom(ctx context.Context, roomID int64) (*roomops.Room, store.Room, error) {
-	r, err := s.store.Room(ctx, roomID)
+func (s *Server) openMachine(ctx context.Context, machineID int64) (*machineops.Machine, store.Machine, error) {
+	r, err := s.store.Machine(ctx, machineID)
 	if err != nil {
 		return nil, r, err
 	}
@@ -146,35 +147,35 @@ func (s *Server) openRoom(ctx context.Context, roomID int64) (*roomops.Room, sto
 	if err != nil {
 		return nil, r, err
 	}
-	return &roomops.Room{Conn: conn, OS: r.OS, Arch: r.Arch, Home: r.Home, Shell: r.Shell}, r, nil
+	return &machineops.Machine{Conn: conn, OS: r.OS, Arch: r.Arch, Home: r.Home, Shell: r.Shell}, r, nil
 }
 
-// openSlot connects to a room for the work of one slot: as the slot's own
-// user, in its home directory, if the slot has one; else as openRoom does.
-func (s *Server) openSlot(ctx context.Context, roomID int64, slot string) (*roomops.Room, store.Room, error) {
-	r, err := s.store.Room(ctx, roomID)
+// openRoom connects to a machine for the work of one room: as the room's own
+// user, in its home directory, if the room has one; else as openMachine does.
+func (s *Server) openRoom(ctx context.Context, machineID int64, room string) (*machineops.Machine, store.Machine, error) {
+	r, err := s.store.Machine(ctx, machineID)
 	if err != nil {
 		return nil, r, err
 	}
-	home, err := s.slotHome(ctx, r, slot)
+	home, err := s.roomHome(ctx, r, room)
 	if err != nil {
 		return nil, r, err
 	}
-	conn, err := s.connectAs(ctx, r, slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot))
+	conn, err := s.connectAs(ctx, r, roomUser(s.config().Template(r.Provider+"/"+r.Template), room))
 	if err != nil {
 		return nil, r, err
 	}
-	return &roomops.Room{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}, r, nil
+	return &machineops.Machine{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}, r, nil
 }
 
-// readyFor reports whether a room has installed and checked each tool of a
+// readyFor reports whether a machine has installed and checked each tool of a
 // lease and their needs.
-func (s *Server) readyFor(ctx context.Context, r store.Room, m *config.Machine, tools []string) (bool, error) {
-	rts, err := s.store.RoomTools(ctx)
+func (s *Server) readyFor(ctx context.Context, r store.Machine, m *config.Template, tools []string) (bool, error) {
+	rts, err := s.store.MachineTools(ctx)
 	if err != nil {
 		return false, err
 	}
-	ready := roomReady(s.live.Load(), rts, r, m)
+	ready := machineReady(s.live.Load(), rts, r, m)
 	for _, name := range toolNamesOf(tools) {
 		if !ready[name] {
 			return false, nil
@@ -184,16 +185,16 @@ func (s *Server) readyFor(ctx context.Context, r store.Room, m *config.Machine, 
 }
 
 func (s *Server) stepAssigned(ctx context.Context, l store.Lease) error {
-	r, err := s.store.Room(ctx, l.RoomID)
+	r, err := s.store.Machine(ctx, l.MachineID)
 	if err != nil {
 		return err
 	}
-	m, err := s.machineOf(r)
+	m, err := s.templateOf(r)
 	if err != nil {
 		return err
 	}
 	next := protocol.LeaseProvisioning
-	if r.State == protocol.RoomRunning {
+	if r.State == protocol.MachineRunning {
 		if ready, err := s.readyFor(ctx, r, m, l.Tools); err != nil {
 			return err
 		} else if ready {
@@ -204,30 +205,30 @@ func (s *Server) stepAssigned(ctx context.Context, l store.Lease) error {
 	return err
 }
 
-// stepProvisioning waits while the room is in creation or resume, then runs the
-// install scripts of the lease's tools and their needs if the room is not yet
+// stepProvisioning waits while the machine is in creation or resume, then runs the
+// install scripts of the lease's tools and their needs if the machine is not yet
 // ready for them.
 func (s *Server) stepProvisioning(ctx context.Context, l store.Lease) error {
 	for {
-		r, err := s.store.Room(ctx, l.RoomID)
+		r, err := s.store.Machine(ctx, l.MachineID)
 		if err != nil {
 			return err
 		}
 		switch r.State {
-		case protocol.RoomRunning:
+		case protocol.MachineRunning:
 			return s.provisionTool(ctx, l)
-		case protocol.RoomCreating, protocol.RoomProvisioning, protocol.RoomResuming:
+		case protocol.MachineCreating, protocol.MachineProvisioning, protocol.MachineResuming:
 		default:
-			// The room worker requeues the leases of a failed room; this is
+			// The machine worker requeues the leases of a failed machine; this is
 			// only a guard if it has not done so.
-			_, err := s.store.Requeue(ctx, l.ID, []string{protocol.LeaseProvisioning}, "room "+r.State,
-				false, maxAttempts, protocol.SlotFree, "", time.Now())
+			_, err := s.store.Requeue(ctx, l.ID, []string{protocol.LeaseProvisioning}, "machine "+r.State,
+				false, maxAttempts, protocol.RoomFree, "", time.Now())
 			return err
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(roomWait):
+		case <-time.After(machineWait):
 		}
 		if cur, err := s.store.Lease(ctx, l.ID); err != nil || cur.State != protocol.LeaseProvisioning {
 			return err
@@ -237,7 +238,7 @@ func (s *Server) stepProvisioning(ctx context.Context, l store.Lease) error {
 
 func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 	// One configuration for the whole step: the scripts that run and the
-	// hashes that the room records must be of the same tool version.
+	// hashes that the machine records must be of the same tool version.
 	lc := s.live.Load()
 	timeout := leaseStepTimeout
 	var closure []string
@@ -247,12 +248,12 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	room, r, err := s.openRoom(ctx, l.RoomID)
+	machine, r, err := s.openMachine(ctx, l.MachineID)
 	if err != nil {
 		return err
 	}
-	defer room.Conn.Close()
-	m, err := s.machineOf(r)
+	defer machine.Conn.Close()
+	m, err := s.templateOf(r)
 	if err != nil {
 		return err
 	}
@@ -267,16 +268,16 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 			continue
 		}
 		if !synced {
-			upload, err := s.roomUpload(lc, room, m)
+			upload, err := s.machineUpload(lc, machine, m)
 			if err != nil {
 				return err
 			}
-			if _, err := room.Sync(ctx, upload); err != nil {
+			if _, err := s.syncMachine(ctx, l.MachineID, machine, upload); err != nil {
 				return err
 			}
 			synced = true
 		}
-		if err := s.installTool(ctx, room, r.ID, m, t, sum); err != nil {
+		if err := s.installTool(ctx, machine, r.ID, m, t, sum); err != nil {
 			return err
 		}
 	}
@@ -285,7 +286,7 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 }
 
 // stepPreparing checks the helper and scripts by hash, writes the lease data
-// on the room, and runs the start script of each screen tool of the lease, in
+// on the machine, and runs the start script of each screen tool of the lease, in
 // the order of needs (design, section 8). It records each screen tool that
 // started, so that cleanup stops only those.
 func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
@@ -296,33 +297,33 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := s.store.SetSlots(ctx, l.ID, protocol.SlotPreparing); err != nil {
+	if err := s.store.SetRooms(ctx, l.ID, protocol.RoomPreparing); err != nil {
 		return err
 	}
-	room, r, err := s.openSlot(ctx, l.RoomID, l.SlotName)
+	machine, r, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
 		return err
 	}
-	defer room.Conn.Close()
-	m, err := s.machineOf(r)
+	defer machine.Conn.Close()
+	m, err := s.templateOf(r)
 	if err != nil {
 		return err
 	}
-	upload, err := s.roomUpload(lc, room, m)
+	upload, err := s.machineUpload(lc, machine, m)
 	if err != nil {
 		return err
 	}
-	if _, err := room.Sync(ctx, upload); err != nil {
+	if _, err := s.syncMachine(ctx, l.MachineID, machine, upload); err != nil {
 		return err
 	}
 	view, err := s.loadToolView(ctx)
 	if err != nil {
 		return err
 	}
-	starts := planStarts(lc.cfg, l, view.roomHaves(m, r.ID))
+	starts := planStarts(lc.cfg, l, view.machineHaves(m, r.ID))
 	begin := protocol.BeginRequest{LeaseID: l.ID, Tools: leaseToolEntries(l.Tools, starts), Started: starts,
 		Exclusive: leaseRequest(lc.cfg, l).Exclusive}
-	if err := room.Helper(ctx, []string{"begin", "--slot", l.SlotName}, begin, nil); err != nil {
+	if err := machine.Helper(ctx, []string{"begin", "--room", l.RoomName}, begin, nil); err != nil {
 		return err
 	}
 	if err := s.store.SetBegan(ctx, l.ID, time.Now()); err != nil {
@@ -344,7 +345,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 		}
 		timeout := t.ScriptTimeout(config.StepStart)
 		env := map[string]string{"HOSTEL_LEASE_ID": l.ID, "HOSTEL_TOOL_OPTIONS": strings.Join(st.Options, ",")}
-		resp, err := room.RunScript(ctx, t.Name, config.StepStart, l.SlotName,
+		resp, err := machine.RunScript(ctx, t.Name, config.StepStart, l.RoomName,
 			protocol.RunScriptRequest{Env: env, TimeoutSeconds: int(timeout / time.Second)})
 		if err != nil {
 			return err
@@ -369,7 +370,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 		return err
 	}
 	s.extendDeadline(ctx, r, m, now)
-	return s.store.SetSlots(ctx, l.ID, protocol.SlotLeased)
+	return s.store.SetRooms(ctx, l.ID, protocol.RoomLeased)
 }
 
 // withStarted puts st last in started, in place of its earlier entry.
@@ -380,9 +381,9 @@ func withStarted(started []protocol.StartedTool, st protocol.StartedTool) []prot
 
 // extendDeadline moves the provider deadline of a machine that cannot stop to
 // ready_at + max_lease + warm_running + 10 minutes, if that is later.
-func (s *Server) extendDeadline(ctx context.Context, r store.Room, m *config.Machine, readyAt time.Time) {
+func (s *Server) extendDeadline(ctx context.Context, r store.Machine, m *config.Template, readyAt time.Time) {
 	p := s.providerMap()[r.Provider]
-	if !p.Capabilities(r.Machine).CanExtend {
+	if !p.Capabilities(r.Template).CanExtend {
 		return
 	}
 	deadline := readyAt.Add(m.MaxLease.D() + m.WarmRunning.D() + 10*time.Minute)
@@ -392,60 +393,60 @@ func (s *Server) extendDeadline(ctx context.Context, r store.Room, m *config.Mac
 	cctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
 	defer cancel()
 	if err := p.Extend(cctx, s.ref(r), deadline); err != nil {
-		s.log.Warn("extend the provider deadline", "room_id", r.ID, "err", err)
+		s.log.Warn("extend the provider deadline", "machine_id", r.ID, "err", err)
 		return
 	}
 	s.store.SetProviderDeadline(ctx, r.ID, deadline)
 }
 
 // stepCleaning runs the helper cleanup (design, section 17). A lease that never
-// called begin only frees its slot.
+// called begin only frees its room.
 func (s *Server) stepCleaning(ctx context.Context, l store.Lease) error {
 	s.gateway.CloseLease(l.ID)
 	if l.BeganAt.IsZero() {
-		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.SlotFree, "", time.Now())
+		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, leaseStepTimeout+s.cleanupScriptsTimeout())
 	defer cancel()
-	if err := s.store.SetSlots(ctx, l.ID, protocol.SlotCleaning); err != nil {
+	if err := s.store.SetRooms(ctx, l.ID, protocol.RoomCleaning); err != nil {
 		return err
 	}
 	err := s.cleanupLease(ctx, l)
 	defer s.kickScheduler()
 	if err == nil {
-		_, err = s.store.FinishCleaning(ctx, l.ID, protocol.SlotFree, "", time.Now())
+		_, err = s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
 		return err
 	}
 	if ctx.Err() != nil {
 		return err
 	}
-	s.log.Warn("cleanup failed", "lease_id", l.ID, "room_id", l.RoomID, "err", err)
-	r, rerr := s.store.Room(ctx, l.RoomID)
+	s.log.Warn("cleanup failed", "lease_id", l.ID, "machine_id", l.MachineID, "err", err)
+	r, rerr := s.store.Machine(ctx, l.MachineID)
 	if rerr != nil {
 		return rerr
 	}
-	m, merr := s.machineOf(r)
+	m, merr := s.templateOf(r)
 	if merr != nil {
 		return merr
 	}
 	data := s.cleanupData(ctx, l)
-	if errors.Is(err, roomops.ErrUnreachable) {
-		// The cleanup runs when the room is reachable again (static), or the
-		// room goes (on-demand).
+	if errors.Is(err, machineops.ErrUnreachable) {
+		// The cleanup runs when the machine is reachable again (static), or the
+		// machine goes (on-demand).
 		if m.OnDemand() {
-			s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomDestroying, reasonUnreachable, time.Now())
-			_, err := s.store.FinishCleaning(ctx, l.ID, protocol.SlotFree, "", time.Now())
+			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineDestroying, reasonUnreachable, time.Now())
+			_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
 			return err
 		}
-		s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomBroken, reasonUnreachable, time.Now())
-		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.SlotDirty, data, time.Now())
+		s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineBroken, reasonUnreachable, time.Now())
+		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomDirty, data, time.Now())
 		return err
 	}
-	if _, ferr := s.store.FinishCleaning(ctx, l.ID, protocol.SlotBroken, data, time.Now()); ferr != nil {
+	if _, ferr := s.store.FinishCleaning(ctx, l.ID, protocol.RoomBroken, data, time.Now()); ferr != nil {
 		return ferr
 	}
-	_, serr := s.store.SetRoomState(ctx, l.RoomID, []string{r.State}, protocol.RoomBroken, "cleanup failed: "+err.Error(), time.Now())
+	_, serr := s.store.SetMachineState(ctx, l.MachineID, []string{r.State}, protocol.MachineBroken, "cleanup failed: "+err.Error(), time.Now())
 	return serr
 }
 
@@ -462,9 +463,9 @@ func (s *Server) cleanupScriptsTimeout() time.Duration {
 func (s *Server) cleanupRequest(ctx context.Context, l store.Lease) protocol.CleanupRequest {
 	req := protocol.CleanupRequest{LeaseID: l.ID, Tools: leaseToolEntries(l.Tools, l.Started), Started: nonNilStarted(l.Started),
 		Exclusive: leaseRequest(s.config(), l).Exclusive}
-	if r, err := s.store.Room(ctx, l.RoomID); err == nil {
-		if m, err := s.machineOf(r); err == nil {
-			req.Ports = append(req.Ports, slotConfig(m, l.SlotName).Ports...)
+	if r, err := s.store.Machine(ctx, l.MachineID); err == nil {
+		if m, err := s.templateOf(r); err == nil {
+			req.Ports = append(req.Ports, roomConfig(m, l.RoomName).Ports...)
 		}
 	}
 	if fixed, err := s.store.LeaseTunnels(ctx, l.ID); err == nil {
@@ -481,24 +482,24 @@ func (s *Server) cleanupData(ctx context.Context, l store.Lease) string {
 }
 
 func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
-	room, _, err := s.openSlot(ctx, l.RoomID, l.SlotName)
+	machine, _, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
 		return err
 	}
-	defer room.Conn.Close()
-	return s.runCleanup(ctx, room, l.RoomID, l.SlotName, s.cleanupRequest(ctx, l))
+	defer machine.Conn.Close()
+	return s.runCleanup(ctx, machine, l.MachineID, l.RoomName, s.cleanupRequest(ctx, l))
 }
 
 // recordChecks writes the results of the check scripts of a cleanup to the
-// room's inventory, with the install hashes of the tools that the room had
+// machine's inventory, with the install hashes of the tools that the machine had
 // when the cleanup began (sums, from checkTools): a tool version that an admin
 // pushed during the cleanup is not installed yet.
-func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protocol.ToolCheck, sums map[string]string) error {
-	r, err := s.store.Room(ctx, roomID)
+func (s *Server) recordChecks(ctx context.Context, machineID int64, checks []protocol.ToolCheck, sums map[string]string) error {
+	r, err := s.store.Machine(ctx, machineID)
 	if err != nil {
 		return err
 	}
-	m, err := s.machineOf(r)
+	m, err := s.templateOf(r)
 	if err != nil {
 		return err
 	}
@@ -508,16 +509,16 @@ func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protoc
 		if t == nil || !ok {
 			continue
 		}
-		row := store.RoomTool{RoomID: roomID, Tool: c.Tool, ScriptsSHA256: sum, State: store.ToolReady,
+		row := store.MachineTool{MachineID: machineID, Tool: c.Tool, ScriptsSHA256: sum, State: store.ToolReady,
 			Option: c.Option, Env: envNames(t), CheckedAt: time.Now()}
-		if msg := noMachineOption(s.config(), m, t, c.Option); msg != "" && c.Error == "" {
-			s.store.AddEvent(ctx, time.Now(), "", roomID, "script", msg)
+		if msg := noTemplateOption(s.config(), m, t, c.Option); msg != "" && c.Error == "" {
+			s.store.AddEvent(ctx, time.Now(), "", machineID, "script", msg)
 			c.Error = msg
 		}
 		if c.Error != "" {
 			row.State, row.Option = store.ToolFailed, ""
 		}
-		if err := s.store.SetRoomTool(ctx, row); err != nil {
+		if err := s.store.SetMachineTool(ctx, row); err != nil {
 			return err
 		}
 	}
@@ -525,27 +526,34 @@ func (s *Server) recordChecks(ctx context.Context, roomID int64, checks []protoc
 }
 
 // runCleanup sets the tools for check at the time of the cleanup: a stored
-// request (of a dirty slot) can be older than the room's last provision.
-func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int64, slot string, req protocol.CleanupRequest) error {
-	check, _, err := s.checkTools(ctx, roomID)
+// request (of a dirty room) can be older than the machine's last provision.
+func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, machineID int64, room string, req protocol.CleanupRequest) error {
+	check, _, err := s.checkTools(ctx, machineID)
 	if err != nil {
 		return fmt.Errorf("find the tools to check: %w", err)
 	}
-	r, err := s.store.Room(ctx, roomID)
+	r, err := s.store.Machine(ctx, machineID)
 	if err != nil {
 		return err
 	}
 	// Check checks the machine, whose install ran as the machine user: a
-	// slot with its own user runs it as the machine user after the cleanup.
-	ownUser := slotUser(s.config().Machine(r.Provider+"/"+r.Machine), slot) != ""
+	// room with its own user runs it as the machine user after the cleanup.
+	ownUser := roomUser(s.config().Template(r.Provider+"/"+r.Template), room) != ""
 	if !ownUser {
 		req.Check = sortedKeys(check)
 	}
 	var resp protocol.CleanupResponse
-	if err := room.Helper(ctx, []string{"cleanup", "--slot", slot}, req, &resp); err != nil {
+	err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
+	if errors.Is(err, machineops.ErrNoHelper) {
+		// A lease of a server before M10g: its machine still has the old binary.
+		if err = s.syncMachineHelper(ctx, machineID, machine); err == nil {
+			err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
+		}
+	}
+	if err != nil {
 		return err
 	}
-	if err := s.recordChecks(ctx, roomID, resp.Checks, check); err != nil {
+	if err := s.recordChecks(ctx, machineID, resp.Checks, check); err != nil {
 		return err
 	}
 	var failed []string
@@ -558,14 +566,44 @@ func (s *Server) runCleanup(ctx context.Context, room *roomops.Room, roomID int6
 		return errors.New(strings.Join(failed, "; "))
 	}
 	if ownUser && len(check) > 0 {
-		machine, _, err := s.openRoom(ctx, roomID)
+		template, _, err := s.openMachine(ctx, machineID)
 		if err != nil {
 			return err
 		}
-		defer machine.Conn.Close()
-		if err := s.runChecks(ctx, machine, roomID); err != nil {
+		defer template.Conn.Close()
+		if err := s.runChecks(ctx, template, machineID); err != nil {
 			return fmt.Errorf("check: %w", err)
 		}
 	}
 	return nil
+}
+
+// syncMachineHelper installs the server's helper through machine: a room with
+// its own OS user has its own helper in its own home.
+func (s *Server) syncMachineHelper(ctx context.Context, machineID int64, machine *machineops.Machine) error {
+	r, err := s.store.Machine(ctx, machineID)
+	if err != nil {
+		return err
+	}
+	lc := s.live.Load()
+	m := lc.cfg.Template(r.Provider + "/" + r.Template)
+	if m == nil {
+		return fmt.Errorf("install the helper: the machine %s has no entry in the configuration", r.Name)
+	}
+	upload, err := s.machineUpload(lc, machine, m)
+	if err != nil {
+		return err
+	}
+	_, err = s.syncMachine(ctx, machineID, machine, upload)
+	return err
+}
+
+// syncMachine runs one upload at a time on a machine: uploads use fixed
+// temporary paths, and provisioning can run beside a cleanup.
+func (s *Server) syncMachine(ctx context.Context, machineID int64, machine *machineops.Machine, upload machineops.Upload) (string, error) {
+	v, _ := s.syncLocks.LoadOrStore(machineID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return machine.Sync(ctx, upload)
 }

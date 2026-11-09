@@ -26,7 +26,7 @@ const (
 )
 
 // Entry is one file or symbolic link. Paths use "/" and are relative to the
-// repository root (guest) or to work/ (room).
+// repository root (guest) or to work/ (machine).
 type Entry struct {
 	Path   string      `json:"path"`
 	Type   string      `json:"type"`
@@ -47,8 +47,8 @@ type Plan struct {
 	Send []string `json:"send"`
 	// Delete: paths of the old manifest that are not in the new manifest.
 	Delete []string `json:"delete"`
-	// Overwrite: paths in Send that a room command changed after the last sync,
-	// and room objects that block a Send path.
+	// Overwrite: paths in Send that a machine command changed after the last sync,
+	// and machine objects that block a Send path.
 	Overwrite []string `json:"overwrite"`
 }
 
@@ -112,7 +112,7 @@ func FileEntry(root, rel string) (Entry, bool, error) {
 	return e, true, nil
 }
 
-// modes is false on Windows, which has no executable bit: a Windows room
+// modes is false on Windows, which has no executable bit: a Windows machine
 // compares and writes file content only.
 var modes = runtime.GOOS != "windows"
 
@@ -121,7 +121,7 @@ func same(a, b Entry) bool {
 	return a.Type == b.Type && a.SHA256 == b.SHA256 && (a.Type == TypeSymlink || !modes || a.Mode == b.Mode)
 }
 
-// safeLstat returns the room object at rel. blocked is true if a parent
+// safeLstat returns the machine object at rel. blocked is true if a parent
 // component is not a directory (a file or a symbolic link), so the object at
 // rel cannot be reached without leaving work/ or removing the parent.
 func safeLstat(root, rel string) (info fs.FileInfo, blockedBy string, err error) {
@@ -199,15 +199,15 @@ func MakePlan(work string, old, next Manifest) (Plan, error) {
 			}
 			continue
 		}
-		room, _, err := FileEntry(work, e.Path)
+		machine, _, err := FileEntry(work, e.Path)
 		if err != nil {
 			return plan, err
 		}
-		if same(room, e) {
+		if same(machine, e) {
 			continue
 		}
 		plan.Send = append(plan.Send, e.Path)
-		if prev, ok := oldBy[e.Path]; !ok || !same(prev, room) {
+		if prev, ok := oldBy[e.Path]; !ok || !same(prev, machine) {
 			overwrite[e.Path] = true
 		}
 	}
@@ -220,7 +220,7 @@ func MakePlan(work string, old, next Manifest) (Plan, error) {
 	return plan, nil
 }
 
-// dirKeepsFiles reports whether a room directory has an object that step 1
+// dirKeepsFiles reports whether a machine directory has an object that step 1
 // (delete) does not remove.
 func dirKeepsFiles(work, rel string, deleted map[string]bool) (bool, error) {
 	keep := false
@@ -282,7 +282,7 @@ func Apply(work string, plan Plan, next Manifest, r io.Reader) (written, deleted
 			return 0, deleted, err
 		}
 		if blockedBy != "" || info == nil || info.IsDir() {
-			continue // already gone, or replaced by the room
+			continue // already gone, or replaced by the machine
 		}
 		if err := os.Remove(filepath.Join(work, filepath.FromSlash(p))); err != nil {
 			return 0, deleted, err
@@ -307,16 +307,16 @@ func Apply(work string, plan Plan, next Manifest, r io.Reader) (written, deleted
 			switch {
 			case i < len(parts) && !info.IsDir():
 				// A file or a symbolic link where a directory must be. Only a
-				// blocker that the plan lists goes; a newer room object stays.
+				// blocker that the plan lists goes; a newer machine object stays.
 				if !overwrite[sub] {
-					return 0, deleted, fmt.Errorf("%s: a room file is in the way of %s; it is not in the plan's overwrite list (run the sync again)", sub, p)
+					return 0, deleted, fmt.Errorf("%s: a machine file is in the way of %s; it is not in the plan's overwrite list (run the sync again)", sub, p)
 				}
 				if err := os.Remove(full); err != nil {
 					return 0, deleted, err
 				}
 			case i == len(parts) && info.IsDir():
 				if !overwrite[sub] {
-					return 0, deleted, fmt.Errorf("%s: a directory on the room is in the way; it is not in the plan's overwrite list", sub)
+					return 0, deleted, fmt.Errorf("%s: a directory on the machine is in the way; it is not in the plan's overwrite list", sub)
 				}
 				if err := os.RemoveAll(full); err != nil {
 					return 0, deleted, err

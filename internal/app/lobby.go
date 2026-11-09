@@ -8,14 +8,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// lobby lists the tools (screen tools first), each with its free machines and
-// its waiting leases.
-type lobby struct{ sel int }
+// lobby is the waiting line first, then the tools (screens with one line
+// each, software in a short form). sel is the key of the selected item.
+type lobby struct{ sel string }
 
 func (p *lobby) title() string { return "Lobby" }
 
@@ -28,6 +27,13 @@ func queued(st protocol.Status, tool string) []protocol.LeaseStatus {
 			out = append(out, l)
 		}
 	}
+	sortLine(out)
+	return out
+}
+
+// sortLine orders leases as the waiting line (a lease that the scheduler has
+// not placed yet comes last).
+func sortLine(out []protocol.LeaseStatus) {
 	slices.SortStableFunc(out, func(a, b protocol.LeaseStatus) int {
 		if (a.Position == 0) != (b.Position == 0) {
 			if a.Position == 0 {
@@ -37,7 +43,6 @@ func queued(st protocol.Status, tool string) []protocol.LeaseStatus {
 		}
 		return a.Position - b.Position
 	})
-	return out
 }
 
 // asks reports whether a lease asked for a tool.
@@ -45,24 +50,24 @@ func asks(l protocol.LeaseStatus, tool string) bool {
 	return slices.ContainsFunc(l.Tools, func(t string) bool { name, _, _ := strings.Cut(t, ":"); return name == tool })
 }
 
-// onlineMachines are the machines of a tool that are not offline: the
+// onlineTemplates are the machines of a tool that are not offline: the
 // Lobby leaves out the offline ones (owner decision, 2026-11-03).
-func onlineMachines(m *model, p protocol.Tool) []protocol.MachineStatus {
-	var out []protocol.MachineStatus
-	for _, tm := range p.Machines {
+func onlineTemplates(m *model, p protocol.Tool) []protocol.TemplateStatus {
+	var out []protocol.TemplateStatus
+	for _, tm := range p.Templates {
 		key := tm.Key
-		if i := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == key }); i >= 0 && online(m.st, m.st.Machines[i]) {
-			out = append(out, m.st.Machines[i])
+		if i := slices.IndexFunc(m.st.Templates, func(ms protocol.TemplateStatus) bool { return ms.Key == key }); i >= 0 && online(m.st, m.st.Templates[i]) {
+			out = append(out, m.st.Templates[i])
 		}
 	}
 	return out
 }
 
-// freeMachines counts the machines of a tool that can take a lease now.
-func freeMachines(m *model, p protocol.Tool) int {
+// freeTemplates counts the machines of a tool that can take a lease now.
+func freeTemplates(m *model, p protocol.Tool) int {
 	n := 0
-	for _, ms := range onlineMachines(m, p) {
-		if machineFree(m.st, ms, p.Name) {
+	for _, ms := range onlineTemplates(m, p) {
+		if templateFree(m.st, ms, p.Name) {
 			n++
 		}
 	}
@@ -84,48 +89,153 @@ func toolText(t protocol.Tool) string {
 	return t.Description
 }
 
+// waitingLine is every queued lease in the order of the line.
+func waitingLine(st protocol.Status) []protocol.LeaseStatus {
+	var out []protocol.LeaseStatus
+	for _, l := range st.Leases {
+		if l.State == protocol.LeaseQueued {
+			out = append(out, l)
+		}
+	}
+	sortLine(out)
+	return out
+}
+
+// lobbyTools splits the tools. A software tool with waiting guests comes
+// first, as the line matters more than the order of the list.
+func lobbyTools(m *model) (screens, software []protocol.Tool) {
+	for _, t := range m.tools {
+		if t.Screen {
+			screens = append(screens, t)
+		} else {
+			software = append(software, t)
+		}
+	}
+	slices.SortStableFunc(software, func(a, b protocol.Tool) int {
+		if (a.Waiting > 0) != (b.Waiting > 0) {
+			if a.Waiting > 0 {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	return screens, software
+}
+
+// order is the keys of the selectable items, with the selected index.
+func (p *lobby) order(m *model) ([]string, int) {
+	var keys []string
+	for _, l := range waitingLine(m.st) {
+		keys = append(keys, "l:"+l.ID)
+	}
+	screens, software := lobbyTools(m)
+	for _, t := range append(screens, software...) {
+		keys = append(keys, "t:"+t.Name)
+	}
+	i := slices.Index(keys, p.sel)
+	if i < 0 && len(keys) > 0 {
+		i, p.sel = 0, keys[0]
+	}
+	return keys, i
+}
+
 func (p *lobby) body(m *model) string {
+	w := contentWidth(m)
+	p.order(m)
+	var b strings.Builder
+	q := waitingLine(m.st)
+	title := "Waiting line"
+	if len(q) > 0 {
+		title += fmt.Sprintf(" · %d waiting", len(q))
+	}
+	b.WriteString("\n" + heading(title, w) + "\n\n")
+	if len(q) == 0 {
+		b.WriteString(note("Nobody waiting."))
+	}
+	for i, l := range q {
+		left := fmt.Sprintf("%d. ", i+1) + clean(l.User) + "  " + mutedStyle.Render(fmt.Sprintf("%q", clean(l.Task))) + "  " + fg(colBlue).Render(clean(strings.Join(l.Tools, " ")))
+		b.WriteString(row(w, p.sel == "l:"+l.ID, spread(left, fg(colYellow).Render(waitText(l.EstimatedWaitSeconds)), w-3)) + "\n")
+	}
 	switch {
 	case m.toolsErr != "" && !m.toolsRead:
-		return "\n  " + errStyle.Render(clean("Cannot read the tools: "+m.toolsErr)) + "\n"
+		b.WriteString("\n" + note(errStyle.Render(clean("Cannot read the tools: "+m.toolsErr))))
+		return b.String()
 	case !m.toolsRead:
-		return "\n  Reading the tools …\n"
+		b.WriteString("\n" + note("Reading the tools …"))
+		return b.String()
 	case len(m.tools) == 0:
-		return "\n  No machine lists a tool yet. An admin adds a machine in Front desk › Rooms.\n"
+		b.WriteString("\n" + note("No machine lists a tool yet. An admin adds a machine in Rooms."))
+		return b.String()
 	}
-	stale := ""
 	if m.toolsErr != "" {
-		stale = "  " + errStyle.Render(clean("! Cannot read the tools: "+m.toolsErr+" (older data below; trying again)")) + "\n"
+		b.WriteString("\n" + note(errStyle.Render(clean("! Cannot read the tools: "+m.toolsErr+" (older data below; trying again)"))))
 	}
-	w := contentWidth(m)
-	var b strings.Builder
-	b.WriteString(stale)
-	// The server sends the screen tools first.
-	for i, t := range m.tools {
-		if i == 0 || t.Screen != m.tools[i-1].Screen {
-			title := "Software"
-			if t.Screen {
-				title = "Screens"
+	screens, software := lobbyTools(m)
+	if len(screens) > 0 {
+		b.WriteString(section("Screens", w, true))
+		nameW := 0
+		for _, t := range screens {
+			nameW = max(nameW, lipgloss.Width(clean(t.Name)))
+		}
+		for _, t := range screens {
+			detail := plural(len(t.Templates), "machine")
+			if t.Waiting > 0 {
+				detail += fmt.Sprintf(" · %d waiting", t.Waiting)
 			}
-			b.WriteString(section(title, w, i > 0))
+			b.WriteString(row(w, p.sel == "t:"+t.Name, spread(cell(boldStyle.Render(clean(t.Name)), nameW)+"   "+m.vacancy(t), mutedStyle.Render(detail), w-3)) + "\n")
 		}
-		total := len(onlineMachines(m, t))
-		// The description gets the space that the options and the machines
-		// leave.
-		rest := " · " + plural(len(t.Machines), "machine")
-		if len(t.Options) > 0 {
-			rest = " · " + clean(strings.Join(t.Options, ", ")) + rest
-		}
-		sub := ansi.Truncate(clean(toolText(t)), max(w*2/3-lipgloss.Width(rest), 12), "…") + rest
-		b.WriteString(item(w, i == p.sel, clean(t.Name), sub, m.vacancy(t), waitLine(t, total)) + "\n\n")
 	}
+	if len(software) > 0 {
+		b.WriteString(section("Software", w, true))
+		b.WriteString(p.softwareLines(m, software, w))
+	}
+	return b.String()
+}
+
+// softwareLines is the software tools, separated by dots and wrapped; the
+// line with the selected tool has the bar.
+func (p *lobby) softwareLines(m *model, software []protocol.Tool, w int) string {
+	var b strings.Builder
+	cur, width, sel := "", 0, false
+	flush := func() {
+		if cur != "" {
+			b.WriteString(row(w, sel, cur) + "\n")
+		}
+		cur, width, sel = "", 0, false
+	}
+	sep := mutedStyle.Render("  ·  ")
+	for _, t := range software {
+		name := clean(t.Name)
+		style := lipgloss.NewStyle()
+		switch {
+		case p.sel == "t:"+t.Name:
+			style = accentStyle.Bold(true)
+		case len(onlineTemplates(m, t)) == 0:
+			style = mutedStyle
+		case t.Waiting > 0:
+			style = fg(colYellow)
+		}
+		n := lipgloss.Width(name)
+		if cur != "" && width+5+n > w-3 {
+			flush()
+		}
+		if cur != "" {
+			cur += sep
+			width += 5
+		}
+		cur += style.Render(name)
+		width += n
+		sel = sel || p.sel == "t:"+t.Name
+	}
+	flush()
 	return b.String()
 }
 
 // vacancy is a tool's free machines: ● 2 vacant, ◉ all occupied, or no
 // machine online; it glows when it changes.
 func (m *model) vacancy(t protocol.Tool) string {
-	free, total := freeMachines(m, t), len(onlineMachines(m, t))
+	free, total := freeTemplates(m, t), len(onlineTemplates(m, t))
 	s := state{fmt.Sprintf("%d vacant", free), colGreen, ""}
 	glyph := "●"
 	switch {
@@ -145,18 +255,34 @@ func waitLine(t protocol.Tool, online int) string {
 	if t.Waiting == 0 {
 		return mutedStyle.Render("nobody waiting")
 	}
-	next := "next room " + waitText(t.EstimatedWaitSeconds)
+	next := "next machine " + waitText(t.EstimatedWaitSeconds)
 	if online == 0 {
 		next = "no machine online"
 	}
 	return fg(colYellow).Render(spin("◴", "◷", "◶", "◵")+fmt.Sprintf(" %d waiting", t.Waiting)) + mutedStyle.Render(" · "+next)
 }
 
+func (p *lobby) tool(m *model) (protocol.Tool, bool) {
+	i := slices.IndexFunc(m.tools, func(t protocol.Tool) bool { return "t:"+t.Name == p.sel })
+	if i < 0 {
+		return protocol.Tool{}, false
+	}
+	return m.tools[i], true
+}
+
 func (p *lobby) hint(m *model) string {
-	if p.sel >= len(m.tools) {
+	p.order(m)
+	if id, ok := strings.CutPrefix(p.sel, "l:"); ok {
+		for _, l := range waitingLine(m.st) {
+			if l.ID == id {
+				return clean(l.User) + " waits for " + clean(strings.Join(l.Tools, " and ")) + "."
+			}
+		}
+	}
+	t, ok := p.tool(m)
+	if !ok {
 		return ""
 	}
-	t := m.tools[p.sel]
 	h := t.Name + ": " + toolText(t)
 	if t.Screen {
 		h += " · a screen: it starts for each lease that asks for it"
@@ -167,10 +293,26 @@ func (p *lobby) hint(m *model) string {
 func (p *lobby) keys(m *model) []binding { return []binding{{"↑↓", "move"}, {"enter", "open"}} }
 
 func (p *lobby) key(m *model, k tea.KeyMsg) tea.Cmd {
-	if k.String() == "enter" && p.sel < len(m.tools) {
-		return m.open(&toolPage{name: m.tools[p.sel].Name, onMachines: true})
+	keys, i := p.order(m)
+	if i < 0 {
+		return nil
 	}
-	p.sel = move(p.sel, len(m.tools), k.String())
+	if k.String() != "enter" {
+		p.sel = keys[move(i, len(keys), k.String())]
+		return nil
+	}
+	if id, ok := strings.CutPrefix(p.sel, "l:"); ok {
+		for _, l := range waitingLine(m.st) {
+			if l.ID == id && len(l.Tools) > 0 {
+				name, _, _ := strings.Cut(l.Tools[0], ":")
+				return m.open(&toolPage{name: name, sel: id})
+			}
+		}
+		return nil
+	}
+	if t, ok := p.tool(m); ok {
+		return m.open(&toolPage{name: t.Name, onTemplates: true})
+	}
 	return nil
 }
 
@@ -183,8 +325,8 @@ type toolPage struct {
 	// onMachines: the Machines card has the keyboard (tab), not the Waiting
 	// line; machineSel is the key of its selected machine (the order
 	// follows the states).
-	onMachines bool
-	machineSel string
+	onTemplates bool
+	templateSel string
 }
 
 func (p *toolPage) title() string { return p.name }
@@ -216,10 +358,10 @@ func (p *toolPage) body(m *model) string {
 	}
 	now := time.Now()
 	w := contentWidth(m)
-	machines := p.machines(m, t)
+	templates := p.templates(m, t)
 	q, qsel := p.selected(m)
 	if len(q) == 0 {
-		p.onMachines = true
+		p.onTemplates = true
 	}
 	var b strings.Builder
 	if m.toolsErr != "" {
@@ -230,7 +372,7 @@ func (p *toolPage) body(m *model) string {
 	if t.TypicalLeaseSeconds > 0 {
 		typical = "typical stay " + ago(time.Duration(t.TypicalLeaseSeconds)*time.Second)
 	}
-	b.WriteString(head(clean(t.Name), clean(toolText(t)), m.vacancy(t)+"     "+waitLine(t, len(machines))+"     "+mutedStyle.Render(typical)))
+	b.WriteString(head(clean(t.Name), clean(toolText(t)), m.vacancy(t)+"     "+waitLine(t, len(templates))+"     "+mutedStyle.Render(typical)))
 
 	// The options: the phones and tablets of a screen tool, or the versions
 	// of a software tool.
@@ -258,21 +400,21 @@ func (p *toolPage) body(m *model) string {
 
 	// The machines: one line each, with the options of the tool on it.
 	b.WriteString("\n\n" + heading("Machines", w) + "\n\n")
-	if len(machines) == 0 {
+	if len(templates) == 0 {
 		b.WriteString(margin + "   " + mutedStyle.Render("No machine with "+clean(t.Name)+" is online.") + "\n")
 	}
-	_, msel := p.selectedMachine(m, t)
+	_, msel := p.selectedTemplate(m, t)
 	nameW, optW := 0, 0
-	for _, ms := range machines {
+	for _, ms := range templates {
 		nameW = max(nameW, lipgloss.Width(clean(ms.Key)))
-		optW = max(optW, lipgloss.Width(clean(machineOptions(t, ms.Key))))
+		optW = max(optW, lipgloss.Width(clean(templateOptions(t, ms.Key))))
 	}
-	for i, ms := range machines {
-		s := machineState(m.st, ms, now)
+	for i, ms := range templates {
+		s := templateState(m.st, ms, now)
 		word := m.word("m:"+ms.Key, s)
 		line := s.dot() + " " + cell(boldStyle.Render(clean(ms.Key)), nameW) + "   " + cell(word, len("No new leases")) + "   " +
-			cell(fg(colBlue).Render(clean(machineOptions(t, ms.Key))), optW) + "   " + mutedStyle.Render(s.detail)
-		b.WriteString(row(w, p.onMachines && i == msel, line) + "\n")
+			cell(fg(colBlue).Render(clean(templateOptions(t, ms.Key))), optW) + "   " + mutedStyle.Render(s.detail)
+		b.WriteString(row(w, p.onTemplates && i == msel, line) + "\n")
 	}
 
 	// The waiting line: two lines each.
@@ -294,8 +436,8 @@ func (p *toolPage) body(m *model) string {
 		}
 		title := pos + "  " + clean(l.User) + "  " + fmt.Sprintf("%q", clean(l.Task))
 		sub := "   " + prio + mutedStyle.Render(" · waiting "+ago(now.Sub(l.CreatedAt))+" · asks for "+clean(strings.Join(l.Tools, " ")))
-		right := fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + " room in " + waitText(l.EstimatedWaitSeconds))
-		b.WriteString(item(w, !p.onMachines && i == qsel, title, sub, right, "") + "\n\n")
+		right := fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + " machine in " + waitText(l.EstimatedWaitSeconds))
+		b.WriteString(item(w, !p.onTemplates && i == qsel, title, sub, right, "") + "\n\n")
 	}
 
 	// The guide: its first paragraph.
@@ -309,13 +451,13 @@ func (p *toolPage) body(m *model) string {
 	return b.String()
 }
 
-// machineOptions are the options of a tool on one machine.
-func machineOptions(t protocol.Tool, key string) string {
-	i := slices.IndexFunc(t.Machines, func(tm protocol.ToolMachine) bool { return tm.Key == key })
+// templateOptions are the options of a tool on one machine.
+func templateOptions(t protocol.Tool, key string) string {
+	i := slices.IndexFunc(t.Templates, func(tm protocol.ToolTemplate) bool { return tm.Key == key })
 	if i < 0 {
 		return ""
 	}
-	return strings.Join(t.Machines[i].Options, ", ")
+	return strings.Join(t.Templates[i].Options, ", ")
 }
 
 // guideSummary is the first paragraph of a tool's guide, in one line.
@@ -324,20 +466,20 @@ func guideSummary(guide string) string {
 	return strings.Join(strings.Fields(first), " ")
 }
 
-// selectedMachine returns the machines of the card and the index of the
+// selectedTemplate returns the machines of the card and the index of the
 // selected one (the first when it is gone).
-func (p *toolPage) selectedMachine(m *model, t protocol.Tool) ([]protocol.MachineStatus, int) {
-	ms := p.machines(m, t)
-	i := slices.IndexFunc(ms, func(x protocol.MachineStatus) bool { return x.Key == p.machineSel })
+func (p *toolPage) selectedTemplate(m *model, t protocol.Tool) ([]protocol.TemplateStatus, int) {
+	ms := p.templates(m, t)
+	i := slices.IndexFunc(ms, func(x protocol.TemplateStatus) bool { return x.Key == p.templateSel })
 	if i < 0 && len(ms) > 0 {
-		i, p.machineSel = 0, ms[0].Key
+		i, p.templateSel = 0, ms[0].Key
 	}
 	return ms, i
 }
 
-// machines are the online machines that have the tool, in state order.
-func (p *toolPage) machines(m *model, t protocol.Tool) []protocol.MachineStatus {
-	return byState(m.st, onlineMachines(m, t), time.Now())
+// templates are the online machines that have the tool, in state order.
+func (p *toolPage) templates(m *model, t protocol.Tool) []protocol.TemplateStatus {
+	return byState(m.st, onlineTemplates(m, t), time.Now())
 }
 
 func (p *toolPage) hint(m *model) string {
@@ -345,9 +487,9 @@ func (p *toolPage) hint(m *model) string {
 	if !ok {
 		return ""
 	}
-	if p.onMachines {
-		if ms, i := p.selectedMachine(m, t); i >= 0 {
-			s := machineState(m.st, ms[i], time.Now())
+	if p.onTemplates {
+		if ms, i := p.selectedTemplate(m, t); i >= 0 {
+			s := templateState(m.st, ms[i], time.Now())
 			return ms[i].Key + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
 		}
 		return ""
@@ -370,9 +512,9 @@ func (p *toolPage) canEnd(m *model, l protocol.LeaseStatus) bool {
 
 func (p *toolPage) keys(m *model) []binding {
 	ks := []binding{{"↑↓", "move"}, {"tab", "next section"}}
-	if p.onMachines {
+	if p.onTemplates {
 		t, _ := p.tool(m)
-		if ms, _ := p.selectedMachine(m, t); len(ms) > 0 {
+		if ms, _ := p.selectedTemplate(m, t); len(ms) > 0 {
 			ks = append(ks, binding{"enter", "open the machine"})
 		}
 		return ks
@@ -414,24 +556,24 @@ func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes:
 
 func (p *toolPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	if k.String() == "tab" || k.String() == "shift+tab" {
-		p.onMachines = !p.onMachines
+		p.onTemplates = !p.onTemplates
 		return nil
 	}
-	if p.onMachines {
+	if p.onTemplates {
 		t, _ := p.tool(m)
-		ms, i := p.selectedMachine(m, t)
+		ms, i := p.selectedTemplate(m, t)
 		// Down from the last machine goes on to the waiting line.
 		if q, _ := p.selected(m); (k.String() == "down" || k.String() == "j") && i == len(ms)-1 && len(q) > 0 {
-			p.onMachines, p.sel = false, q[0].ID
+			p.onTemplates, p.sel = false, q[0].ID
 			return nil
 		}
 		if i < 0 {
 			return nil
 		}
 		if k.String() == "enter" {
-			return m.open(&machinePage{machineKey: ms[i].Key})
+			return m.open(&templatePage{templateKey: ms[i].Key})
 		}
-		p.machineSel = ms[move(i, len(ms), k.String())].Key
+		p.templateSel = ms[move(i, len(ms), k.String())].Key
 		return nil
 	}
 	q, i := p.selected(m)
@@ -448,9 +590,9 @@ func (p *toolPage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	case "up", "k":
 		if i > 0 {
 			p.sel = q[i-1].ID
-		} else if t, _ := p.tool(m); len(p.machines(m, t)) > 0 {
-			ms := p.machines(m, t)
-			p.onMachines, p.machineSel = true, ms[len(ms)-1].Key
+		} else if t, _ := p.tool(m); len(p.templates(m, t)) > 0 {
+			ms := p.templates(m, t)
+			p.onTemplates, p.templateSel = true, ms[len(ms)-1].Key
 		}
 	case "down", "j":
 		if i < len(q)-1 {

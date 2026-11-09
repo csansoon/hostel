@@ -8,7 +8,7 @@ comma-separated):
   hostel run -- ./gradlew installDebug
   hostel run -- 'adb -s "$ANDROID_SERIAL" shell am start -n <package>/<activity>'
 
-To tap, type, and read the screen, use agent-device on the room with
+To tap, type, and read the screen, use agent-device on the machine with
 --platform android; "hostel run -- agent-device help" lists all commands.
 
 "hostel screenshot" shows the first emulator; "hostel screenshot --tool

@@ -35,7 +35,7 @@ sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 
 `/opt/hostel/bin/hostel` is the server binary. The service's user owns
 `/opt/hostel`, so that an admin can update the server from the app or from a
-computer (section 9). `/opt/hostel/helpers` gets the binaries for all rooms (`hostel-<os>-<arch>`,
+computer (section 9). `/opt/hostel/helpers` gets the binaries for all machines (`hostel-<os>-<arch>`,
 `mise-<os>-<arch>`). The server uses the tools in its binary: the install
 script does not copy tool definitions.
 
@@ -47,12 +47,12 @@ flags do not give them. Flags:
 
 | Flag | Meaning |
 |---|---|
-| `--server-id` | The server's name, `[a-z0-9]{1,20}` (default: from the host name). It is part of the names of rooms that the server creates. |
+| `--server-id` | The server's name, `[a-z0-9]{1,20}` (default: from the host name). It is part of the names of machines that the server creates. |
 | `--listen` | The API address (default `127.0.0.1:7410`). |
 | `--tls` | `self-signed` (default) or `off`. |
 | `--url` | An address that clients use. Repeat it for several. Invite codes contain them. |
 | `--user` | Your name, for the first admin. |
-| `--helper-dir` | The binaries for the rooms: `/opt/hostel/helpers` after `install.sh --server /opt/hostel` (default: `data_dir/helpers`). |
+| `--helper-dir` | The binaries for the machines: `/opt/hostel/helpers` after `install.sh --server /opt/hostel` (default: `data_dir/helpers`). |
 | `--config` | The file to write (default `~/.config/hostel/server.toml`). |
 
 Self-signed, on its own port (open TCP 7410 in the firewall):
@@ -103,7 +103,7 @@ grep -E 'helper_dir|gateway_public' ~/.config/hostel/server.toml
 hostel admin config check
 ```
 
-Without `helper_dir`, the server cannot give rooms their helper, and `hostel
+Without `helper_dir`, the server cannot give machines their helper, and `hostel
 machine join` cannot download the binary. Without `gateway_public` behind a
 proxy, every guest SSH session and every joined machine fails.
 
@@ -156,8 +156,8 @@ journalctl -u hostel -f
 JSON on stderr. If the configuration is invalid, the server does not start and
 the log says why.
 
-For Namespace rooms, the `devbox` and `nsc` CLIs must be on the service's
-`PATH` (`hostel-rooms`, section "Namespace").
+For Namespace machines, the `devbox` and `nsc` CLIs must be on the service's
+`PATH` (`hostel-machines`, section "Namespace").
 
 ## 6. The configuration in the database
 
@@ -182,7 +182,7 @@ Settings: `idle_timeout` (10m), `poll_timeout` (5m), `limit_retry` (2m),
 
 The server refuses a change if another revision came first (edit again) or if
 it is invalid (the error names the key path). Machines and providers:
-`hostel-rooms`. Tools: `hostel-tools`. Users: `hostel-users`.
+`hostel-machines`. Tools: `hostel-tools`. Users: `hostel-users`.
 
 ## 7. Invites on the server machine
 
@@ -204,7 +204,7 @@ Back up the database with SQLite, not with a file copy:
 sqlite3 ~/.local/share/hostel/hostel.db ".backup /var/backups/hostel.db"
 ```
 
-- A lost database: users must connect again; on-demand rooms with this
+- A lost database: users must connect again; on-demand machines with this
   `server_id` are destroyed at the next reconcile.
 - A lost `server_ed25519`: put the new public key (`hostel admin pubkey`) on each
   static machine.
@@ -214,11 +214,11 @@ sqlite3 ~/.local/share/hostel/hostel.db ".backup /var/backups/hostel.db"
 ## 9. Update
 
 From v0.2.0, the server updates itself. Each way checks the signature of the
-release, replaces the server binary and the room binaries in `helper_dir`, and
+release, replaces the server binary and the machine binaries in `helper_dir`, and
 refuses a release that is not newer. The server sends the new helper to each
-room before its next lease.
+machine before its next lease.
 
-- **From the app** (an admin): Front desk › Update the server shows when a
+- **From the app** (an admin): Front desk › This server › Update the server shows when a
   newer release exists. The server starts again by itself with the new binary.
   Leases and their jobs continue; a `hostel run` that streams output at that
   moment loses the stream (`hostel attach <job>` continues it).
@@ -244,9 +244,9 @@ sudo systemctl restart hostel
 ```
 
 Machines that joined from behind NAT run their own copy of `hostel` for the
-connection: the app shows "Out of date" on them (`hostel-rooms`).
+connection: the app shows "Out of date" on them (`hostel-machines`).
 
 ## Next
 
-- Add rooms: `hostel-rooms`.
+- Add machines: `hostel-machines`.
 - Invite people: `hostel-users`.

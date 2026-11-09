@@ -22,7 +22,7 @@ import (
 const serverUpdateUsage = `Usage: hostel server update [--version vX.Y.Z] [--config server.toml]
        hostel server update --remote [--version vX.Y.Z]
 
-On the server machine: replaces the server binary and the room binaries in
+On the server machine: replaces the server binary and the machine binaries in
 helper_dir with the latest release (or --version), after a check of the
 release signature; then restart the server (sudo systemctl restart hostel).
 With --remote, on an admin's computer: the server updates itself and starts
