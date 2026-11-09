@@ -39,9 +39,11 @@ type Server struct {
 	live    atomic.Pointer[liveConfig]
 	applyMu sync.Mutex
 	// joinMu: one machine join at a time.
-	joinMu  sync.Mutex
-	usage   usageCache
-	schedMu sync.Mutex
+	joinMu sync.Mutex
+	usage  usageCache
+	// syncLocks: one upload at a time on each machine (by machine ID).
+	syncLocks sync.Map
+	schedMu   sync.Mutex
 	// localData is server.toml at the start: its keys change only with a
 	// restart.
 	localData  []byte

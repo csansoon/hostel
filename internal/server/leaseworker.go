@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/csansoon/hostel/internal/config"
@@ -271,7 +272,7 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 			if err != nil {
 				return err
 			}
-			if _, err := machine.Sync(ctx, upload); err != nil {
+			if _, err := s.syncMachine(ctx, l.MachineID, machine, upload); err != nil {
 				return err
 			}
 			synced = true
@@ -312,7 +313,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err != nil {
 		return err
 	}
-	if _, err := machine.Sync(ctx, upload); err != nil {
+	if _, err := s.syncMachine(ctx, l.MachineID, machine, upload); err != nil {
 		return err
 	}
 	view, err := s.loadToolView(ctx)
@@ -542,7 +543,14 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 		req.Check = sortedKeys(check)
 	}
 	var resp protocol.CleanupResponse
-	if err := machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp); err != nil {
+	err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
+	if errors.Is(err, machineops.ErrNoHelper) {
+		// A lease of a server before M10g: its machine still has the old binary.
+		if err = s.syncMachineHelper(ctx, machineID); err == nil {
+			err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	if err := s.recordChecks(ctx, machineID, resp.Checks, check); err != nil {
@@ -568,4 +576,38 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 		}
 	}
 	return nil
+}
+
+// syncMachineHelper installs the server's helper on a machine.
+func (s *Server) syncMachineHelper(ctx context.Context, machineID int64) error {
+	r, err := s.store.Machine(ctx, machineID)
+	if err != nil {
+		return err
+	}
+	lc := s.live.Load()
+	m := lc.cfg.Template(r.Provider + "/" + r.Template)
+	if m == nil {
+		return fmt.Errorf("install the helper: the machine %s has no entry in the configuration", r.Name)
+	}
+	machine, _, err := s.openMachine(ctx, machineID)
+	if err != nil {
+		return err
+	}
+	defer machine.Conn.Close()
+	upload, err := s.machineUpload(lc, machine, m)
+	if err != nil {
+		return err
+	}
+	_, err = s.syncMachine(ctx, machineID, machine, upload)
+	return err
+}
+
+// syncMachine runs one upload at a time on a machine: uploads use fixed
+// temporary paths, and provisioning can run beside a cleanup.
+func (s *Server) syncMachine(ctx context.Context, machineID int64, machine *machineops.Machine, upload machineops.Upload) (string, error) {
+	v, _ := s.syncLocks.LoadOrStore(machineID, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return machine.Sync(ctx, upload)
 }

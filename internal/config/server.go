@@ -873,8 +873,8 @@ func checkOldKeys(file string, data []byte, doc string) error {
 func OldForm(data []byte) error { return checkOldKeys("", data, "the configuration") }
 
 var (
-	oldMaxRooms    = regexp.MustCompile(`\bmax_rooms\b`)
-	oldInlineLimit = regexp.MustCompile(`(\{[^{}]*?)\bmachines(\s*=)`)
+	oldMaxRooms    = regexp.MustCompile(`((?:^|[{,])\s*)max_rooms(\s*=)`)
+	oldInlineLimit = regexp.MustCompile(`([{,]\s*)machines(\s*=)`)
 	oldHeader      = regexp.MustCompile(`^(\s*\[\[?)([^\]]+)(\]\]?.*)$`)
 	oldKey         = regexp.MustCompile(`^(\s*)(slots|machines)(\s*=.*)$`)
 )
@@ -894,7 +894,7 @@ func UpgradeWords(doc []byte) []byte {
 	lines := strings.Split(string(doc), "\n")
 	table := ""
 	for i, l := range lines {
-		l = oldMaxRooms.ReplaceAllString(l, "max_machines")
+		l = oldMaxRooms.ReplaceAllString(l, "${1}max_machines$2")
 		l = oldInlineLimit.ReplaceAllString(l, "${1}templates$2")
 		if g := oldHeader.FindStringSubmatch(l); g != nil {
 			path := strings.Split(g[2], ".")

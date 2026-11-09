@@ -168,7 +168,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Machine, m *config.Tem
 	if err != nil {
 		return err
 	}
-	helperSum, err := machine.Sync(ctx, upload)
+	helperSum, err := s.syncMachine(ctx, r.ID, machine, upload)
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func (s *Server) provisionRoomUser(ctx context.Context, r store.Machine, m *conf
 	if err != nil {
 		return err
 	}
-	if _, err := machine.Sync(ctx, upload); err != nil {
+	if _, err := s.syncMachine(ctx, r.ID, machine, upload); err != nil {
 		return err
 	}
 	var resp protocol.MiseInstallResponse

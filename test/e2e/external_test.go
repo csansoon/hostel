@@ -433,6 +433,8 @@ func TestStoredConfigOldWords(t *testing.T) {
 			latest, err := st.LatestConfig(ctx)
 			if err == nil {
 				old := strings.NewReplacer("providers.cloud.templates.", "providers.cloud.machines.", "max_machines", "max_rooms", "{ templates", "{ machines").Replace(latest.Document) + c.table
+				// A value with the old word stays as it is.
+				old = strings.Replace(old, "[providers.cloud]\n", "[providers.cloud]\nenv = { OPTION = \"max_rooms=2\" }\n", 1)
 				if !strings.Contains(old, "providers.cloud.machines.small") {
 					t.Fatalf("the stored configuration has no template:\n%s", latest.Document)
 				}
@@ -452,7 +454,7 @@ func TestStoredConfigOldWords(t *testing.T) {
 				Document string `json:"document"`
 			}
 			if code := f.s.get("/v1/config", f.e.admin, &doc); code != 200 || !strings.Contains(doc.Document, "providers.cloud.templates.small") ||
-				strings.Contains(doc.Document, "max_rooms") || strings.Contains(doc.Document, ".slots") {
+				strings.Contains(doc.Document, "max_rooms =") || strings.Contains(doc.Document, ".slots") || !strings.Contains(doc.Document, `OPTION = "max_rooms=2"`) {
 				t.Fatalf("the stored configuration after the update: HTTP %d:\n%s", code, doc.Document)
 			}
 		})
