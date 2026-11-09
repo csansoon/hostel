@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -299,6 +300,56 @@ func TestOldHelperReplaced(t *testing.T) {
 	}
 	f.s = f.s.restart()
 	f.s.waitMachine("home/box", protocol.MachineRunning, machineReady)
+	f.e.mustHostel("acquire", "fake-screen", "--task", "after the update")
+	f.e.mustHostel("release")
+}
+
+// TestOldGuestState (M10g): a guest updates while its lease.json has the keys
+// from before M10g, and migration 013 ended that lease. Acquire reports the
+// end instead of success with an empty room.
+func TestOldGuestState(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	lease := f.acquire()
+	path := filepath.Join(f.e.cwd, ".git", "hostel", "lease", "lease.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st map[string]any
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatal(err)
+	}
+	st["machine"] = st["template"]
+	delete(st, "template")
+	access := st["access"].(map[string]any)
+	for now, old := range map[string]string{"room": "slot", "machine_os": "room_os", "machine_arch": "room_arch"} {
+		access[old] = access[now]
+		delete(access, now)
+	}
+	if data, err = json.Marshal(st); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.s.stop()
+	db, err := sql.Open("sqlite", filepath.Join(f.e.dataDir(), "hostel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`UPDATE leases SET state = 'cleaning', end_state = 'failed', end_reason = 'the server was updated; acquire again', revision = revision + 1 WHERE id = ?`, lease)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s = f.s.restart()
+	f.e.waitFor("the end of the migrated lease", 2*time.Minute, func() bool { return f.lease(lease).State == "failed" })
+	r := f.e.hostel("acquire", "fake-screen", "--task", "after the update")
+	if r.code == 0 || !strings.Contains(r.stderr, "the server was updated; acquire again") {
+		t.Fatalf("acquire with the old state: %s", r)
+	}
+	f.waitRoomFree()
 	f.e.mustHostel("acquire", "fake-screen", "--task", "after the update")
 	f.e.mustHostel("release")
 }
