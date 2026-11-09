@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/pelletier/go-toml/v2"
@@ -874,10 +873,10 @@ func checkOldKeys(file string, data []byte, doc string) error {
 func OldForm(data []byte) error { return checkOldKeys("", data, "the configuration") }
 
 var (
-	oldMaxRooms   = regexp.MustCompile(`\bmax_rooms\b`)
-	oldSlotsKey   = regexp.MustCompile(`(?m)^(\s*)slots(\s*=)`)
-	oldSlotsTable = regexp.MustCompile(`(?m)^(\s*\[\[?[^\]]*)\.slots(\]\]?)`)
-	oldLimits     = regexp.MustCompile(`(?m)^(\s*limits\s*=.*)\bmachines(\s*=)`)
+	oldMaxRooms    = regexp.MustCompile(`\bmax_rooms\b`)
+	oldInlineLimit = regexp.MustCompile(`(\{[^{}]*?)\bmachines(\s*=)`)
+	oldHeader      = regexp.MustCompile(`^(\s*\[\[?)([^\]]+)(\]\]?.*)$`)
+	oldKey         = regexp.MustCompile(`^(\s*)(slots|machines)(\s*=.*)$`)
 )
 
 // UpgradeWords rewrites a stored configuration of the words before M10g. A
@@ -892,16 +891,36 @@ func UpgradeWords(doc []byte) []byte {
 	if toml.Unmarshal(doc, &kinds) != nil {
 		return doc // the decoder reports the syntax error
 	}
-	doc = oldMaxRooms.ReplaceAll(doc, []byte("max_machines"))
-	doc = oldSlotsKey.ReplaceAll(doc, []byte("${1}rooms$2"))
-	doc = oldSlotsTable.ReplaceAll(doc, []byte("$1.rooms$2"))
-	doc = oldLimits.ReplaceAll(doc, []byte("${1}templates$2"))
-	for name, p := range kinds.Providers {
-		if p.Kind != ProviderStatic {
-			doc = bytes.ReplaceAll(doc, []byte("providers."+name+".machines."), []byte("providers."+name+".templates."))
+	lines := strings.Split(string(doc), "\n")
+	table := ""
+	for i, l := range lines {
+		l = oldMaxRooms.ReplaceAllString(l, "max_machines")
+		l = oldInlineLimit.ReplaceAllString(l, "${1}templates$2")
+		if g := oldHeader.FindStringSubmatch(l); g != nil {
+			path := strings.Split(g[2], ".")
+			for j, seg := range path {
+				name := strings.Trim(strings.TrimSpace(seg), `"'`)
+				switch {
+				case j == 2 && name == "machines" && strings.Trim(strings.TrimSpace(path[0]), `"'`) == "providers" &&
+					kinds.Providers[strings.Trim(strings.TrimSpace(path[1]), `"'`)].Kind != ProviderStatic:
+					path[j] = strings.Replace(seg, "machines", "templates", 1)
+				case j > 2 && name == "slots":
+					path[j] = strings.Replace(seg, "slots", "rooms", 1)
+				}
+			}
+			table = strings.Join(path, ".")
+			l = g[1] + table + g[3]
+		} else if g := oldKey.FindStringSubmatch(l); g != nil {
+			switch {
+			case g[2] == "slots":
+				l = g[1] + "rooms" + g[3]
+			case strings.HasSuffix(table, ".limits"):
+				l = g[1] + "templates" + g[3]
+			}
 		}
+		lines[i] = l
 	}
-	return doc
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // isTemplateOrProvider reports whether a key path is providers.<p> or

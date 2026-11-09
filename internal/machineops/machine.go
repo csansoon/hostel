@@ -169,7 +169,8 @@ func (r *Machine) Helper(ctx context.Context, args []string, in, out any) error 
 		}
 		return nil
 	}
-	if shell.NotFound(r.Shell, code) {
+	// A binary before M10g has no "helper" command: the server replaces it.
+	if shell.NotFound(r.Shell, code) || strings.Contains(stderr, `unknown command "helper"`) {
 		return ErrNoHelper
 	}
 	var he protocol.HelperError

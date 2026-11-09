@@ -141,7 +141,15 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 		return nil, fmt.Errorf("write the tools: %w", err)
 	}
 	removeOldToolDirs(paths.DataDir, dir)
-	document, warning := string(config.UpgradeWords([]byte(latest.Document))), ""
+	// A new revision, so that "hostel config" also edits the new words.
+	if upgraded := string(config.UpgradeWords([]byte(latest.Document))); upgraded != latest.Document {
+		rev, err := st.AddConfig(ctx, latest.Revision, upgraded, 0, time.Now())
+		if err != nil {
+			return nil, fmt.Errorf("save the configuration with the new words: %w", err)
+		}
+		latest.Revision, latest.Document = rev, upgraded
+	}
+	document, warning := latest.Document, ""
 	if oldErr := config.OldForm([]byte(document)); oldErr != nil {
 		// No compatibility with the configuration before M10e (owner
 		// decision, 2026-11-05), but the server stays reachable: it starts

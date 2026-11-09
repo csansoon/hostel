@@ -417,28 +417,44 @@ func TestAppOnDemandProvider(t *testing.T) {
 // without it would retire the provider's machines.
 func TestStoredConfigOldWords(t *testing.T) {
 	t.Parallel()
-	f := newExternalFixture(t, "", `limits = [{ templates = ["small"], max_machines = 1 }]`, nil, smallTemplate)
-	f.s.stop()
-	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(f.e.dataDir(), "hostel.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	latest, err := st.LatestConfig(ctx)
-	if err == nil {
-		old := strings.NewReplacer("providers.cloud.templates.", "providers.cloud.machines.", "max_machines", "max_rooms", "limits = [{ templates", "limits = [{ machines").Replace(latest.Document)
-		if !strings.Contains(old, "providers.cloud.machines.small") {
-			t.Fatalf("the stored configuration has no template:\n%s", latest.Document)
-		}
-		_, err = st.AddConfig(ctx, latest.Revision, old, 0, time.Now())
-	}
-	st.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.s = f.s.restart()
-	s := f.s.status()
-	if s.Warning != "" || len(s.Templates) != 1 || s.Templates[0].Key != "cloud/small" || s.Templates[0].MaxMachines != 2 {
-		t.Fatalf("status with the old words: warning %q, templates %+v", s.Warning, s.Templates)
+	for _, c := range []struct{ name, keys, table string }{
+		{"inline limits", `limits = [{ templates = ["small"], max_machines = 1 }, { templates = ["small"], max_machines = 2 }]`, ""},
+		{"limits in tables", "", "\n[[providers.cloud.limits]]\nmachines = [\"small\"]\nmax_rooms = 2\n\n[[providers.cloud.machines.small.slots]]\nname = \"b\"\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newExternalFixture(t, "", c.keys, nil, smallTemplate)
+			f.s.stop()
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(f.e.dataDir(), "hostel.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			latest, err := st.LatestConfig(ctx)
+			if err == nil {
+				old := strings.NewReplacer("providers.cloud.templates.", "providers.cloud.machines.", "max_machines", "max_rooms", "{ templates", "{ machines").Replace(latest.Document) + c.table
+				if !strings.Contains(old, "providers.cloud.machines.small") {
+					t.Fatalf("the stored configuration has no template:\n%s", latest.Document)
+				}
+				_, err = st.AddConfig(ctx, latest.Revision, old, 0, time.Now())
+			}
+			st.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.s = f.s.restart()
+			s := f.s.status()
+			if s.Warning != "" || len(s.Templates) != 1 || s.Templates[0].Key != "cloud/small" {
+				t.Fatalf("status with the old words: warning %q, templates %+v", s.Warning, s.Templates)
+			}
+			// "hostel config" edits the new words.
+			var doc struct {
+				Document string `json:"document"`
+			}
+			if code := f.s.get("/v1/config", f.e.admin, &doc); code != 200 || !strings.Contains(doc.Document, "providers.cloud.templates.small") ||
+				strings.Contains(doc.Document, "max_rooms") || strings.Contains(doc.Document, ".slots") {
+				t.Fatalf("the stored configuration after the update: HTTP %d:\n%s", code, doc.Document)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -274,4 +275,30 @@ func TestTokens(t *testing.T) {
 	if r := e.hostel("admin", "pubkey"); r.code != 0 || !strings.HasPrefix(r.stdout, "ssh-ed25519 ") {
 		t.Fatalf("admin pubkey: %s", r)
 	}
+}
+
+// TestOldHelperReplaced (M10g): a machine with the binary of a server before
+// M10g has no "helper" command. The server replaces it, instead of breaking
+// the machine.
+func TestOldHelperReplaced(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	f.s.stop()
+	script := `printf '%s\n' '#!/bin/sh' 'echo hostel: unknown command \"helper\" >&2' 'exit 2' > /home/hostel/hostel/bin/hostel`
+	if out, err := docker("exec", f.c.name, "sh", "-c", script); err != nil {
+		t.Fatalf("install the old binary: %v: %s", err, out)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(f.e.dataDir(), "hostel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`UPDATE machines SET helper_sha256 = 'old'`)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s = f.s.restart()
+	f.s.waitMachine("home/box", protocol.MachineRunning, machineReady)
+	f.e.mustHostel("acquire", "fake-screen", "--task", "after the update")
+	f.e.mustHostel("release")
 }

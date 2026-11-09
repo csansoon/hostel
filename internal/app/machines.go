@@ -71,7 +71,7 @@ func (p *templatePage) load(m *model) tea.Cmd {
 	p.loading = true
 	c, gen, key := m.c, m.gen, p.templateKey
 	var names []string
-	for _, r := range templateMachines(m.st, key) {
+	for _, r := range p.machines(m) {
 		names = append(names, r.Name)
 	}
 	return func() tea.Msg {
