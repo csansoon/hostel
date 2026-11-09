@@ -329,11 +329,10 @@ func templateLeft(t protocol.TemplateStatus) string {
 	return s
 }
 
+// templateRight says what runs, not what can start: limits of the provider
+// also count.
 func templateRight(m *model, t protocol.TemplateStatus) string {
-	if n := t.MaxMachines - len(templateMachines(m.st, t.Key)); n > 0 {
-		return fmt.Sprintf("%d more can start", n)
-	}
-	return "at its limit"
+	return fmt.Sprintf("%d of %d running", len(templateMachines(m.st, t.Key)), t.MaxMachines)
 }
 
 func (p *rooms) hint(m *model) string {

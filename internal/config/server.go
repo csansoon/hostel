@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2/unstable"
 	"maps"
 	"net"
 	"net/url"
@@ -872,16 +873,10 @@ func checkOldKeys(file string, data []byte, doc string) error {
 // configuration document, or nil.
 func OldForm(data []byte) error { return checkOldKeys("", data, "the configuration") }
 
-var (
-	oldMaxRooms    = regexp.MustCompile(`((?:^|[{,])\s*)max_rooms(\s*=)`)
-	oldInlineLimit = regexp.MustCompile(`([{,]\s*)machines(\s*=)`)
-	oldHeader      = regexp.MustCompile(`^(\s*\[\[?)([^\]]+)(\]\]?.*)$`)
-	oldKey         = regexp.MustCompile(`^(\s*)(slots|machines)(\s*=.*)$`)
-)
-
-// UpgradeWords rewrites a stored configuration of the words before M10g. A
-// server that started without its on-demand providers would retire their
-// machines (cost: they stay until their provider-side deadline).
+// UpgradeWords rewrites the keys of a stored configuration with the words
+// before M10g. A server that started without its on-demand providers would
+// retire their machines (cost: they stay until their provider-side deadline).
+// It parses the document: values, and opaque tables such as spec, stay.
 func UpgradeWords(doc []byte) []byte {
 	var kinds struct {
 		Providers map[string]struct {
@@ -891,36 +886,71 @@ func UpgradeWords(doc []byte) []byte {
 	if toml.Unmarshal(doc, &kinds) != nil {
 		return doc // the decoder reports the syntax error
 	}
-	lines := strings.Split(string(doc), "\n")
-	table := ""
-	for i, l := range lines {
-		l = oldMaxRooms.ReplaceAllString(l, "${1}max_machines$2")
-		l = oldInlineLimit.ReplaceAllString(l, "${1}templates$2")
-		if g := oldHeader.FindStringSubmatch(l); g != nil {
-			path := strings.Split(g[2], ".")
-			for j, seg := range path {
-				name := strings.Trim(strings.TrimSpace(seg), `"'`)
-				switch {
-				case j == 2 && name == "machines" && strings.Trim(strings.TrimSpace(path[0]), `"'`) == "providers" &&
-					kinds.Providers[strings.Trim(strings.TrimSpace(path[1]), `"'`)].Kind != ProviderStatic:
-					path[j] = strings.Replace(seg, "machines", "templates", 1)
-				case j > 2 && name == "slots":
-					path[j] = strings.Replace(seg, "slots", "rooms", 1)
-				}
-			}
-			table = strings.Join(path, ".")
-			l = g[1] + table + g[3]
-		} else if g := oldKey.FindStringSubmatch(l); g != nil {
-			switch {
-			case g[2] == "slots":
-				l = g[1] + "rooms" + g[3]
-			case strings.HasSuffix(table, ".limits"):
-				l = g[1] + "templates" + g[3]
+	newWord := func(path []string) string {
+		n, last := len(path), path[len(path)-1]
+		if n < 3 || path[0] != "providers" {
+			return ""
+		}
+		entries := n == 5 && (path[2] == "machines" || path[2] == "templates")
+		switch {
+		case n == 3 && last == "machines" && kinds.Providers[path[1]].Kind != ProviderStatic,
+			n == 4 && path[2] == "limits" && last == "machines":
+			return "templates"
+		case last == "max_rooms" && (n == 3 || n == 4 && path[2] == "limits" || entries):
+			return "max_machines"
+		case last == "slots" && entries:
+			return "rooms"
+		}
+		return ""
+	}
+	type edit struct {
+		start, end int
+		word       string
+	}
+	var edits []edit
+	walkKey := func(path []string, it unstable.Iterator) []string {
+		path = slices.Clone(path)
+		for it.Next() {
+			n := it.Node()
+			path = append(path, string(n.Data))
+			if w := newWord(path); w != "" {
+				edits = append(edits, edit{int(n.Raw.Offset), int(n.Raw.Offset + n.Raw.Length), w})
 			}
 		}
-		lines[i] = l
+		return path
 	}
-	return []byte(strings.Join(lines, "\n"))
+	var walkValue func(path []string, v *unstable.Node)
+	walkValue = func(path []string, v *unstable.Node) {
+		for it := v.Children(); it.Next(); {
+			switch c := it.Node(); {
+			case v.Kind == unstable.Array:
+				walkValue(path, c)
+			case v.Kind == unstable.InlineTable && c.Kind == unstable.KeyValue:
+				walkValue(walkKey(path, c.Key()), c.Value())
+			}
+		}
+	}
+	p := unstable.Parser{}
+	p.Reset(doc)
+	var table []string
+	for p.NextExpression() {
+		e := p.Expression()
+		switch e.Kind {
+		case unstable.Table, unstable.ArrayTable:
+			table = walkKey(nil, e.Key())
+		case unstable.KeyValue:
+			walkValue(walkKey(table, e.Key()), e.Value())
+		}
+	}
+	if p.Error() != nil {
+		return doc
+	}
+	slices.SortFunc(edits, func(a, b edit) int { return b.start - a.start })
+	out := slices.Clone(doc)
+	for _, e := range edits {
+		out = slices.Replace(out, e.start, e.end, []byte(e.word)...)
+	}
+	return out
 }
 
 // isTemplateOrProvider reports whether a key path is providers.<p> or

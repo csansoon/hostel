@@ -401,14 +401,14 @@ func TestAppOnDemandProvider(t *testing.T) {
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
 	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`)
 	a.in("3")
-	a.waitFor(10*time.Second, `▌ CLOUD LAB\s+─+ creates machines when needed`, `◌ small.*2 more can start`)
+	a.waitFor(10*time.Second, `▌ CLOUD LAB\s+─+ creates machines when needed`, `◌ small.*0 of 2 running`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `Cloud Lab`, `external`, `TEMPLATES`, `small`, `0 of 2 running`)
 	a.in("\x1b")
 	a.waitFor(10*time.Second, `▌ CLOUD LAB`)
 
 	f.acquire()
-	a.waitFor(time.Minute, `(?s)CLOUD LAB.*\S+\s+■.*◉ guest e2e test.*◌ small.*1 more can start`)
+	a.waitFor(time.Minute, `(?s)CLOUD LAB.*\S+\s+■.*◉ guest e2e test.*◌ small.*1 of 2 running`)
 	a.quit()
 }
 
@@ -417,9 +417,14 @@ func TestAppOnDemandProvider(t *testing.T) {
 // without it would retire the provider's machines.
 func TestStoredConfigOldWords(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ name, keys, table string }{
-		{"inline limits", `limits = [{ templates = ["small"], max_machines = 1 }, { templates = ["small"], max_machines = 2 }]`, ""},
-		{"limits in tables", "", "\n[[providers.cloud.limits]]\nmachines = [\"small\"]\nmax_rooms = 2\n\n[[providers.cloud.machines.small.slots]]\nname = \"b\"\n"},
+	inline := `machines = { small = { os = "linux", spec = { image = "machine", max_rooms = 4 }, tools = ["fake-screen"], max_rooms = 2 } }` + "\n"
+	for _, c := range []struct {
+		name, keys, table, want string
+		inline                  bool
+	}{
+		{name: "inline limits", keys: `limits = [{ templates = ["small"], max_machines = 1 }, { templates = ["small"], max_machines = 2 }]`, want: "providers.cloud.templates.small"},
+		{name: "limits in tables", table: "\n[[providers.cloud.limits]]\nmachines = [\"small\"]\nmax_rooms = 2\n\n[[providers.cloud.machines.small.slots]]\nname = \"b\"\n", want: "providers.cloud.templates.small"},
+		{name: "inline machines", inline: true, want: `templates = { small = { os = "linux", spec = { image = "machine", max_rooms = 4 }, tools = ["fake-screen"], max_machines = 2 } }`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -435,7 +440,11 @@ func TestStoredConfigOldWords(t *testing.T) {
 				old := strings.NewReplacer("providers.cloud.templates.", "providers.cloud.machines.", "max_machines", "max_rooms", "{ templates", "{ machines").Replace(latest.Document) + c.table
 				// A value with the old word stays as it is.
 				old = strings.Replace(old, "[providers.cloud]\n", "[providers.cloud]\nenv = { OPTION = \"max_rooms=2\" }\n", 1)
-				if !strings.Contains(old, "providers.cloud.machines.small") {
+				if c.inline {
+					i := strings.Index(old, "[providers.cloud.machines.small]")
+					old = strings.Replace(old[:i], "[providers.cloud]\n", "[providers.cloud]\n"+inline, 1)
+				}
+				if !c.inline && !strings.Contains(old, "providers.cloud.machines.small") {
 					t.Fatalf("the stored configuration has no template:\n%s", latest.Document)
 				}
 				_, err = st.AddConfig(ctx, latest.Revision, old, 0, time.Now())
@@ -453,8 +462,8 @@ func TestStoredConfigOldWords(t *testing.T) {
 			var doc struct {
 				Document string `json:"document"`
 			}
-			if code := f.s.get("/v1/config", f.e.admin, &doc); code != 200 || !strings.Contains(doc.Document, "providers.cloud.templates.small") ||
-				strings.Contains(doc.Document, "max_rooms =") || strings.Contains(doc.Document, ".slots") || !strings.Contains(doc.Document, `OPTION = "max_rooms=2"`) {
+			if code := f.s.get("/v1/config", f.e.admin, &doc); code != 200 || !strings.Contains(doc.Document, c.want) || strings.Contains(doc.Document, "max_rooms = 2") ||
+				strings.Contains(doc.Document, ".slots") || !strings.Contains(doc.Document, `OPTION = "max_rooms=2"`) {
 				t.Fatalf("the stored configuration after the update: HTTP %d:\n%s", code, doc.Document)
 			}
 		})
