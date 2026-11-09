@@ -43,8 +43,9 @@ var errNscTimeout = errors.New("timed out")
 // instance's own SSH server (the Namespace agent) refuses remote forwards,
 // which tunnels need.
 const (
-	instanceSSHPort      = 2222
-	instanceContainer    = "hostel-machine"
+	instanceSSHPort = 2222
+	// The name stays across versions: a retry finds the container that an older server made.
+	instanceContainer    = "hostel-room"
 	defaultInstanceImage = "ubuntu:24.04"
 	instanceUser         = "hostel"
 )
