@@ -91,7 +91,7 @@ them on the server machine.
   69 (the source cannot be reached).
 - **Versions between guest and server.** Each guest request has the header
   `X-Hostel-Version`, and each server answer too. The server refuses a known
-  guest version older than its minimum guest version (`v0.1.0`) with HTTP 426
+  guest version older than its minimum guest version (`v0.4.0`) with HTTP 426
   (`update_required`); a request without the header passes. When the server
   is newer, a guest command prints one line on stderr, at most once in 24 hours
   (`~/.config/hostel/update-notice`).

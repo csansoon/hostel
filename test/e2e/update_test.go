@@ -273,14 +273,14 @@ func TestUpdateNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+s.token)
-	req.Header.Set(protocol.VersionHeader, "v0.0.9")
+	req.Header.Set(protocol.VersionHeader, "v0.3.0")
 	resp, err := insecureClient().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUpgradeRequired || resp.Header.Get(protocol.VersionHeader) != "v1.1.0" {
-		t.Fatalf("a guest v0.0.9: HTTP %d, server version %q", resp.StatusCode, resp.Header.Get(protocol.VersionHeader))
+		t.Fatalf("a guest v0.3.0: HTTP %d, server version %q", resp.StatusCode, resp.Header.Get(protocol.VersionHeader))
 	}
 }
 

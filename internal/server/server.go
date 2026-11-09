@@ -313,9 +313,9 @@ func (s *Server) routes() http.Handler {
 }
 
 // minGuestVersion is the oldest guest that this server accepts. Raise it only
-// with a change that breaks the API (m10d-implementation.md). M10e (tools
-// replace platforms) is the release v0.3.0.
-const minGuestVersion = "v0.3.0"
+// with a change that breaks the API (m10d-implementation.md). M10g (machines
+// and rooms replace rooms and slots in the API) is the release v0.4.0.
+const minGuestVersion = "v0.4.0"
 
 // versioned adds the server version to each answer, and refuses a guest that
 // is older than minGuestVersion. A request without a version (v0.1.0, curl)

@@ -450,7 +450,9 @@ Owner decisions of 2026-11-06 (`requirements.md`, section 3).
   `[providers.<p>.templates.<t>]` for an on-demand provider, `rooms`, and
   `max_machines`. The helper mode is `hostel helper`. At the update, the server
   rewrites a stored configuration with the old words, and open leases end. Joined
-  machines run `hostel machine update`, because the gateway user changes.
+  machines run `hostel machine update`, because the gateway user changes. The
+  API changes too, so the server refuses guests older than `v0.4.0`, the release
+  of this milestone, and they run `hostel update`.
 - A provider has an optional display name (`label`). The status sends the
   providers; the server samples the live use of each running machine.
 - Lobby: the waiting line first, then Screens, then Software in a short form.
