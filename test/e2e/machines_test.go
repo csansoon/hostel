@@ -310,10 +310,12 @@ func TestOldHelperCleanup(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	lease := f.acquire()
+	f.e.mustHostel("run", "--detach", "--", "sleep 4242")
 	f.s.stop()
-	script := `printf '%s\n' '#!/bin/sh' 'echo hostel: unknown command \"helper\" >&2' 'exit 2' > /home/hostel/hostel/bin/hostel`
+	// The binary and the room directory of a server before M10g.
+	script := `mkdir -p /home/hostel/hostel/slots && chown hostel /home/hostel/hostel/slots && mv /home/hostel/hostel/rooms/a /home/hostel/hostel/slots/a && printf '%s\n' '#!/bin/sh' 'echo hostel: unknown command \"helper\" >&2' 'exit 2' > /home/hostel/hostel/bin/.old && chmod 755 /home/hostel/hostel/bin/.old && mv /home/hostel/hostel/bin/.old /home/hostel/hostel/bin/hostel`
 	if out, err := docker("exec", f.c.name, "sh", "-c", script); err != nil {
-		t.Fatalf("install the old binary: %v: %s", err, out)
+		t.Fatalf("install the old state: %v: %s", err, out)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(f.e.dataDir(), "hostel.db"))
 	if err != nil {
@@ -329,5 +331,11 @@ func TestOldHelperCleanup(t *testing.T) {
 	f.waitRoomFree()
 	if r := f.s.machine("home/box"); r.State == protocol.MachineBroken {
 		t.Fatalf("the machine is broken: %s", r.Reason)
+	}
+	// The cleanup used the state of the old directory: the job is gone, and so
+	// are both directories.
+	out, err := docker("exec", f.c.name, "sh", "-c", `pgrep -f "sleep [4]242" | wc -l; ls /home/hostel/hostel/slots/a /home/hostel/hostel/rooms/a 2>/dev/null | wc -l`)
+	if err != nil || strings.Join(strings.Fields(out), " ") != "0 0" {
+		t.Fatalf("after the cleanup (jobs, directory entries): %q, %v", out, err)
 	}
 }

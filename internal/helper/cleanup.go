@@ -38,14 +38,26 @@ func (h *helper) toolInfo(name string) (config.Tool, error) {
 
 // cleanup deletes what a lease left in its room (design, section 17). Each step runs
 // even if an earlier step failed.
+// moveOldRoom moves the directory of a room from its path before M10g, so that
+// the cleanup finds its sessions, jobs, and screen state. A failure leaves the
+// old directory for the next cleanup of the room.
+func (h *helper) moveOldRoom(room string) {
+	old := filepath.Join(h.root, "slots", room)
+	if _, err := os.Stat(old); err != nil {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(h.roomDir(room)), 0o755) == nil && os.Rename(old, h.roomDir(room)) == nil {
+		_ = os.Remove(filepath.Dir(old)) // only when it is empty
+	}
+}
+
 func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupResponse, error) {
-	// The room directories of servers before M10g: their leases have ended.
-	_ = os.RemoveAll(filepath.Join(h.root, "slots"))
 	var resp protocol.CleanupResponse
 	room, _, err := roomFlag("cleanup", args)
 	if err != nil {
 		return resp, err
 	}
+	h.moveOldRoom(room)
 	var req protocol.CleanupRequest
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return resp, fmt.Errorf("read the request: %w", err)
