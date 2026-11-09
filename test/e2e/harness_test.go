@@ -37,23 +37,23 @@ func (s *serverProc) status() protocol.Status {
 	return st
 }
 
-// room returns the status of the room of a machine ("<provider>/<machine>").
-func (s *serverProc) room(machine string) protocol.RoomStatus {
+// machine returns the status of the machine of a machine ("<provider>/<machine>").
+func (s *serverProc) machine(template string) protocol.MachineStatus {
 	s.e.t.Helper()
-	for _, r := range s.status().Rooms {
-		if r.Provider+"/"+r.Machine == machine {
+	for _, r := range s.status().Machines {
+		if r.Provider+"/"+r.Template == template {
 			return r
 		}
 	}
-	return protocol.RoomStatus{}
+	return protocol.MachineStatus{}
 }
 
-// waitRoom waits until the room of a machine is in state.
-func (s *serverProc) waitRoom(machine, state string, timeout time.Duration) protocol.RoomStatus {
+// waitMachine waits until the machine of a machine is in state.
+func (s *serverProc) waitMachine(template, state string, timeout time.Duration) protocol.MachineStatus {
 	s.e.t.Helper()
-	var r protocol.RoomStatus
-	s.e.waitFor("room "+machine+" "+state, timeout, func() bool {
-		r = s.room(machine)
+	var r protocol.MachineStatus
+	s.e.waitFor("machine "+template+" "+state, timeout, func() bool {
+		r = s.machine(template)
 		return r.State == state
 	})
 	return r
@@ -101,8 +101,8 @@ type env struct {
 	// server's pinned TLS key ("" for a server without its own TLS).
 	admin string
 	key   string
-	// slotUsers are extra users of static room containers (slot users).
-	slotUsers []string
+	// roomUsers are extra users of static machine containers (room users).
+	roomUsers []string
 	// guests counts the member users of useGuestToken.
 	guests int
 	// bin and serverBin replace hostelBin for guest commands and for the
@@ -268,7 +268,7 @@ func (e *env) writeFile(path, body string) {
 }
 
 // serverHeader returns the server.toml keys that every test uses: a unique
-// server_id and random free ports on 127.0.0.1. Rooms get no agent-device (a
+// server_id and random free ports on 127.0.0.1. Machines get no agent-device (a
 // download), except in TestMise.
 func serverHeader() string { return serverHeaderWith(false) }
 
@@ -622,8 +622,8 @@ func (s *serverProc) restartAfterKill() *serverProc {
 	return s.restart()
 }
 
-// inventoryOf returns a tool of a room's inventory, or nil.
-func inventoryOf(r protocol.RoomStatus, tool string) *protocol.InventoryTool {
+// inventoryOf returns a tool of a machine's inventory, or nil.
+func inventoryOf(r protocol.MachineStatus, tool string) *protocol.InventoryTool {
 	for i := range r.Tools {
 		if r.Tools[i].Name == tool {
 			return &r.Tools[i]

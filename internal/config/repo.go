@@ -24,11 +24,11 @@ type Repo struct {
 	File string `toml:"-"`
 }
 
-// Tunnel is a room → guest tunnel (design, section 14).
+// Tunnel is a machine → guest tunnel (design, section 14).
 type Tunnel struct {
 	LocalPort    int    `toml:"local_port"`
 	LocalPortEnv string `toml:"local_port_env"`
-	RoomPort     int    `toml:"room_port"`
+	MachinePort  int    `toml:"machine_port"`
 }
 
 // RepoTool holds what changes when the lease has the tool: its setup runs
@@ -77,11 +77,11 @@ func LoadRepo(file string) (*Repo, error) {
 	for _, name := range r.TunnelNames() {
 		t := r.Tunnels[name]
 		key := "tunnels." + name
-		if other, ok := fixed[t.RoomPort]; ok && t.RoomPort != 0 {
-			el.add(key+".room_port", "room port %d is also the room port of tunnel %s", t.RoomPort, other)
+		if other, ok := fixed[t.MachinePort]; ok && t.MachinePort != 0 {
+			el.add(key+".machine_port", "machine port %d is also the machine port of tunnel %s", t.MachinePort, other)
 		}
-		if t.RoomPort != 0 {
-			fixed[t.RoomPort] = name
+		if t.MachinePort != 0 {
+			fixed[t.MachinePort] = name
 		}
 		if !nameRE.MatchString(name) {
 			el.add(key, "tunnel name must match %s", nameRE)
@@ -92,8 +92,8 @@ func LoadRepo(file string) (*Repo, error) {
 		if t.LocalPort != 0 && (t.LocalPort < 1 || t.LocalPort > 65535) {
 			el.add(key+".local_port", "port %d is not between 1 and 65535", t.LocalPort)
 		}
-		if t.RoomPort != 0 && (t.RoomPort < 1024 || t.RoomPort > 65535) {
-			el.add(key+".room_port", "port %d is not between 1024 and 65535", t.RoomPort)
+		if t.MachinePort != 0 && (t.MachinePort < 1024 || t.MachinePort > 65535) {
+			el.add(key+".machine_port", "port %d is not between 1024 and 65535", t.MachinePort)
 		}
 	}
 	for i, t := range r.Tools {
@@ -146,14 +146,14 @@ func (r *Repo) LeaseSetup(tools []string) ([]string, map[string]string) {
 	return setup, env
 }
 
-// ExpandEnv replaces each {tunnels.<name>.port} placeholder with the room port of
+// ExpandEnv replaces each {tunnels.<name>.port} placeholder with the machine port of
 // that tunnel.
-func ExpandEnv(env map[string]string, roomPorts map[string]int) map[string]string {
+func ExpandEnv(env map[string]string, machinePorts map[string]int) map[string]string {
 	out := make(map[string]string, len(env))
 	for k, v := range env {
 		out[k] = placeholderRE.ReplaceAllStringFunc(v, func(m string) string {
 			name := placeholderRE.FindStringSubmatch(m)[1]
-			return fmt.Sprint(roomPorts[name])
+			return fmt.Sprint(machinePorts[name])
 		})
 	}
 	return out

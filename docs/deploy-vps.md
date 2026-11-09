@@ -1,8 +1,8 @@
 # Deploy the server on a VPS
 
 This guide puts the Hostel server on a Linux VPS (milestone M5). The reference
-deployment is an exe.dev VM; section 8 shows the changes for another VPS. Rooms
-behind NAT (for example a Mac at home) connect to the server with `hostel machine connect` (before M9: `hostel room connect`)
+deployment is an exe.dev VM; section 8 shows the changes for another VPS. Machines
+behind NAT (for example a Mac at home) connect to the server with `hostel machine connect` (before M9: `hostel helper connect`)
 (section 6).
 
 ## 1. What you need
@@ -10,7 +10,7 @@ behind NAT (for example a Mac at home) connect to the server with `hostel machin
 - A Linux VM with systemd, amd64 or arm64. 2 CPUs and 4 GB are enough.
 - One public HTTPS address for the server. The API and the gateway share it: the
   gateway also accepts SSH inside a WebSocket on `/v1/gateway`.
-- For Namespace rooms: the `nsc` and `devbox` CLIs, logged in as the server user
+- For Namespace machines: the `nsc` and `devbox` CLIs, logged in as the server user
   (section 5).
 - A GitHub release of Hostel (`install.sh`).
 
@@ -48,9 +48,9 @@ sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 ```
 
 `/opt/hostel/bin/hostel` is the server binary, `/opt/hostel/helpers` gets the
-binaries for all rooms (the default tools are in the binary). The
+binaries for all machines (the default tools are in the binary). The
 service's user (`exedev`) owns `/opt/hostel`, so that an admin can update the
-server from the app (Front desk › Update the server) or with `hostel server
+server from the app (Front desk › This server › Update the server) or with `hostel server
 update --remote`; the server then starts again by itself. On the VM,
 `hostel server update` and a restart of the service (section 4) do the same.
 
@@ -86,18 +86,18 @@ helper_dir = "/opt/hostel/helpers"
 ```
 
 - `listen` is the port that the HTTPS proxy sends to.
-- `gateway_listen` stays on `127.0.0.1`: guests and rooms use the WebSocket in
+- `gateway_listen` stays on `127.0.0.1`: guests and machines use the WebSocket in
   `gateway_public`.
-- `helper_dir` has the binaries for the rooms (`hostel-*`, `mise-*`); the server
+- `helper_dir` has the binaries for the machines (`hostel-*`, `mise-*`); the server
   also serves them to machines that join (section 6).
 
 Since M9, the providers, machines, and settings are in the server's
 database: an admin changes them from their own computer (section 4.1) with
-`hostel config edit`, `hostel config rooms`, `hostel config providers`,
+`hostel config edit`, `hostel config machines`, `hostel config providers`,
 `hostel config settings`, and `hostel config tools` (since M10e; the default
 tools come with the binary). A server from before
 M9 imports them from `server.toml` at its first start (a copy stays in
-`server.toml.pre-m9`). After that import, each room provisions once more.
+`server.toml.pre-m9`). After that import, each machine provisions once more.
 
 Check the file with `hostel admin config check` (it prints each problem).
 
@@ -190,15 +190,15 @@ use. A login lasts days (the owner's `nsc` login of 2026-10-20 was still valid
 on 2026-10-29); when it ends, the provider calls fail, and you must log in
 again.
 
-## 6. A static room behind NAT
+## 6. A static machine behind NAT
 
-The room (for example a Mac at home) keeps an outbound connection to the
+The machine (for example a Mac at home) keeps an outbound connection to the
 gateway. It needs no inbound SSH from the internet.
 
 **With a code (M9).** On your own computer:
 
 ```sh
-hostel config rooms add studio-mac --tool xcode --tool ios-simulator --tool macos-desktop
+hostel config machines add studio-mac --tool xcode --tool ios-simulator --tool macos-desktop
 ```
 
 It prints one command for macOS and Linux and one for Windows. Run it on the
@@ -207,26 +207,26 @@ new machine as an administrator. `hostel machine join` creates the user
 configuration (`connect = true`), and starts the service that runs `hostel
 machine connect` (a systemd unit as `hostel-connect`, a LaunchDaemon as root,
 or a scheduled task as `LOCAL SERVICE`; the token is in `/etc/hostel` or
-`C:\ProgramData\hostel`, which the room user cannot read). Then do the steps
-that it prints (Remote Login, Xcode, the desktop: `docs/static-room-setup.md`).
+`C:\ProgramData\hostel`, which the machine user cannot read). Then do the steps
+that it prints (Remote Login, Xcode, the desktop: `docs/static-machine-setup.md`).
 If a step fails, fix it, and run the same command again: it continues.
 
-**By hand** (the steps that `machine join` does). Prepare the room first with
-`docs/static-room-setup.md`. Then:
+**By hand** (the steps that `machine join` does). Prepare the machine first with
+`docs/static-machine-setup.md`. Then:
 
-1. Put the server's public key (`hostel admin pubkey`) into the room user's
+1. Put the server's public key (`hostel admin pubkey`) into the machine user's
    `~/.ssh/authorized_keys` and also into `~/hostel/authorized_keys.base` if that
    file exists: cleanup restores `authorized_keys` from it.
 
-2. Create a room token for the machine, on a computer connected as an admin:
+2. Create a machine token for the machine, on a computer connected as an admin:
 
    ```sh
-   hostel admin token create --name macbook --role room --machine home/macbook
+   hostel admin token create --name macbook --role machine --machine home/macbook
    ```
 
-3. Choose the account that runs `room connect`. It must not be the room user or a
-   slot user: a lease runs as that user, and with the token a guest could
-   replace the room's connection. Use your own account on macOS, a system user
+3. Choose the account that runs `machine connect`. It must not be the machine user or a
+   room user: a lease runs as that user, and with the token a guest could
+   replace the machine's connection. Use your own account on macOS, a system user
    (for example `hostel-connect`) on Linux, and `LOCAL SERVICE` on Windows.
    Install Hostel for that account, and write the token to a file that only that
    account can read:
@@ -234,56 +234,56 @@ If a step fails, fix it, and run the same command again: it continues.
    ```sh
    sh install.sh
    mkdir -p ~/.config/hostel
-   (umask 077; cat > ~/.config/hostel/room-token)   # paste the token, then Ctrl-D
+   (umask 077; cat > ~/.config/hostel/machine-token)   # paste the token, then Ctrl-D
    ```
 
    Never put the token in the command line: other users can read it.
 
-4. Run `hostel room connect` as a service.
+4. Run `hostel helper connect` as a service.
 
    macOS (a launch daemon that runs as your account, so it starts at boot,
-   `/Library/LaunchDaemons/so.hostel.room-connect.plist`; replace `owner`):
+   `/Library/LaunchDaemons/so.hostel.machine-connect.plist`; replace `owner`):
 
    ```xml
    <?xml version="1.0" encoding="UTF-8"?>
    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
    <plist version="1.0">
    <dict>
-     <key>Label</key><string>so.hostel.room-connect</string>
+     <key>Label</key><string>so.hostel.machine-connect</string>
      <key>UserName</key><string>owner</string>
      <key>ProgramArguments</key>
      <array>
        <string>/Users/owner/.local/bin/hostel</string>
-       <string>room</string>
+       <string>machine</string>
        <string>connect</string>
        <string>--server</string>
        <string>https://hostel.example.com</string>
        <string>--token-file</string>
-       <string>/Users/owner/.config/hostel/room-token</string>
+       <string>/Users/owner/.config/hostel/machine-token</string>
      </array>
      <key>RunAtLoad</key><true/>
      <key>KeepAlive</key><true/>
-     <key>StandardErrorPath</key><string>/Users/owner/Library/Logs/hostel-room-connect.log</string>
-     <key>StandardOutPath</key><string>/Users/owner/Library/Logs/hostel-room-connect.log</string>
+     <key>StandardErrorPath</key><string>/Users/owner/Library/Logs/hostel-machine-connect.log</string>
+     <key>StandardOutPath</key><string>/Users/owner/Library/Logs/hostel-machine-connect.log</string>
    </dict>
    </plist>
    ```
 
    ```sh
-   sudo launchctl bootstrap system /Library/LaunchDaemons/so.hostel.room-connect.plist
+   sudo launchctl bootstrap system /Library/LaunchDaemons/so.hostel.machine-connect.plist
    ```
 
-   Linux (`/etc/systemd/system/hostel-room-connect.service`):
+   Linux (`/etc/systemd/system/hostel-machine-connect.service`):
 
    ```ini
    [Unit]
-   Description=Hostel room connect
+   Description=Hostel machine connect
    After=network-online.target
    Wants=network-online.target
 
    [Service]
    User=hostel-connect
-   ExecStart=/home/hostel-connect/.local/bin/hostel room connect --server https://hostel.example.com --token-file /home/hostel-connect/.config/hostel/room-token
+   ExecStart=/home/hostel-connect/.local/bin/hostel helper connect --server https://hostel.example.com --token-file /home/hostel-connect/.config/hostel/machine-token
    Restart=always
    RestartSec=5
 
@@ -292,38 +292,38 @@ If a step fails, fix it, and run the same command again: it continues.
    ```
 
    Windows (as an administrator, in PowerShell; a scheduled task that runs as
-   `LOCAL SERVICE` at boot; the token is in `C:\ProgramData\hostel\room-token`,
+   `LOCAL SERVICE` at boot; the token is in `C:\ProgramData\hostel\machine-token`,
    which only that account and administrators can read):
 
    ```powershell
    $dir = 'C:\ProgramData\hostel'
    New-Item -ItemType Directory -Force $dir | Out-Null
-   # Copy hostel-windows-amd64.exe to $dir\hostel.exe, and the token to $dir\room-token.
+   # Copy hostel-windows-amd64.exe to $dir\hostel.exe, and the token to $dir\machine-token.
    icacls $dir /inheritance:r /grant 'SYSTEM:(OI)(CI)F' /grant 'Administrators:(OI)(CI)F' /grant '*S-1-5-19:(OI)(CI)M'
-   $tr = 'cmd.exe /c ""' + $dir + '\hostel.exe" room connect --server https://hostel.example.com --token-file ' + $dir + '\room-token >> ' + $dir + '\room-connect.log 2>&1"'
-   schtasks.exe /Create /F /TN 'Hostel room connect' /SC ONSTART /RU 'NT AUTHORITY\LOCALSERVICE' /RL LIMITED /TR $tr
-   schtasks.exe /Run /TN 'Hostel room connect'
+   $tr = 'cmd.exe /c ""' + $dir + '\hostel.exe" machine connect --server https://hostel.example.com --token-file ' + $dir + '\machine-token >> ' + $dir + '\machine-connect.log 2>&1"'
+   schtasks.exe /Create /F /TN 'Hostel machine connect' /SC ONSTART /RU 'NT AUTHORITY\LOCALSERVICE' /RL LIMITED /TR $tr
+   schtasks.exe /Run /TN 'Hostel machine connect'
    ```
 
    `Register-ScheduledTask` for another user failed with "Access is denied" in
-   an SSH session, and a task as the room user needs its password; `LOCAL
+   an SSH session, and a task as the machine user needs its password; `LOCAL
    SERVICE` needs neither.
 
 5. Check: the log shows `connected to the gateway at wss://...`, and
-   `hostel status` shows the room `running` within a few seconds. The server
-   probes a room at once when it connects.
+   `hostel status` shows the machine `running` within a few seconds. The server
+   probes a machine at once when it connects.
 
-`--ssh` (default `127.0.0.1:22`) is the room's own SSH server. If the connection
-ends, the room connects again (1 s to 30 s); guest commands fail until then, and
+`--ssh` (default `127.0.0.1:22`) is the machine's own SSH server. If the connection
+ends, the machine connects again (1 s to 30 s); guest commands fail until then, and
 the lease stays.
 
-## 7. Network rule for public static rooms
+## 7. Network rule for public static machines
 
-The gateway enforces access only if a room accepts SSH from nothing else
-(`design.md`, section 13). For a static room with a public address, do one of
+The gateway enforces access only if a machine accepts SSH from nothing else
+(`design.md`, section 13). For a static machine with a public address, do one of
 these:
 
-- Use `connect = true`, and close inbound SSH on the room (firewall or Remote
+- Use `connect = true`, and close inbound SSH on the machine (firewall or Remote
   Login off for other networks).
 - Allow inbound SSH only from the server's address. On exe.dev, the VM has no
   fixed outbound address that you control; use `connect = true` there.
@@ -355,10 +355,10 @@ database with SQLite, not with a file copy:
 sqlite3 ~/.local/share/hostel/hostel.db ".backup /var/backups/hostel.db"
 ```
 
-If you lose the database, rooms stay safe: on-demand rooms with this server's
+If you lose the database, machines stay safe: on-demand machines with this server's
 prefix are destroyed at the next reconcile of a new server with the same
 `server_id`, and leases end. Tokens must be created again.
 
-If you lose `server_ed25519`, put the new public key on each static room.
+If you lose `server_ed25519`, put the new public key on each static machine.
 If you lose `gateway_host_ed25519`, guests see a new gateway host key; they get it
 again from the server with each lease.

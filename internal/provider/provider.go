@@ -12,9 +12,9 @@ import (
 
 // Errors that change what the scheduler does.
 var (
-	// ErrLimit means the provider refused a new room because a limit is reached.
+	// ErrLimit means the provider refused a new machine because a limit is reached.
 	ErrLimit = errors.New("limit reached")
-	// ErrNotFound means the room does not exist at the provider.
+	// ErrNotFound means the machine does not exist at the provider.
 	ErrNotFound = errors.New("not found")
 )
 
@@ -25,46 +25,46 @@ type Capabilities struct {
 	CanExtend bool
 }
 
-// Provider creates, stops, and gives access to rooms.
+// Provider creates, stops, and gives access to machines.
 type Provider interface {
 	Kind() string
-	Capabilities(machine string) Capabilities
+	Capabilities(template string) Capabilities
 	// Provision is idempotent by name, also under concurrent calls.
-	Provision(ctx context.Context, req ProvisionRequest) (RoomRef, error)
-	Resume(ctx context.Context, room RoomRef) error
-	Stop(ctx context.Context, room RoomRef) error
-	Extend(ctx context.Context, room RoomRef, deadline time.Time) error
-	// Destroy with an empty ID finds the room by name.
-	Destroy(ctx context.Context, room RoomRef) error
-	// List returns only rooms whose names start with prefix.
-	List(ctx context.Context, prefix string) ([]RoomRef, error)
-	Access(ctx context.Context, room RoomRef) (RoomAccess, error)
+	Provision(ctx context.Context, req ProvisionRequest) (MachineRef, error)
+	Resume(ctx context.Context, machine MachineRef) error
+	Stop(ctx context.Context, machine MachineRef) error
+	Extend(ctx context.Context, machine MachineRef, deadline time.Time) error
+	// Destroy with an empty ID finds the machine by name.
+	Destroy(ctx context.Context, machine MachineRef) error
+	// List returns only machines whose names start with prefix.
+	List(ctx context.Context, prefix string) ([]MachineRef, error)
+	Access(ctx context.Context, machine MachineRef) (MachineAccess, error)
 }
 
-// RoomRef identifies a room at its provider.
-type RoomRef struct {
-	Name    string // hostel-<server_id>-<room id>, or the machine key for static rooms
-	Machine string // machine name in the provider configuration
-	ID      string // provider_ref
-	State   string // from List: for example running or stopped
+// MachineRef identifies a machine at its provider.
+type MachineRef struct {
+	Name     string // hostel-<server_id>-<machine id>, or the machine key for static machines
+	Template string // machine name in the provider configuration
+	ID       string // provider_ref
+	State    string // from List: for example running or stopped
 }
 
 type ProvisionRequest struct {
 	Name      string
-	Machine   string
+	Template  string
 	Spec      map[string]any
 	Deadline  time.Time
 	ServerKey string // authorized_keys format
 }
 
-// RoomAccess is how the server reaches the room's SSH server.
-type RoomAccess struct {
+// MachineAccess is how the server reaches the machine's SSH server.
+type MachineAccess struct {
 	User    string
 	Dial    func(ctx context.Context) (net.Conn, error)
 	Signers []ssh.Signer
 }
 
-// DialTimeout bounds each TCP dial to a room.
+// DialTimeout bounds each TCP dial to a machine.
 const DialTimeout = 15 * time.Second
 
 // TCPDial returns a Dial function for host:port.

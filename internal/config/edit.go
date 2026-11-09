@@ -192,30 +192,37 @@ func quoteKey(k string) string {
 }
 
 // DocProvider is a provider of a configuration document, with its machines in
-// document order (for the lists of "hostel config rooms" and "providers").
+// document order (for the lists of "hostel config machines" and "providers").
 type DocProvider struct {
-	Name     string
-	Kind     string
-	Machines []DocMachine
+	Name      string
+	Kind      string
+	Templates []DocTemplate
 }
 
-// DocMachine is a machine of a configuration document, as written (without
+// DocTemplate is a machine of a configuration document, as written (without
 // the values that it inherits).
-type DocMachine struct {
-	Provider, Name, OS, Address string
-	Connect                     bool
-	Tools                       []string
-	Spec                        map[string]any
+type DocTemplate struct {
+	Provider, Kind, Name, OS, Address string
+	Connect                           bool
+	Tools                             []string
+	Spec                              map[string]any
 }
 
 // Key is "<provider>/<machine>".
-func (m DocMachine) Key() string { return m.Provider + "/" + m.Name }
+func (m DocTemplate) Key() string { return m.Provider + "/" + m.Name }
 
 // DocumentProviders reads the providers and machines of a document in order.
 func DocumentProviders(data []byte) ([]DocProvider, error) {
 	var raw struct {
 		Providers map[string]struct {
-			Kind     string `toml:"kind"`
+			Kind      string `toml:"kind"`
+			Templates map[string]struct {
+				OS      string         `toml:"os"`
+				Address string         `toml:"address"`
+				Connect bool           `toml:"connect"`
+				Tools   []string       `toml:"tools"`
+				Spec    map[string]any `toml:"spec"`
+			} `toml:"templates"`
 			Machines map[string]struct {
 				OS      string         `toml:"os"`
 				Address string         `toml:"address"`
@@ -236,9 +243,13 @@ func DocumentProviders(data []byte) ([]DocProvider, error) {
 	for _, pn := range childOrder(order, "providers") {
 		p := raw.Providers[pn]
 		dp := DocProvider{Name: pn, Kind: p.Kind}
-		for _, mn := range childOrder(order, "providers", pn, "machines") {
-			m := p.Machines[mn]
-			dp.Machines = append(dp.Machines, DocMachine{Provider: pn, Name: mn, OS: m.OS, Address: m.Address,
+		entries := p.Templates
+		if p.Kind == ProviderStatic {
+			entries = p.Machines
+		}
+		for _, mn := range childOrder(order, "providers", pn, TemplatesKey(p.Kind)) {
+			m := entries[mn]
+			dp.Templates = append(dp.Templates, DocTemplate{Provider: pn, Kind: p.Kind, Name: mn, OS: m.OS, Address: m.Address,
 				Connect: m.Connect, Tools: m.Tools, Spec: m.Spec})
 		}
 		out = append(out, dp)

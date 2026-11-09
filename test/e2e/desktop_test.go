@@ -9,20 +9,20 @@ import (
 )
 
 // TestDesktop (M7): "desktop" runs a lease command through the desktop program
-// ("room desktop serve"; on a Windows room it runs in the desktop session, which
+// ("machine desktop serve"; on a Windows machine it runs in the desktop session, which
 // SSH cannot reach). The command gets the lease environment, its output, and
-// its exit code. Only the desktop lease of the slot may use it. A child that
+// its exit code. Only the desktop lease of the room may use it. A child that
 // keeps the output open does not block the command, and a command ends when
 // its caller ends. A detached command ends with the lease, also when it cleared
 // HOSTEL_LEASE, and the desktop program serves the next lease.
 func TestDesktop(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-desktop"}})
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "fake-desktop"}})
 	lease := f.acquire("fake-desktop")
 	if r := f.e.hostel("run", "--", "desktop true"); r.code != 69 || !strings.Contains(r.stdout, "no desktop session") {
 		t.Fatalf("desktop without the desktop program: %s, want exit code 69", r)
 	}
-	if _, err := docker("exec", "-d", "-u", "hostel", f.c.name, "/home/hostel/hostel/bin/hostel", "room", "desktop", "serve"); err != nil {
+	if _, err := docker("exec", "-d", "-u", "hostel", f.c.name, "/home/hostel/hostel/bin/hostel", "helper", "desktop", "serve"); err != nil {
 		t.Fatal(err)
 	}
 	f.e.waitFor("the desktop program", time.Minute, func() bool {
@@ -31,10 +31,10 @@ func TestDesktop(t *testing.T) {
 
 	r := f.e.hostel("run", "--", `desktop sh -c 'echo "$HOSTEL_LEASE $(pwd)"; echo to-stderr >&2; exit 3'`)
 	// A job's output has stdout and stderr together.
-	if r.code != 3 || !strings.Contains(r.stdout, lease+" /home/hostel/hostel/slots/a/work\n") || !strings.Contains(r.stdout, "to-stderr") {
+	if r.code != 3 || !strings.Contains(r.stdout, lease+" /home/hostel/hostel/rooms/a/work\n") || !strings.Contains(r.stdout, "to-stderr") {
 		t.Fatalf("desktop command: %s, want exit code 3, the lease ID, and the work directory", r)
 	}
-	if r := f.e.hostel("run", "--", "HOSTEL_LEASE=other desktop true"); r.code != 127 || !strings.Contains(r.stdout, "not the lease of slot a") {
+	if r := f.e.hostel("run", "--", "HOSTEL_LEASE=other desktop true"); r.code != 127 || !strings.Contains(r.stdout, "not the lease of room a") {
 		t.Fatalf("desktop with another lease ID: %s, want a refusal", r)
 	}
 	start := time.Now()
@@ -58,7 +58,7 @@ func TestDesktop(t *testing.T) {
 		t.Fatalf("detached desktop commands and the background child: %s running, want 3", got)
 	}
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	f.e.waitFor("the detached desktop commands end with the lease", 30*time.Second, func() bool { return running() == "0" })
 
 	f.acquire("fake-desktop")
@@ -66,8 +66,8 @@ func TestDesktop(t *testing.T) {
 		t.Fatalf("desktop in the next lease: %s", r)
 	}
 	f.e.mustHostel("release")
-	f.waitSlotFree()
-	// A lease that does not hold the whole room must not use the desktop.
+	f.waitRoomFree()
+	// A lease that does not hold the whole machine must not use the desktop.
 	f.acquire()
 	if r := f.e.hostel("run", "--", "desktop true"); r.code != 127 || !strings.Contains(r.stdout, "the desktop needs a lease with") {
 		t.Fatalf("desktop in a lease without the desktop: %s, want a refusal", r)

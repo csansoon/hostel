@@ -27,7 +27,7 @@ const configUsage = `hostel: usage:
   hostel config apply <file|->           replace it with a file
   hostel config history                  the revisions
   hostel config settings [set <key>=<value> ...]
-  hostel config rooms [set|remove|drain|undrain|repair]
+  hostel config machines [set|remove|drain|undrain|repair]
   hostel config providers [add|remove]
   hostel config tools [new|pull|push|reset|remove]
   hostel config users [invite|code|set|remove]`
@@ -44,8 +44,8 @@ func configCmd(args []string, stdout, stderr io.Writer) int {
 		return usersCmd(args, stdout, stderr)
 	case "tools":
 		return toolsCmd(args, stdout, stderr)
-	case "rooms":
-		return roomsCmd(args, stdout, stderr)
+	case "machines":
+		return machinesCmd(args, stdout, stderr)
 	case "providers":
 		return providersCmd(args, stdout, stderr)
 	case "":

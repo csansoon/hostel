@@ -1,11 +1,11 @@
 ---
 name: hostel-use
-description: Use a Hostel room from a repository - acquire a lease with the tools that you need, run builds and tests, sync files, take screenshots, open tunnels, and release. Use it when the user or agent says "build the Android/iOS app", "run the tests on Windows/Linux/macOS", "QA on the Android emulator", "take a screenshot of the simulator", "reach my local API from the room", "write hostel.toml", or "tell my agent to use Hostel".
+description: Use a Hostel machine from a repository - acquire a lease with the tools that you need, run builds and tests, sync files, take screenshots, open tunnels, and release. Use it when the user or agent says "build the Android/iOS app", "run the tests on Windows/Linux/macOS", "QA on the Android emulator", "take a screenshot of the simulator", "reach my local API from the machine", "write hostel.toml", or "tell my agent to use Hostel".
 ---
 
-# Use a room
+# Use a machine
 
-The code stays on the local computer. Hostel sends it to the room, runs
+The code stays on the local computer. Hostel sends it to the machine, runs
 commands there, and deletes the changes at the end of the lease. The computer
 must be connected (`hostel-install`).
 
@@ -35,7 +35,7 @@ summarizes it.
 ```sh
 hostel agent-guide               # the rules and the guide of each tool
 hostel tools                     # TOOL, OPTIONS, SCREEN, MACHINES, FREE, WAITING, EST. WAIT
-hostel status                    # rooms, leases, the waiting line (plain text)
+hostel status                    # machines, leases, the waiting line (plain text)
 hostel acquire android-sdk jdk --task "build the Android app"
 ```
 
@@ -69,7 +69,7 @@ Run `acquire` in the repository. Flags:
 |---|---|
 | `--task "..."` | Required: what the lease is for. Others see it. |
 | `--priority low\|normal\|high` | The lane in the waiting line. Change it only when the user asks. |
-| `--fresh` | A new on-demand room with empty caches. |
+| `--fresh` | A new on-demand machine with empty caches. |
 | `--wait 100s` | How long `acquire` waits before it returns. |
 | `--background` | Do not wait in the waiting line: return at once, and a small background process keeps the place. A lease that is ready goes on to the sync and the setup as usual. |
 
@@ -98,9 +98,9 @@ hostel acquire ios-simulator --task "QA the sign-in screen" --wait 1s
 With `--background`, a detached `hostel keep-place` process polls the lease
 until it is ready or ends, then stops. Run the same `acquire` command again
 at least every `idle_timeout` (acquire prints it; default 10 minutes): it
-continues the lease and takes the room when it is ready.
+continues the lease and takes the machine when it is ready.
 A ready lease lives for `idle_timeout` (default 10 minutes) without a `hostel`
-command, and it holds the room meanwhile. `hostel release` ends the lease and
+command, and it holds the machine meanwhile. `hostel release` ends the lease and
 the process.
 
 On Windows, an agent tool can run each command in a job object that kills all
@@ -138,9 +138,9 @@ hostel attach <job> --wait 9m              # the output until the job ends or th
 hostel stop <job>
 hostel sync                                # send local changes again (after each edit)
 hostel sync --setup                        # run the repository setup again
-hostel diff                                # changes on the room since the last sync
-hostel cp ./fixture.json :tmp/fixture.json # local -> room work directory
-hostel cp :build/app.log ./app.log         # room -> local
+hostel diff                                # changes on the machine since the last sync
+hostel cp ./fixture.json :tmp/fixture.json # local -> machine work directory
+hostel cp :build/app.log ./app.log         # machine -> local
 hostel screenshot -o screen.png            # --tool android-emulator:pixel-tablet for another screen
 hostel ssh                                 # interactive shell (ssh -- <command> for one command)
 hostel ssh-config                          # an ssh_config file for ssh -F
@@ -158,25 +158,25 @@ ends with its job: use `hostel run --detach` for a server.
 Tool facts: commands get the environment of the machine's tools (for example
 `ANDROID_HOME`) and the facts of the screens that started (`ANDROID_SERIAL`,
 `SIMULATOR_UDID`). The guide of each tool names them. To tap, type, and read a
-screen, use the driver that its guide names: `agent-device` on the room
+screen, use the driver that its guide names: `agent-device` on the machine
 (`hostel run -- agent-device help`), and `desktop` and `winapp` for
 `windows-desktop`. `hostel screenshot` needs `--tool` only when the lease has
 more than one screen.
 
 ## Tunnels and forwards
 
-A tunnel makes a local server reachable on the room at
+A tunnel makes a local server reachable on the machine at
 `localhost:$HOSTEL_TUNNEL_<NAME>_PORT`. Declare it in `hostel.toml`, or change it
 during a lease:
 
 ```sh
 hostel tunnel list                                # each tunnel: confirmed, or what is missing
-hostel tunnel add api --local-port-env PORT       # or --local-port 3000; [--room-port P]
+hostel tunnel add api --local-port-env PORT       # or --local-port 3000; [--machine-port P]
 hostel tunnel set api --local-port 3001
 hostel tunnel remove api
 ```
 
-A forward is the other direction (a room port on this computer):
+A forward is the other direction (a machine port on this computer):
 
 ```sh
 hostel forward 8080 --local-port 18080
@@ -193,9 +193,9 @@ setup = ["./gradlew --version"]    # after mise install, in every lease
 env = { APP_ENV = "test" }         # in every lease
 # mise = false                     # skip the repository mise install
 
-[tunnels.api]                      # room -> this computer
+[tunnels.api]                      # machine -> this computer
 local_port_env = "PORT"            # or local_port = 3000 (exactly one)
-# room_port = 4000                 # fixed room port (1024-65535); default: from the slot's pool
+# machine_port = 4000                 # fixed machine port (1024-65535); default: from the room's pool
 
 [tool.android-emulator]            # only when the lease has this tool
 env = { APP_API_BASE_URL = "http://10.0.2.2:{tunnels.api.port}" }
@@ -214,7 +214,7 @@ env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
   `android-emulator`).
 - The `env` of a `[tool.<name>]` replaces keys of the top-level `env`.
 - Tools on the command line replace `tools`.
-- `{tunnels.<name>.port}` becomes the tunnel's room port.
+- `{tunnels.<name>.port}` becomes the tunnel's machine port.
 - Do not put a desktop tool in `tools` unless every lease needs it: each such
   lease takes the whole machine.
 - Check the file: `hostel admin config check --repo hostel.toml`.
@@ -236,10 +236,10 @@ hostel release
 ```
 
 A lease also ends after 10 minutes without a `hostel` command (`idle_timeout`),
-and at `max_lease` (default 2 hours). Changes on the room are temporary: make
+and at `max_lease` (default 2 hours). Changes on the machine are temporary: make
 durable changes in local files. Cleanup does not delete the caches: mise tools,
 `$HOSTEL_CACHE_DIR`, `~/.gradle`, and other files in the home directory of the
-room stay, and the next lease can read them, also of another user. Never write a
+machine stay, and the next lease can read them, also of another user. Never write a
 secret there. `hostel release <lease-id>` ends another lease
 of yours (admins: any lease).
 
@@ -248,11 +248,11 @@ If a command prints `run "hostel update"`, tell the user. Do not update
 
 ## Status
 
-- `hostel status` prints plain text: rooms with their leases (user, task,
-  tools, time, lease ID), and the waiting line. `hostel status <room>` shows
+- `hostel status` prints plain text: machines with their leases (user, task,
+  tools, time, lease ID), and the waiting line. `hostel status <machine>` shows
   details, the inventory, and events; `hostel status <tool>` shows the waiting
   leases for a tool. Agents use this.
-- People run `hostel` alone for the Hostel app (Lobby, Rooms, Front desk).
+- People run `hostel` alone for the Hostel app (Front desk, Lobby, Rooms).
 
 ## Instructions for the agent's file
 

@@ -14,7 +14,7 @@ image="system-images;android-$api;$tag;$abi"
 export ANDROID_HOME="$HOSTEL_CACHE_DIR/android-sdk"
 
 if ! [ -r /dev/kvm ] || ! [ -w /dev/kvm ]; then
-	echo "the room user cannot use /dev/kvm; the emulator needs KVM (a machine with nested virtualization)" >&2
+	echo "the machine user cannot use /dev/kvm; the emulator needs KVM (a machine with nested virtualization)" >&2
 	exit 1
 fi
 
@@ -45,7 +45,7 @@ device_type() {
 }
 
 # The console port of the golden AVD's one boot, the last port of the emulator
-# range; slots use HOSTEL_ANDROID_PORT (default 5554).
+# range; rooms use HOSTEL_ANDROID_PORT (default 5554).
 port=5682
 pattern="qemu-system-.* -port $port "
 # An install that was stopped can leave its emulator running.

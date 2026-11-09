@@ -21,15 +21,15 @@ import (
 // removes its own objects; at start, the harness removes objects with the label
 // that are older than 2 hours (left by a crashed run). Nothing else is touched.
 const (
-	roomImage   = "hostel-e2e-room"
-	staleAfter  = 2 * time.Hour
-	dockerLabel = "hostel-e2e"
+	machineImage = "hostel-e2e-machine"
+	staleAfter   = 2 * time.Hour
+	dockerLabel  = "hostel-e2e"
 )
 
 var (
 	// helperDir has the helper and mise binaries for the Docker architecture.
 	helperDir string
-	// dockerArch is the Go architecture of the Docker rooms.
+	// dockerArch is the Go architecture of the Docker machines.
 	dockerArch string
 	// fakeProviderBin is test/fakeprovider, built for the host.
 	fakeProviderBin string
@@ -63,7 +63,7 @@ func setupDocker(binDir string) error {
 	removeStale()
 	// Port processes of earlier runs whose test binary is gone.
 	exec.Command("pkill", "-f", "hostel-e2e-bin-[^ ]*/hostel ports --dir ").Run()
-	if _, err := docker("build", "-q", "-t", roomImage, "--label", dockerLabel+"-image=room", "../roomimage"); err != nil {
+	if _, err := docker("build", "-q", "-t", machineImage, "--label", dockerLabel+"-image=machine", "../machineimage"); err != nil {
 		return err
 	}
 	helperDir = filepath.Join(binDir, "helpers")
@@ -145,19 +145,19 @@ func freePort(t interface{ Fatal(...any) }) int {
 	return 0
 }
 
-// container is a test room container.
+// container is a test machine container.
 type container struct {
 	e    *env
 	name string
 	port int
 }
 
-// startStaticRoom starts a room container that accepts the server key. The
+// startStaticMachine starts a machine container that accepts the server key. The
 // explicit port mapping survives "docker stop" and "docker start".
-func (e *env) startStaticRoom(name string) *container {
+func (e *env) startStaticMachine(name string) *container {
 	e.t.Helper()
 	for attempt := 1; ; attempt++ {
-		c := e.createStaticRoom(name)
+		c := e.createStaticMachine(name)
 		_, err := docker("start", c.name)
 		// Another process can take the free port before Docker binds it. Nothing
 		// uses the port yet, so a new container with a new port is safe.
@@ -173,8 +173,8 @@ func (e *env) startStaticRoom(name string) *container {
 	}
 }
 
-// createStaticRoom creates the room container but does not start it.
-func (e *env) createStaticRoom(name string) *container {
+// createStaticMachine creates the machine container but does not start it.
+func (e *env) createStaticMachine(name string) *container {
 	e.t.Helper()
 	pub, err := os.ReadFile(filepath.Join(e.dataDir(), "server_ed25519.pub"))
 	if err != nil {
@@ -183,7 +183,7 @@ func (e *env) createStaticRoom(name string) *container {
 	c := &container{e: e, name: "hostel-e2e-" + e.runID + "-" + name, port: freePort(e.t)}
 	if _, err := docker("create", "--name", c.name, "--label", dockerLabel+"="+e.runID,
 		"-p", fmt.Sprintf("127.0.0.1:%d:22", c.port), "-e", "HOSTEL_AUTHORIZED_KEY="+strings.TrimSpace(string(pub)),
-		"-e", "HOSTEL_SLOT_USERS="+strings.Join(e.slotUsers, " "), roomImage); err != nil {
+		"-e", "HOSTEL_ROOM_USERS="+strings.Join(e.roomUsers, " "), machineImage); err != nil {
 		e.t.Fatal(err)
 	}
 	return c
@@ -235,7 +235,7 @@ func (c *container) sh(cmd string) string {
 
 // externalProvider returns the server.toml section of a fake external provider
 // with its machines. vars are extra FAKE_* settings; keys are extra provider keys.
-func (e *env) externalProvider(name, keys string, vars map[string]string, machines string) string {
+func (e *env) externalProvider(name, keys string, vars map[string]string, templates string) string {
 	e.t.Helper()
 	state := filepath.Join(e.home, "fake-"+name)
 	if err := os.MkdirAll(state, 0o755); err != nil {
@@ -252,11 +252,11 @@ command = [%q]
 command_env = { %s }
 timeouts = { provision = "3m", default = "1m" }
 %s
-%s`, name, fakeProviderBin, env, keys, machines)
+%s`, name, fakeProviderBin, env, keys, templates)
 }
 
-// fakeRooms returns the names of the fake provider's containers of this test.
-func (e *env) fakeRooms() []string {
+// fakeMachines returns the names of the fake provider's containers of this test.
+func (e *env) fakeMachines() []string {
 	e.t.Helper()
 	out, err := docker("ps", "-a", "--filter", "label="+dockerLabel+"="+e.runID, "--filter", "label=hostel-fake=1", "--format", "{{.Names}}")
 	if err != nil {

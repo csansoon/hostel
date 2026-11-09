@@ -20,20 +20,20 @@ All other terms are plain technical words.
 |---|---|
 | **Hostel** | The project, the `hostel` binary, and the central server. |
 | **Guest** | A client: an agent (or a person) that uses the `hostel` CLI. |
-| **Room** | One concrete remote machine at runtime (a static host, or one created cloud machine). |
-| **Slot** | A place on a room for one lease, with its own directory, screens, and ports. |
-| **Lease** | Exclusive use of one slot, from the request to the end of cleanup. |
-| **Queue** | The leases that wait for a slot (one waiting line for all leases). |
-| **Provider** | A source of machines, with its own settings (kind, login, account limit). Examples: a set of static hosts, a Namespace account, an external command. |
-| **Machine** | An entry in a provider. In a static provider, a real host (one room). In an on-demand provider, a template that gives rooms when needed. |
+| **Machine** | A real computer or VM: a static host, or a cloud machine that a provider created. It has hardware and a live use. |
+| **Room** | A place on a machine for one lease, with its own directory, screens, and ports. A room is always inside a machine. |
+| **Lease** | Exclusive use of one room, from the request to the end of cleanup. |
+| **Queue** | The leases that wait for a room (one waiting line for all leases). |
+| **Provider** | A source of machines, with its own settings (kind, login, account limit). A static provider is a named group of real hosts ("Office", "Windows 365"); an on-demand provider (a Namespace account, an external command) creates machines. A provider has no hardware. |
+| **Template** | What an on-demand provider creates machines from. |
 | **Tool** | Something that a machine gives to a lease: software (`android-sdk`, `xcode`, `jdk`) or a screen (`android-emulator`, `ios-simulator`, `macos-desktop`, `windows-desktop`). A guest asks for the tools that it needs and can use all software of the machine; a lease starts only the screen tools that it asked for (M10e, replaces platform, device, and labels). The OS is a property of the machine, not a tool. |
 | **Option** | A version of a software tool, or the phone or tablet of an emulator or simulator, after a colon: `node:22`, `android-emulator:pixel-9`. A filter: without it, any option matches. |
 | **Screen tool** | A tool that the agent looks at and acts on. Hostel starts it for each lease, takes screenshots of it, and cleans it up. |
 | **Tool scripts** | The scripts of a tool (one file for each step and OS) that install, check, start, screenshot, and stop it. |
-| **Inventory** | The tools of a room with their real options, as the server installed and checked them. |
-| **Cleanup** | The steps after a lease that delete what the lease left in its slot (work directory, environment, jobs, screens). Caches stay. |
-| **Helper** | The `hostel room` mode of the binary. It runs on rooms. |
-| **Gateway** | The SSH server inside the Hostel server. All guest SSH traffic goes to it, and it connects to rooms. |
+| **Inventory** | The tools of a machine with their real options, as the server installed and checked them. |
+| **Cleanup** | The steps after a lease that delete what the lease left in its room (work directory, environment, jobs, screens). Caches stay. |
+| **Helper** | The `hostel helper` mode of the binary. It runs on machines. |
+| **Gateway** | The SSH server inside the Hostel server. All guest SSH traffic goes to it, and it connects to machines. |
 
 ## 3. Owner decisions
 
@@ -87,17 +87,20 @@ All other terms are plain technical words.
 | 2026-10-20 | The API under test always runs on the guest's machine and is reached through a tunnel. |
 | 2026-10-20 | Durable changes are made only locally. Changes on a room are temporary and are always deleted (caches stay: design, section 9). |
 | 2026-10-20 | On-demand machines (Namespace) are preferred to machines that are always on. |
+| 2026-11-06 | Vocabulary (M10g, replaces the words of 2026-10-21 for machine and room): a **machine** is a real computer or VM, a **room** is a place on a machine for one lease (before: slot), and a **template** is what an on-demand provider creates machines from (before: machine). The new words apply everywhere: app, CLI, API, configuration, database, code, and docs. Implementation files of finished milestones (`m*-implementation.md`) and older decisions keep the old words. |
+| 2026-11-06 | The app has two screens and Front desk: Lobby (the one waiting line first, then the tools) and Rooms (one list: provider, machine, room). There is no Machines screen. A provider shows text only when it does something special; rooms are small squares beside their machine. Front desk › Rooms goes; its actions move to the pages of the Rooms screen. |
+| 2026-11-06 | A provider can have a display name (`label`). Every machine belongs to a provider; a static provider is a named group, which also says whether its machines are physical or VMs. |
 
 ## 4. Functional requirements
 
 ### Discovery and requests
 
 - **R1.** A guest can list the tools that the machines give, with their options,
-  what each tool sets in the environment, how to use it, the number of free slots,
+  what each tool sets in the environment, how to use it, the number of free rooms,
   the waiting leases, and an estimated wait.
 - **R2.** A request contains: the tools (each with an optional option), task
   description, and priority. A request without tools takes any machine.
-- **R3.** The guest does not select a provider, machine, room, slot, or OS. It names
+- **R3.** The guest does not select a provider, template, machine, room, or OS. It names
   the tools that it needs; only a desktop tool belongs to one OS.
 - **R4.** If no configured machine can satisfy a request (an unknown tool or option,
   or no machine with all requested tools), the request fails at once with a clear
@@ -113,25 +116,25 @@ All other terms are plain technical words.
 - **R5.** Order: higher effective priority first, then first in, first out.
 - **R6.** Effective priority increases with wait time (aging), so that a
   low-priority lease does not wait forever.
-- **R7.** A waiting guest sees its position and the reason it waits (no free slot,
-  provider limit, room in creation).
+- **R7.** A waiting guest sees its position and the reason it waits (no free room,
+  provider limit, machine in creation).
 - **R8.** Each guest command returns before a typical agent tool timeout (2
   minutes). A special exit code means "not finished", and the last output line names
   the command that continues the work (for `acquire`, the same command).
 - **R9.** A queued lease that nobody polls for a configured time is cancelled.
 
-### Rooms
+### Machines
 
-- **R10.** The server gets rooms from providers. A new provider kind is a new
-  adapter on the server only. Guests and rooms do not change.
+- **R10.** The server gets machines from providers. A new provider kind is a new
+  adapter on the server only. Guests and machines do not change.
 - **R11.** First provider kinds: `static` (SSH hosts), `namespace` (devbox and
   instance machines), and `external` (any executable that implements a JSON
-  contract). One provider can offer several machines.
-- **R12.** Before a room accepts a lease, the tool scripts check that each tool of
+  contract). One provider can offer several machines or templates.
+- **R12.** Before a machine accepts a lease, the tool scripts check that each tool of
   the machine works, and record its real option (the inventory).
-- **R13.** A room can stay warm after a lease (first running, then stopped), as its
-  machine declares.
-- **R13a.** Limits exist for each on-demand machine and for each provider (account
+- **R13.** A machine can stay warm after a lease (first running, then stopped), as its
+  template declares.
+- **R13a.** Limits exist for each template and for each provider (account
   limit).
 
 ### Code and environment
@@ -141,44 +144,44 @@ All other terms are plain technical words.
   lists. The guest prints the names of the extra files that it sends.
 - **R15.** The guest can send the files again during a lease. The second send
   transfers only changed files and deletes files that the guest deleted.
-- **R16.** The room makes a local baseline commit after each send, so that an agent
+- **R16.** The machine makes a local baseline commit after each send, so that an agent
   can see its temporary changes with a diff.
 - **R17.** The repository declares its usual tools, its project tools (mise), its
   setup commands, and settings for each tool that it uses. The server does not
   hardcode project versions.
-- **R17a.** Hostel installs and uses mise on each room. Rooms need no tool
+- **R17a.** Hostel installs and uses mise on each machine. Machines need no tool
   manager before Hostel uses them. Tool versions come from the machine configuration and from
   the repository's mise files; installed tools stay in a cache between leases.
 - **R18.** The guest's local services (for example the API on `PORT`) are available
-  inside the room through a reverse tunnel. Commands on the room get environment
+  inside the machine through a reverse tunnel. Commands on the machine get environment
   variables with the tunnel addresses. The guest can add, change, and remove tunnels
-  during a lease. A change of the guest's local port needs no restart. The room port
-  is stable unless the guest changes it, and a tunnel can request a fixed room port.
-- **R18a.** The guest can reach a TCP server on the room (for example a bundler or a
+  during a lease. A change of the guest's local port needs no restart. The machine port
+  is stable unless the guest changes it, and a tunnel can request a fixed machine port.
+- **R18a.** The guest can reach a TCP server on the machine (for example a bundler or a
   debugger) through a local forward.
 
 ### Use
 
-- **R19.** A guest can run commands in its slot, with streamed output. A command
+- **R19.** A guest can run commands in its room, with streamed output. A command
   continues when the connection drops, and the guest can attach to it again.
 - **R20.** A guest can get screenshots of the lease's screen tools, copy files to and from
-  the slot, and open an interactive SSH session.
-- **R21.** A person can see all leases, rooms, and the queue (`hostel status`).
+  the room, and open an interactive SSH session.
+- **R21.** A person can see all leases, machines, and the queue (`hostel status`).
 
 ### End of lease
 
 - **R22.** A lease ends when the guest releases it, after 10 minutes without guest
   activity (configurable), or at the maximum lease duration.
-- **R23.** Cleanup stops all processes of the lease, deletes the slot's files
+- **R23.** Cleanup stops all processes of the lease, deletes the room's files
   (including extra files such as `.env`), stops the lease's screen tools, and removes the
   guest's access.
-- **R24.** If cleanup fails, the room is not used again until it is repaired or
+- **R24.** If cleanup fails, the machine is not used again until it is repaired or
   destroyed.
 
 ### Access control
 
-- **R25.** A guest reaches a room only through Hostel. The guest never receives a
-  credential that a room accepts.
+- **R25.** A guest reaches a machine only through Hostel. The guest never receives a
+  credential that a machine accepts.
 - **R26.** Hostel can end a guest's access at any time (release, expiry, admin
   decision). Open sessions and tunnels close at once. Access returns only with a new
   lease.
@@ -188,18 +191,18 @@ All other terms are plain technical words.
 - **N1. No configuration for agents.** One command starts a lease. The server
   address and token come from one user config file or from environment variables
   that the owner sets once for each machine.
-- **N2. Cost safety.** No on-demand room uses compute without a provider-side
+- **N2. Cost safety.** No on-demand machine uses compute without a provider-side
   bound: a deadline, or an idle auto-stop for machines that can stop.
-  The server finds and removes rooms that it created but no longer tracks.
+  The server finds and removes machines that it created but no longer tracks.
 - **N3. Resilience.** A server restart does not lose leases or the queue. A
   dropped connection does not stop a running command.
 - **N4. Secrets.** Hostel never logs tokens, keys, file contents, environment
   values, or the output of guest jobs. The tail of tool script output (scripts that
-  the owner controls) can go to the event log. Extra files such as `.env` exist on a room only during a lease.
+  the owner controls) can go to the event log. Extra files such as `.env` exist on a machine only during a lease.
 - **N5. Portability.** The server runs on macOS and Linux. The guest CLI runs on
-  macOS, Linux, and Windows. Rooms can run macOS, Linux, or Windows.
+  macOS, Linux, and Windows. Machines can run macOS, Linux, or Windows.
 - **N6. Testability.** Automated E2E tests run the real server, guest, and helper
-  binaries against rooms in Docker. Real-provider tests are opt-in smoke tests.
+  binaries against machines in Docker. Real-provider tests are opt-in smoke tests.
 - **N7. Bounded I/O.** Each provider call, SSH operation, and external command has a
   deadline. No retry loop is unbounded.
 
@@ -207,16 +210,16 @@ All other terms are plain technical words.
 
 - Guests are the owner's own agents. Hostel protects against accidents (state that
   goes from one lease to the next, forgotten cloud machines, secrets in logs). It does
-  not protect a room against a hostile guest.
+  not protect a machine against a hostile guest.
 - One owner. All leases use the owner's provider accounts.
 
 ## 7. Non-goals (version 1)
 
-- Durable changes on rooms, or a push from a room to GitHub.
+- Durable changes on machines, or a push from a machine to GitHub.
 - A replacement for CI.
 - Several owners or teams with separate quotas.
 - A web UI.
-- More than one slot per room in production use. The model supports it; the
+- More than one room per machine in production use. The model supports it; the
   scripts and tests come in milestone M6.
 - Protection against a guest that installs a backdoor during a lease (for example a
   process that connects out, or a cron job). Planned for M11; see design section 18,
@@ -228,32 +231,32 @@ All other terms are plain technical words.
 
 | Fact | Effect on Hostel |
 |---|---|
-| Namespace Developer plan: 1 devbox per user; stopped devboxes count. | One devbox room at a time. A stopped warm room uses the limit. |
-| macOS compute limit: 12 vCPU (two M machines), for devboxes and instances together. | The `namespace` provider's `max_rooms` covers its devbox and instance machines together. |
+| Namespace Developer plan: 1 devbox per user; stopped devboxes count. | One devbox machine at a time. A stopped warm machine uses the limit. |
+| macOS compute limit: 12 vCPU (two M machines), for devboxes and instances together. | The `namespace` provider's `max_machines` covers its devbox and instance machines together. |
 | No Windows devboxes. Windows instances need the Team plan or higher. | Windows needs a plan change and a Namespace instance machine, or a static Windows host. |
-| Devbox SSH goes through the `devbox` CLI as a proxy. | Guests cannot reach a Namespace room without a Namespace login. The server relays. |
-| macOS devbox: create 22 s, tuist 86 s, cold build 53 s, simulator boot 9 to 27 s. | A warm room saves about 2 minutes for each lease. |
-| Linux instance: create 6 s, Android emulator 99 s, cold Gradle build 3 min 25 s. | Android needs warm rooms or prepared images. |
-| `nsc ssh` drops long commands that print nothing. | Commands run detached on the room, with log streaming. |
+| Devbox SSH goes through the `devbox` CLI as a proxy. | Guests cannot reach a Namespace machine without a Namespace login. The server relays. |
+| macOS devbox: create 22 s, tuist 86 s, cold build 53 s, simulator boot 9 to 27 s. | A warm machine saves about 2 minutes for each lease. |
+| Linux instance: create 6 s, Android emulator 99 s, cold Gradle build 3 min 25 s. | Android needs warm machines or prepared images. |
+| `nsc ssh` drops long commands that print nothing. | Commands run detached on the machine, with log streaming. |
 
 ## 9. Risks
 
 | Risk | Control |
 |---|---|
-| Orphan on-demand rooms cost money. | Provider deadline at creation; reconcile at start and every 5 minutes; name prefix or label on all rooms. |
-| Provider limit errors at creation. | Treat as "machine full" and keep the lease in the queue. Do not fail the lease. |
-| The server is a single point of failure. | Leases and queue in SQLite; detached commands on rooms; guests reconnect. No new leases while the server is down. |
-| `.env` and other secrets on cloud disks. | Delete at cleanup; destroy the room if cleanup fails; never log contents. |
+| Orphan on-demand machines cost money. | Provider deadline at creation; reconcile at start and every 5 minutes; name prefix or label on all machines. |
+| Provider limit errors at creation. | Treat as "template full" and keep the lease in the queue. Do not fail the lease. |
+| The server is a single point of failure. | Leases and queue in SQLite; detached commands on machines; guests reconnect. No new leases while the server is down. |
+| `.env` and other secrets on cloud disks. | Delete at cleanup; destroy the machine if cleanup fails; never log contents. |
 | Namespace credentials on a VPS. | Only the server has them. Guests use Hostel tokens. TLS on the VPS. |
 | Screen state goes from one lease to the next. | Screen tools give each lease a clean screen (simulator clone, clean emulator snapshot) and stop it at cleanup. |
 | An agent thinks that a long cold start is a hang. | Progress lines, the "run again" exit code, and an estimated wait. |
-| A static room behind NAT (the home MacBook) is not reachable from a VPS. | The room opens an outbound connection to the gateway. |
-| Many rooms download tools from GitHub and hit its rate limit. | Optional `mise.github_token`; installed tools stay in the room cache. |
+| A static machine behind NAT (the home MacBook) is not reachable from a VPS. | The machine opens an outbound connection to the gateway. |
+| Many machines download tools from GitHub and hit its rate limit. | Optional `mise.github_token`; installed tools stay in the machine cache. |
 | One tool behaves differently on different OSes (for example an ARM Android image on a Mac, x86 on Linux). | The lease facts show the machine, its OS, and the real option of each tool. The owner lists a tool only on the machines where it should run. |
-| A build cache from an earlier lease breaks a build. | `--fresh` requests a new room with empty caches. |
+| A build cache from an earlier lease breaks a build. | `--fresh` requests a new machine with empty caches. |
 | Windows: SSH access and scripts are not verified. | Windows comes last (M6), on a static Windows host (`win-pc`); scripts in PowerShell. |
 | The data path goes through the server, which sees the plaintext. | The server is the owner's own machine. Transfers are small (source files only, about 87 MB for a the test app monorepo on the first sync). |
-| A public static room accepts SSH from anywhere. | Guests have no room key; the owner also limits SSH to the server's address (M5). |
+| A public static machine accepts SSH from anywhere. | Guests have no machine key; the owner also limits SSH to the server's address (M5). |
 | The owner uses Namespace for other work. | Hostel acts only on machines that it created (name prefix or label). |
 
 ## 10. Open questions
@@ -273,6 +276,6 @@ experiment.
    inside a virtual machine)? (M4)
 8. Future macOS desktop support: can a provision script set Automation Mode and
    Screen Recording on a Namespace devbox (passwordless `sudo`, image
-   permissions)? How do on-demand rooms get team signing for Mac Catalyst builds
-   (a shared `.p12` and an App Store Connect API key, given to the room as
+   permissions)? How do on-demand machines get team signing for Mac Catalyst builds
+   (a shared `.p12` and an App Store Connect API key, given to the machine as
    secrets)? (not planned yet)

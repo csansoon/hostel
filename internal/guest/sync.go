@@ -49,7 +49,7 @@ func syncPaths(repo *Repo, rc *config.Repo) (paths, extra []string, err error) {
 	return append(paths, extra...), extra, nil
 }
 
-// syncFiles sends the changed files to the room (design, section 12) and
+// syncFiles sends the changed files to the machine (design, section 12) and
 // returns the paths it sent.
 func syncFiles(ctx context.Context, st *State, repo *Repo, rc *config.Repo, stderr io.Writer) ([]string, error) {
 	paths, extra, err := syncPaths(repo, rc)
@@ -85,7 +85,7 @@ func syncFiles(ctx context.Context, st *State, repo *Repo, rc *config.Repo, stde
 	}
 	fmt.Fprintf(stderr, "hostel: sync: %d files sent, %d deleted (%d files in the work directory)\n", res.Written, res.Deleted, len(manifest.Entries))
 	if len(plan.Overwrite) > 0 {
-		fmt.Fprintf(stderr, "hostel: these room changes were replaced by the local files: %s\n", strings.Join(plan.Overwrite, ", "))
+		fmt.Fprintf(stderr, "hostel: these machine changes were replaced by the local files: %s\n", strings.Join(plan.Overwrite, ", "))
 	}
 	return plan.Send, nil
 }
@@ -117,9 +117,9 @@ func Sync(args []string, stdout, stderr io.Writer) int {
 		}
 		switch {
 		case *setup:
-			cmd = setupCommand(rc, l.st.leaseTools(), l.st.Access.RoomOS, true)
+			cmd = setupCommand(rc, l.st.leaseTools(), l.st.Access.MachineOS, true)
 		case rc.MiseEnabled() && slices.ContainsFunc(sent, func(p string) bool { return slices.Contains(miseFiles, p) }):
-			cmd = setupCommand(rc, l.st.leaseTools(), l.st.Access.RoomOS, false)
+			cmd = setupCommand(rc, l.st.leaseTools(), l.st.Access.MachineOS, false)
 		}
 	}
 	code, err = runSetup(ctx, l, cmd, deadline, stderr)

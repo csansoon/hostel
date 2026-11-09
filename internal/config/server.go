@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"github.com/pelletier/go-toml/v2"
 	"maps"
 	"net"
 	"net/url"
@@ -31,7 +33,7 @@ var (
 )
 
 // ValidName reports whether s is a valid provider, machine, tool, option,
-// slot, or tunnel name.
+// room, or tunnel name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
 // TLSProblem describes what is wrong with a tls value, or returns "".
@@ -130,27 +132,32 @@ type Mise struct {
 }
 
 type Provider struct {
-	Kind        string              `toml:"kind"`
-	MaxRooms    *int                `toml:"max_rooms,omitempty"`
-	Limits      []Limit             `toml:"limits,omitempty"`
-	MaxLifetime *Duration           `toml:"max_lifetime,omitempty"`
-	Tools       []string            `toml:"tools,omitempty"`
-	Env         map[string]string   `toml:"env,omitempty"`
-	MaxLease    *Duration           `toml:"max_lease"`
-	WarmRunning *Duration           `toml:"warm_running,omitempty"`
-	WarmStopped *Duration           `toml:"warm_stopped,omitempty"`
-	Command     []string            `toml:"command,omitempty"`
-	CommandEnv  map[string]string   `toml:"command_env,omitempty"`
-	Timeouts    *Timeouts           `toml:"timeouts,omitempty"`
-	Machines    map[string]*Machine `toml:"machines"`
+	Kind string `toml:"kind"`
+	// Label is the name that people see ("Windows 365"); default: the key.
+	Label       string               `toml:"label,omitempty"`
+	MaxMachines *int                 `toml:"max_machines,omitempty"`
+	Limits      []Limit              `toml:"limits,omitempty"`
+	MaxLifetime *Duration            `toml:"max_lifetime,omitempty"`
+	Tools       []string             `toml:"tools,omitempty"`
+	Env         map[string]string    `toml:"env,omitempty"`
+	MaxLease    *Duration            `toml:"max_lease"`
+	WarmRunning *Duration            `toml:"warm_running,omitempty"`
+	WarmStopped *Duration            `toml:"warm_stopped,omitempty"`
+	Command     []string             `toml:"command,omitempty"`
+	CommandEnv  map[string]string    `toml:"command_env,omitempty"`
+	Timeouts    *Timeouts            `toml:"timeouts,omitempty"`
+	Templates   map[string]*Template `toml:"templates"`
+	// Machines are the real hosts of a static provider; resolve moves them
+	// to Templates, which describes each machine for the rest of the server.
+	Machines map[string]*Template `toml:"machines"`
 
-	Name         string   `toml:"-"`
-	MachineOrder []string `toml:"-"`
+	Name          string   `toml:"-"`
+	TemplateOrder []string `toml:"-"`
 }
 
 type Limit struct {
-	Machines []string `toml:"machines"`
-	MaxRooms int      `toml:"max_rooms,omitempty"`
+	Templates   []string `toml:"templates"`
+	MaxMachines int      `toml:"max_machines,omitempty"`
 }
 
 type Timeouts struct {
@@ -158,7 +165,7 @@ type Timeouts struct {
 	Default   *Duration `toml:"default"`
 }
 
-type Machine struct {
+type Template struct {
 	Address string         `toml:"address,omitempty"`
 	Connect bool           `toml:"connect,omitempty"`
 	OS      string         `toml:"os"`
@@ -167,8 +174,8 @@ type Machine struct {
 	// include the tools that the needs of the listed tools add.
 	Tools       []string          `toml:"tools,omitempty"`
 	Env         map[string]string `toml:"env,omitempty"`
-	Slots       []Slot            `toml:"slots"`
-	MaxRooms    *int              `toml:"max_rooms,omitempty"`
+	Rooms       []Room            `toml:"rooms"`
+	MaxMachines *int              `toml:"max_machines,omitempty"`
 	MaxLease    *Duration         `toml:"max_lease"`
 	MaxLifetime *Duration         `toml:"max_lifetime,omitempty"`
 	WarmRunning *Duration         `toml:"warm_running,omitempty"`
@@ -179,25 +186,37 @@ type Machine struct {
 	Kind     string `toml:"-"`
 	// ToolList is Tools, resolved: each tool with its option, and whether
 	// it is a mise tool or a need.
-	ToolList []MachineTool `toml:"-"`
+	ToolList []TemplateTool `toml:"-"`
 }
 
-type Slot struct {
+type Room struct {
 	Name  string            `toml:"name"`
 	User  string            `toml:"user,omitempty"`
 	Ports []int             `toml:"ports,omitempty"`
 	Env   map[string]string `toml:"env,omitempty"`
 }
 
-// Key returns "<provider>/<machine>".
-func (m *Machine) Key() string { return m.Provider + "/" + m.Name }
+// templatesKey is the table of the provider's entries: real machines of a
+// static provider, or the templates of a provider that creates machines.
+func (p *Provider) templatesKey() string { return TemplatesKey(p.Kind) }
 
-// OnDemand reports whether the provider creates rooms of this machine when needed.
-func (m *Machine) OnDemand() bool { return m.Kind != ProviderStatic }
+// TemplatesKey is the configuration table of a provider kind.
+func TemplatesKey(kind string) string {
+	if kind == ProviderStatic {
+		return "machines"
+	}
+	return "templates"
+}
+
+// Key returns "<provider>/<machine>".
+func (m *Template) Key() string { return m.Provider + "/" + m.Name }
+
+// OnDemand reports whether the provider creates machines of this machine when needed.
+func (m *Template) OnDemand() bool { return m.Kind != ProviderStatic }
 
 // DeclaredSize is the CPU and memory (in GB) that the machine's spec states
 // ("<os>/<arch>:<cpu>x<mem>"); zero when it states none.
-func (m *Machine) DeclaredSize() (cores, memoryGB int) {
+func (m *Template) DeclaredSize() (cores, memoryGB int) {
 	mt, _ := m.Spec["machine_type"].(string)
 	_, size, ok := strings.Cut(mt, ":")
 	if !ok {
@@ -212,27 +231,27 @@ func (m *Machine) DeclaredSize() (cores, memoryGB int) {
 	return cores, memoryGB
 }
 
-// Machines returns all machines in file order (providers in file order, then
+// Templates returns all machines in file order (providers in file order, then
 // machines in file order).
-func (s *Server) Machines() []*Machine {
-	var out []*Machine
+func (s *Server) Templates() []*Template {
+	var out []*Template
 	for _, pn := range s.ProviderOrder {
 		p := s.Providers[pn]
-		for _, mn := range p.MachineOrder {
-			out = append(out, p.Machines[mn])
+		for _, mn := range p.TemplateOrder {
+			out = append(out, p.Templates[mn])
 		}
 	}
 	return out
 }
 
-// Machine returns the machine with the key "<provider>/<machine>", or nil.
-func (s *Server) Machine(key string) *Machine {
+// Template returns the machine with the key "<provider>/<machine>", or nil.
+func (s *Server) Template(key string) *Template {
 	pn, mn, _ := strings.Cut(key, "/")
 	p := s.Providers[pn]
 	if p == nil {
 		return nil
 	}
-	return p.Machines[mn]
+	return p.Templates[mn]
 }
 
 // DefaultServerPath returns ~/.config/hostel/server.toml.
@@ -298,7 +317,7 @@ func loadData(path string, data []byte, doc *Document) (*Server, error) {
 	s.ProviderOrder = childOrder(order, "providers")
 	for _, pn := range s.ProviderOrder {
 		if p := s.Providers[pn]; p != nil {
-			p.MachineOrder = childOrder(order, "providers", pn, "machines")
+			p.TemplateOrder = childOrder(order, "providers", pn, p.templatesKey())
 		}
 	}
 	tools, err := ParseTools(toolSet)
@@ -473,6 +492,16 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 		el.add(key, "provider name must match %s", nameRE)
 	}
 	onDemand := p.Kind != ProviderStatic
+	if onDemand {
+		if len(p.Machines) > 0 {
+			el.add(key+".machines", "provider kind %q creates machines: use [%s.templates.<name>]", p.Kind, key)
+		}
+	} else {
+		if len(p.Templates) > 0 {
+			el.add(key+".templates", "a static provider has real machines: use [%s.machines.<name>]", key)
+		}
+		p.Templates, p.Machines = p.Machines, nil
+	}
 	switch p.Kind {
 	case ProviderStatic, ProviderNamespace, ProviderExternal:
 	case "":
@@ -495,40 +524,40 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 		}
 	}
 	if !onDemand {
-		if p.MaxRooms != nil || len(p.Limits) > 0 || p.MaxLifetime != nil || p.WarmRunning != nil || p.WarmStopped != nil {
-			el.add(key, "max_rooms, limits, max_lifetime, warm_running, and warm_stopped are only for on-demand providers")
+		if p.MaxMachines != nil || len(p.Limits) > 0 || p.MaxLifetime != nil || p.WarmRunning != nil || p.WarmStopped != nil {
+			el.add(key, "max_machines, limits, max_lifetime, warm_running, and warm_stopped are only for on-demand providers")
 		}
 	} else {
 		setDur(&p.WarmRunning, 5*time.Minute)
 		setDur(&p.WarmStopped, 24*time.Hour)
 	}
 	setDur(&p.MaxLease, 2*time.Hour)
-	if p.MaxRooms != nil && *p.MaxRooms < 1 {
-		el.add(key+".max_rooms", "must be at least 1")
+	if p.MaxMachines != nil && *p.MaxMachines < 1 {
+		el.add(key+".max_machines", "must be at least 1")
 	}
 	for i, l := range p.Limits {
 		lk := fmt.Sprintf("%s.limits[%d]", key, i)
-		if l.MaxRooms < 1 {
-			el.add(lk+".max_rooms", "must be at least 1")
+		if l.MaxMachines < 1 {
+			el.add(lk+".max_machines", "must be at least 1")
 		}
-		if len(l.Machines) == 0 {
-			el.add(lk+".machines", "list at least one machine")
+		if len(l.Templates) == 0 {
+			el.add(lk+".templates", "list at least one template")
 		}
-		for j, mn := range l.Machines {
-			if p.Machines[mn] == nil {
-				el.add(fmt.Sprintf("%s.machines[%d]", lk, j), "unknown machine %q in this provider", mn)
+		for j, mn := range l.Templates {
+			if p.Templates[mn] == nil {
+				el.add(fmt.Sprintf("%s.templates[%d]", lk, j), "unknown template %q in this provider", mn)
 			}
 		}
 	}
-	for _, mn := range p.MachineOrder {
-		if m := p.Machines[mn]; m != nil {
-			s.resolveMachine(el, p, mn, m)
+	for _, mn := range p.TemplateOrder {
+		if m := p.Templates[mn]; m != nil {
+			s.resolveTemplate(el, p, mn, m)
 		}
 	}
 }
 
-func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine) {
-	key := "providers." + p.Name + ".machines." + mn
+func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Template) {
+	key := "providers." + p.Name + "." + p.templatesKey() + "." + mn
 	m.Name, m.Provider, m.Kind = mn, p.Name, p.Kind
 	if !nameRE.MatchString(mn) {
 		el.add(key, "machine name must match %s", nameRE)
@@ -545,11 +574,11 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 		if m.Spec != nil {
 			el.add(key+".spec", "a static machine has no spec")
 		}
-		if m.MaxRooms != nil || m.MaxLifetime != nil || m.WarmRunning != nil || m.WarmStopped != nil {
-			el.add(key, "max_rooms, max_lifetime, warm_running, and warm_stopped are only for on-demand machines")
+		if m.MaxMachines != nil || m.MaxLifetime != nil || m.WarmRunning != nil || m.WarmStopped != nil {
+			el.add(key, "max_machines, max_lifetime, warm_running, and warm_stopped are only for on-demand machines")
 		}
 		one := 1
-		m.MaxRooms = &one
+		m.MaxMachines = &one
 	default:
 		if m.Address != "" || m.Connect {
 			el.add(key, "address and connect are only for static machines")
@@ -557,11 +586,11 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 		if m.Spec == nil {
 			el.add(key+".spec", "required for an on-demand machine")
 		}
-		if m.MaxRooms == nil {
+		if m.MaxMachines == nil {
 			one := 1
-			m.MaxRooms = &one
-		} else if *m.MaxRooms < 1 {
-			el.add(key+".max_rooms", "must be at least 1")
+			m.MaxMachines = &one
+		} else if *m.MaxMachines < 1 {
+			el.add(key+".max_machines", "must be at least 1")
 		}
 	}
 
@@ -600,30 +629,30 @@ func (s *Server) resolveMachine(el *errList, p *Provider, mn string, m *Machine)
 	}
 
 	s.resolveTools(el, key, m)
-	if len(m.Slots) == 0 {
-		m.Slots = []Slot{{Name: "a"}}
+	if len(m.Rooms) == 0 {
+		m.Rooms = []Room{{Name: "a"}}
 	}
 	names := map[string]bool{}
 	users := map[string]bool{}
 	ports := map[int]bool{}
-	for i := range m.Slots {
-		sl := &m.Slots[i]
-		sk := fmt.Sprintf("%s.slots[%d]", key, i)
+	for i := range m.Rooms {
+		sl := &m.Rooms[i]
+		sk := fmt.Sprintf("%s.rooms[%d]", key, i)
 		if !nameRE.MatchString(sl.Name) {
-			el.add(sk+".name", "slot name %q must match %s", sl.Name, nameRE)
+			el.add(sk+".name", "room name %q must match %s", sl.Name, nameRE)
 		}
 		if names[sl.Name] {
-			el.add(sk+".name", "duplicate slot %q", sl.Name)
+			el.add(sk+".name", "duplicate room %q", sl.Name)
 		}
 		names[sl.Name] = true
 		if sl.User != "" {
 			switch {
 			case m.Kind != ProviderStatic:
-				el.add(sk+".user", "a slot user is only for static machines")
+				el.add(sk+".user", "a room user is only for static machines")
 			case !userRE.MatchString(sl.User):
 				el.add(sk+".user", "user %q must match %s", sl.User, userRE)
 			case users[sl.User]:
-				el.add(sk+".user", "user %q has two slots; each slot needs its own user", sl.User)
+				el.add(sk+".user", "user %q has two rooms; each room needs its own user", sl.User)
 			}
 			users[sl.User] = true
 		}
@@ -680,8 +709,8 @@ func namespaceOS(el *errList, key string, spec map[string]any) string {
 // resolveTools checks the tool entries of a machine and adds the tools that
 // their needs name (design, section 8): m.ToolList has each tool once, the
 // listed ones first.
-func (s *Server) resolveTools(el *errList, key string, m *Machine) {
-	var list []MachineTool
+func (s *Server) resolveTools(el *errList, key string, m *Template) {
+	var list []TemplateTool
 	for i, raw := range m.Tools {
 		tk := fmt.Sprintf("%s.tools[%d]", key, i)
 		e, err := ParseToolEntry(raw)
@@ -706,14 +735,14 @@ func (s *Server) resolveTools(el *errList, key string, m *Machine) {
 		case t != nil && m.OS != "" && !t.AvailableOn(m.OS):
 			el.add(tk, "%s has no scripts for %s; it works on %s", e.Name, m.OS, strings.Join(toolOSes(t), ", "))
 			continue
-		case slices.ContainsFunc(list, func(o MachineTool) bool { return o.ToolEntry == e }):
+		case slices.ContainsFunc(list, func(o TemplateTool) bool { return o.ToolEntry == e }):
 			el.add(tk, "%s is listed twice", raw)
 			continue
-		case t != nil && slices.ContainsFunc(list, func(o MachineTool) bool { return o.Name == e.Name && (o.Option == "") != (e.Option == "") }):
+		case t != nil && slices.ContainsFunc(list, func(o TemplateTool) bool { return o.Name == e.Name && (o.Option == "") != (e.Option == "") }):
 			el.add(tk, "%s is listed with and without an option; list all its options, or only the name for all of them", e.Name)
 			continue
 		}
-		list = append(list, MachineTool{ToolEntry: e, Mise: t == nil})
+		list = append(list, TemplateTool{ToolEntry: e, Mise: t == nil})
 	}
 	for i := 0; i < len(list); i++ {
 		t := s.Tools[list[i].Name]
@@ -721,7 +750,7 @@ func (s *Server) resolveTools(el *errList, key string, m *Machine) {
 			continue
 		}
 		for _, n := range t.Needs {
-			if slices.ContainsFunc(list, func(o MachineTool) bool { return o.Name == n }) {
+			if slices.ContainsFunc(list, func(o TemplateTool) bool { return o.Name == n }) {
 				continue
 			}
 			nt := s.Tools[n]
@@ -729,7 +758,7 @@ func (s *Server) resolveTools(el *errList, key string, m *Machine) {
 				el.add(key+".tools", "%s needs %s, which has no scripts for %s; it works on %s", list[i].Name, n, m.OS, strings.Join(toolOSes(nt), ", "))
 				continue
 			}
-			list = append(list, MachineTool{ToolEntry: ToolEntry{Name: n}, Mise: nt == nil, Need: true})
+			list = append(list, TemplateTool{ToolEntry: ToolEntry{Name: n}, Mise: nt == nil, Need: true})
 		}
 	}
 	m.ToolList = list
@@ -743,7 +772,7 @@ func (s *Server) resolveTools(el *errList, key string, m *Machine) {
 // (a machine invite): the same rules as a machine in the configuration.
 func (s *Server) CheckToolList(tools []string) error {
 	el := &errList{}
-	s.resolveTools(el, "tools", &Machine{Tools: tools})
+	s.resolveTools(el, "tools", &Template{Tools: tools})
 	return el.err()
 }
 
@@ -759,7 +788,7 @@ func toolOSes(t *Tool) []string {
 
 // Tool returns the machine's tool with this name, or nil. A screen tool that
 // the machine lists with several options gives the first entry.
-func (m *Machine) Tool(name string) *MachineTool {
+func (m *Template) Tool(name string) *TemplateTool {
 	for i := range m.ToolList {
 		if m.ToolList[i].Name == name {
 			return &m.ToolList[i]
@@ -770,7 +799,7 @@ func (m *Machine) Tool(name string) *MachineTool {
 
 // MiseTools returns the mise tools of the machine: name → versions ("latest"
 // for an entry without a version).
-func (m *Machine) MiseTools() map[string][]string {
+func (m *Template) MiseTools() map[string][]string {
 	out := map[string][]string{}
 	for _, t := range m.ToolList {
 		if !t.Mise {
@@ -801,6 +830,12 @@ func checkOldKeys(file string, data []byte, doc string) error {
 	add := func(path []string, msg string) {
 		errs = append(errs, fmt.Errorf("%s: %s: %s", name, strings.Join(path, "."), msg))
 	}
+	var kinds struct {
+		Providers map[string]struct {
+			Kind string `toml:"kind"`
+		} `toml:"providers"`
+	}
+	_ = toml.Unmarshal(data, &kinds) // the decoder reports syntax errors
 	reported := map[string]bool{}
 	for _, path := range order {
 		switch {
@@ -808,7 +843,13 @@ func checkOldKeys(file string, data []byte, doc string) error {
 			add(path, "removed in M10e: the default tools are in the binary, and own tools are in the database (hostel config tools); delete the key")
 		case len(path) == 1 && path[0] == "platforms":
 			add(path, "removed in M10e: tools replace platforms; a tool is a directory with tool.toml (hostel config tools); delete the table")
-		case !isMachineOrProvider(path[:len(path)-1]):
+		case len(path) == 3 && path[0] == "providers" && path[2] == "machines" && kinds.Providers[path[1]].Kind != ProviderStatic:
+			add(path, "changed in M10g: a provider that creates machines has [providers.<name>.templates.<template>]")
+		case !isTemplateOrProvider(path[:len(path)-1]):
+		case path[len(path)-1] == "slots":
+			add(path, "changed in M10g: slots are now rooms; rename the key")
+		case path[len(path)-1] == "max_rooms":
+			add(path, "changed in M10g: max_rooms is now max_machines; rename the key")
 		case path[len(path)-1] == "platforms":
 			add(path, "removed in M10e: list the tools of the machine instead, for example tools = [\"ios-simulator\", \"android-emulator\"]")
 		case path[len(path)-1] == "labels":
@@ -817,7 +858,7 @@ func checkOldKeys(file string, data []byte, doc string) error {
 			add(path, "removed in M10e: requires is gone; list tools instead")
 		}
 		for i := range path {
-			if path[i] == "tools" && i+1 < len(path) && isMachineOrProvider(path[:i]) {
+			if path[i] == "tools" && i+1 < len(path) && isTemplateOrProvider(path[:i]) {
 				if tk := strings.Join(path[:i+1], "."); !reported[tk] {
 					reported[tk] = true
 					add(path[:i+1], "the map form before M10e; tools is now a list of \"name\" or \"name:version\" entries, for example tools = [\"jdk:21\", \"node:22\"]")
@@ -832,11 +873,42 @@ func checkOldKeys(file string, data []byte, doc string) error {
 // configuration document, or nil.
 func OldForm(data []byte) error { return checkOldKeys("", data, "the configuration") }
 
-// isMachineOrProvider reports whether a key path is providers.<p> or
+var (
+	oldMaxRooms   = regexp.MustCompile(`\bmax_rooms\b`)
+	oldSlotsKey   = regexp.MustCompile(`(?m)^(\s*)slots(\s*=)`)
+	oldSlotsTable = regexp.MustCompile(`(?m)^(\s*\[\[?[^\]]*)\.slots(\]\]?)`)
+	oldLimits     = regexp.MustCompile(`(?m)^(\s*limits\s*=.*)\bmachines(\s*=)`)
+)
+
+// UpgradeWords rewrites a stored configuration of the words before M10g. A
+// server that started without its on-demand providers would retire their
+// machines (cost: they stay until their provider-side deadline).
+func UpgradeWords(doc []byte) []byte {
+	var kinds struct {
+		Providers map[string]struct {
+			Kind string `toml:"kind"`
+		} `toml:"providers"`
+	}
+	if toml.Unmarshal(doc, &kinds) != nil {
+		return doc // the decoder reports the syntax error
+	}
+	doc = oldMaxRooms.ReplaceAll(doc, []byte("max_machines"))
+	doc = oldSlotsKey.ReplaceAll(doc, []byte("${1}rooms$2"))
+	doc = oldSlotsTable.ReplaceAll(doc, []byte("$1.rooms$2"))
+	doc = oldLimits.ReplaceAll(doc, []byte("${1}templates$2"))
+	for name, p := range kinds.Providers {
+		if p.Kind != ProviderStatic {
+			doc = bytes.ReplaceAll(doc, []byte("providers."+name+".machines."), []byte("providers."+name+".templates."))
+		}
+	}
+	return doc
+}
+
+// isTemplateOrProvider reports whether a key path is providers.<p> or
 // providers.<p>.machines.<m>.
-func isMachineOrProvider(path []string) bool {
+func isTemplateOrProvider(path []string) bool {
 	return (len(path) == 2 && path[0] == "providers") ||
-		(len(path) == 4 && path[0] == "providers" && path[2] == "machines")
+		(len(path) == 4 && path[0] == "providers" && (path[2] == "machines" || path[2] == "templates"))
 }
 
 // ParseAddress parses a static machine address "user@host[:port]". The default
@@ -912,7 +984,7 @@ func IsWebSocketURL(addr string) bool {
 // DefinedTools returns the defined tools of a machine in the order of their
 // needs: each tool after the tools that it needs (the order of install and
 // start).
-func (s *Server) DefinedTools(m *Machine) []*Tool {
+func (s *Server) DefinedTools(m *Template) []*Tool {
 	var out []*Tool
 	var visit func(name string)
 	visit = func(name string) {

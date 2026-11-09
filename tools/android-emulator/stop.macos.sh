@@ -1,7 +1,7 @@
 #!/bin/sh
-# Stops the emulators of this slot. It finds them by the slot's console ports
+# Stops the emulators of this room. It finds them by the room's console ports
 # (HOSTEL_ANDROID_PORT + 2 * option index, as in start), so a repeated stop and
-# a stop after a failed start work too, and the emulators of other slots stay.
+# a stop after a failed start work too, and the emulators of other rooms stay.
 set -eu
 
 adb="$HOSTEL_CACHE_DIR/android-sdk/platform-tools/adb"

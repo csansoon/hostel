@@ -1,5 +1,5 @@
 // Package shell builds command lines for the shell that runs an SSH command on
-// a room: sh on macOS and Linux, and the SSH server's default shell on Windows
+// a machine: sh on macOS and Linux, and the SSH server's default shell on Windows
 // (PowerShell or cmd), or the helper's PowerShell for guest commands.
 package shell
 

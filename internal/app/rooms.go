@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,565 +14,632 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-// detailsInterval is the shortest time between two reads of a machine's
-// details (each read opens SSH to its rooms).
-const detailsInterval = 10 * time.Second
+// usageInterval is the time between two reads of GET /v1/usage while the
+// Rooms screen is open.
+const usageInterval = 10 * time.Second
 
-// rooms lists the machines, grouped by provider; inside a provider in state
-// order (online first). sel is the key of the selected machine, so that the
-// selection follows it when the order changes.
+// rooms is the Rooms screen: one list of providers, their machines, and the
+// guests in the rooms of each machine. sel is the key of the selected item.
 type rooms struct{ sel string }
 
-// providerGroups returns the providers in configuration order, each with its
-// machines in state order.
-func providerGroups(st protocol.Status, now time.Time) (names []string, groups map[string][]protocol.MachineStatus) {
-	groups = map[string][]protocol.MachineStatus{}
-	for _, ms := range st.Machines {
-		pv, _, _ := strings.Cut(ms.Key, "/")
-		if _, ok := groups[pv]; !ok {
-			names = append(names, pv)
-		}
-		groups[pv] = append(groups[pv], ms)
-	}
-	for _, n := range names {
-		groups[n] = byState(st, groups[n], now)
-	}
-	return names, groups
+type roomItemKind int
+
+const (
+	itemProvider roomItemKind = iota
+	itemMachine
+	itemLease
+	itemRoom
+	itemTemplate
+)
+
+type roomItem struct {
+	kind     roomItemKind
+	provider protocol.ProviderStatus
+	tmpl     protocol.TemplateStatus
+	machine  *protocol.MachineStatus // nil: a static machine that has not started
+	lease    protocol.LeaseStatus
+	room     protocol.RoomStatus // itemRoom: a room without a lease
 }
 
-// selected returns the machines in screen order and the index of the
-// selected one.
-func (p *rooms) selected(m *model) ([]protocol.MachineStatus, int) {
-	names, groups := providerGroups(m.st, time.Now())
-	var ms []protocol.MachineStatus
-	for _, n := range names {
-		ms = append(ms, groups[n]...)
+func (it roomItem) key() string {
+	switch it.kind {
+	case itemProvider:
+		return "p:" + it.provider.Name
+	case itemLease:
+		return "l:" + it.lease.ID
+	case itemTemplate:
+		return "t:" + it.tmpl.Key
 	}
-	i := slices.IndexFunc(ms, func(x protocol.MachineStatus) bool { return x.Key == p.sel })
-	if i < 0 && len(ms) > 0 {
-		i, p.sel = 0, ms[0].Key
+	if it.machine != nil {
+		return "m:" + it.machine.Name
 	}
-	return ms, i
+	return "m:" + it.tmpl.Key
 }
 
-func (p *rooms) title() string { return "Rooms" }
-
-func (p *rooms) body(m *model) string {
-	if len(m.st.Machines) == 0 {
-		return "\n" + note("The server has no machines yet. An admin adds one in Front desk › Rooms.")
-	}
-	p.selected(m)
-	return "\n" + machineList(m, contentWidth(m), p.sel)
+// selectable: a static provider is only a heading, and a room without a
+// lease has no page.
+func (it roomItem) selectable() bool {
+	return it.kind != itemRoom && (it.kind != itemProvider || it.provider.Kind != "static")
 }
 
-// machineList is the machines, grouped by provider, with sel selected.
-func machineList(m *model, w int, sel string) string {
-	now := time.Now()
-	names, groups := providerGroups(m.st, now)
-	var b strings.Builder
-	for gi, n := range names {
-		title := clean(n)
-		if groups[n][0].Kind != "static" {
-			title += " · on demand"
-		}
-		b.WriteString(section(title, w, gi > 0))
-		for _, ms := range groups[n] {
-			s := machineState(m.st, ms, now)
-			_, name, _ := strings.Cut(ms.Key, "/")
-			sub := clean(strings.Join(machineTools(ms), " · "))
-			if m.outOfDate(ms) {
-				sub += " · " + fg(colYellow).Render("out of date")
+func providerTitle(p protocol.ProviderStatus) string {
+	if p.Label != "" {
+		return p.Label
+	}
+	return p.Name
+}
+
+// roomItems is the list, in configuration order: lines must not move while
+// people read them.
+func roomItems(m *model) []roomItem {
+	var out []roomItem
+	for _, pv := range m.st.Providers {
+		var tmpls []protocol.TemplateStatus
+		for _, ms := range m.st.Templates {
+			if name, _, _ := strings.Cut(ms.Key, "/"); name == pv.Name {
+				tmpls = append(tmpls, ms)
 			}
-			right := s.dot() + " " + m.word("m:"+ms.Key, s)
-			b.WriteString(item(w, ms.Key == sel, clean(name), sub, right, mutedStyle.Render(ansi.Truncate(clean(s.detail), w/2, "…"))) + "\n\n")
 		}
-	}
-	return b.String()
-}
-
-// machineTools are the OS and the tools of a machine.
-func machineTools(ms protocol.MachineStatus) []string {
-	out := []string{ms.OS}
-	for _, p := range ms.Tools {
-		if !slices.Contains(out, p) {
-			out = append(out, p)
+		if len(tmpls) == 0 {
+			continue
+		}
+		out = append(out, roomItem{kind: itemProvider, provider: pv})
+		for _, ms := range tmpls {
+			rms := templateMachines(m.st, ms.Key)
+			if pv.Kind == "static" && len(rms) == 0 {
+				out = append(out, roomItem{kind: itemMachine, provider: pv, tmpl: ms})
+			}
+			for i := range rms {
+				out = append(out, roomItem{kind: itemMachine, provider: pv, tmpl: ms, machine: &rms[i]})
+				out = append(out, machineRoomItems(m, pv, ms, &rms[i])...)
+			}
+		}
+		if pv.Kind != "static" {
+			for _, ms := range tmpls {
+				out = append(out, roomItem{kind: itemTemplate, provider: pv, tmpl: ms})
+			}
 		}
 	}
 	return out
 }
 
+// machineRoomItems is one line for each room of a running machine, in the
+// order of its rooms: the guest, or the room's state. A lease that has no room
+// yet comes last.
+func machineRoomItems(m *model, pv protocol.ProviderStatus, ms protocol.TemplateStatus, r *protocol.MachineStatus) []roomItem {
+	var out []roomItem
+	leases := machineLeases(m.st, r.ID)
+	for _, s := range r.Rooms {
+		i := slices.IndexFunc(leases, func(l protocol.LeaseStatus) bool { return l.Room == s.Name })
+		switch {
+		case i >= 0:
+			out = append(out, roomItem{kind: itemLease, provider: pv, tmpl: ms, machine: r, lease: leases[i]})
+			leases = slices.Delete(leases, i, i+1)
+		case r.State == protocol.MachineRunning:
+			out = append(out, roomItem{kind: itemRoom, provider: pv, tmpl: ms, machine: r, room: s})
+		}
+	}
+	for _, l := range leases {
+		out = append(out, roomItem{kind: itemLease, provider: pv, tmpl: ms, machine: r, lease: l})
+	}
+	return out
+}
+
+// selected returns the selectable items and the index of the selected one.
+func (p *rooms) selected(m *model) ([]roomItem, int) {
+	var items []roomItem
+	for _, it := range roomItems(m) {
+		if it.selectable() {
+			items = append(items, it)
+		}
+	}
+	i := slices.IndexFunc(items, func(it roomItem) bool { return it.key() == p.sel })
+	if i < 0 && len(items) > 0 {
+		i, p.sel = 0, items[0].key()
+	}
+	return items, i
+}
+
+func (p *rooms) title() string { return "Rooms" }
+
+func (p *rooms) load(m *model) tea.Cmd { return m.readUsage() }
+
+func (p *rooms) body(m *model) string {
+	if len(m.st.Templates) == 0 {
+		return "\n" + note("The server has no machines yet. An admin presses + to add one.")
+	}
+	p.selected(m)
+	w := contentWidth(m)
+	now := time.Now()
+	var b strings.Builder
+	b.WriteString("\n")
+	items := roomItems(m)
+	for i, it := range items {
+		sel := it.selectable() && it.key() == p.sel
+		if it.kind == itemProvider {
+			if i > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(providerHeading(it.provider, w, sel) + "\n\n")
+			continue
+		}
+		if it.kind != itemLease && it.kind != itemRoom && items[i-1].kind != itemProvider {
+			b.WriteString("\n")
+		}
+		switch it.kind {
+		case itemMachine:
+			b.WriteString(m.machineItem(it, w, sel, now) + "\n")
+		case itemLease:
+			b.WriteString(row(w, sel, "  "+spread(leaseLeft(it.lease), leaseRight(it.lease), w-5)) + "\n")
+		case itemRoom:
+			b.WriteString(row(w, sel, "  "+spread(roomLeft(it.room), roomRight(it.room), w-5)) + "\n")
+		case itemTemplate:
+			b.WriteString(row(w, sel, "  "+spread(mutedStyle.Render(templateLeft(it.tmpl)), mutedStyle.Render(templateRight(m, it.tmpl)), w-5)) + "\n")
+		}
+	}
+	return b.String()
+}
+
+// providerHeading says what a provider does only when it is special.
+func providerHeading(p protocol.ProviderStatus, w int, sel bool) string {
+	style := mutedStyle.Bold(true)
+	lead := margin
+	if sel {
+		style, lead = accentStyle.Bold(true), accentStyle.Render(barMark+" ")
+	}
+	t := style.Render(strings.ToUpper(clean(providerTitle(p))))
+	right := ""
+	if p.Kind != "static" {
+		right = " " + mutedStyle.Render("creates machines when needed")
+	}
+	return lead + t + " " + dimStyle.Render(strings.Repeat("─", max(w-lipgloss.Width(t)-lipgloss.Width(right)-1, 0))) + right
+}
+
+func machineName(m *model, it roomItem) string {
+	if it.machine == nil || it.provider.Kind == "static" {
+		_, name, _ := strings.Cut(it.tmpl.Key, "/")
+		return clean(name)
+	}
+	return clean(strings.TrimPrefix(it.machine.Name, "hostel-"+m.st.ServerID+"-"))
+}
+
+func machineSize(it roomItem) string {
+	if it.machine != nil && it.machine.Hardware != nil {
+		return it.machine.Hardware.Size()
+	}
+	if it.tmpl.Hardware != nil {
+		return it.tmpl.Hardware.Size()
+	}
+	return ""
+}
+
+// machineItem is the two lines of a machine: its name and rooms, then its
+// size and use. A machine that does not run shows its state instead.
+func (m *model) machineItem(it roomItem, w int, sel bool, now time.Time) string {
+	right, sub := "", ""
+	r := it.machine
+	switch {
+	case r != nil && r.State == protocol.MachineRunning:
+		right = doors(*r)
+		sub = m.useGauges(r.Name)
+		if r.Drained {
+			sub = mutedStyle.Render("◌ no new leases")
+		}
+	case r == nil || it.provider.Kind == "static":
+		s := templateState(m.st, it.tmpl, now)
+		detail, _, _ := strings.Cut(s.detail, " · ")
+		right = s.dot() + " " + m.word("m:"+it.tmpl.Key, s)
+		if s.word == "Offline" {
+			right = fg(colRed).Render("✕ Offline")
+		}
+		sub = mutedStyle.Render(ansi.Truncate(clean(detail), w/2, "…"))
+	case r.State == protocol.MachineBroken:
+		right, sub = fg(colRed).Render("✕ Broken"), mutedStyle.Render(ansi.Truncate(clean(r.Reason), w/2, "…"))
+	default:
+		right = fg(colYellow).Render(spin("◐", "◓", "◑", "◒") + " " + strings.ToUpper(r.State[:1]) + r.State[1:])
+	}
+	size := clean(machineSize(it))
+	if m.outOfDate(it.tmpl) {
+		size = strings.TrimPrefix(size+" · ", " · ") + fg(colYellow).Render("out of date")
+	}
+	return item(w, sel, machineName(m, it), size, right, sub)
+}
+
+// door is the square of a room: blue occupied, green vacant, yellow in
+// cleanup or setup, red broken.
+func door(s protocol.RoomStatus) string {
+	switch s.State {
+	case protocol.RoomFree:
+		return fg(colGreen).Render("□")
+	case protocol.RoomLeased:
+		return fg(colBlue).Render("■")
+	case protocol.RoomBroken:
+		return fg(colRed).Render("■")
+	}
+	return fg(colYellow).Render("□")
+}
+
+// doors is one square for each room.
+func doors(r protocol.MachineStatus) string {
+	var out []string
+	for _, s := range r.Rooms {
+		out = append(out, door(s))
+	}
+	return strings.Join(out, " ")
+}
+
+func roomLeft(s protocol.RoomStatus) string {
+	return door(s) + " " + mutedStyle.Render(clean(s.Name))
+}
+
+func roomRight(s protocol.RoomStatus) string {
+	switch s.State {
+	case protocol.RoomFree:
+		return fg(colGreen).Render("Vacant")
+	case protocol.RoomBroken:
+		return fg(colRed).Render("Broken")
+	case protocol.RoomDirty:
+		return fg(colYellow).Render("Needs cleanup")
+	case protocol.RoomCleaning:
+		return fg(colYellow).Render("Cleaning up")
+	}
+	return fg(colYellow).Render("Getting ready")
+}
+
+// useGauges is the live use of a machine; "" until the first sample.
+func (m *model) useGauges(name string) string {
+	u, ok := m.usage[name]
+	if !ok {
+		return ""
+	}
+	const width = 6
+	cpu := u.CPUPercent / 100
+	out := mutedStyle.Render("CPU ") + gauge(cpu, width, shareColor(cpu))
+	if u.MemoryTotalBytes > 0 {
+		mem := float64(u.MemoryUsedBytes) / float64(u.MemoryTotalBytes)
+		out += mutedStyle.Render("  Memory ") + gauge(mem, width, shareColor(mem))
+	}
+	return out
+}
+
+func leaseLeft(l protocol.LeaseStatus) string {
+	glyph := fg(colBlue).Render("◉")
+	if l.State != protocol.LeaseReady {
+		glyph = fg(colYellow).Render(spin("◐", "◓", "◑", "◒"))
+	}
+	return glyph + " " + clean(l.User) + " " + mutedStyle.Render(clean(l.Task))
+}
+
+func leaseRight(l protocol.LeaseStatus) string {
+	switch {
+	case l.State != protocol.LeaseReady:
+		return fg(colYellow).Render(plainLeaseState(l.State))
+	case !l.ExpiresAt.IsZero():
+		return mutedStyle.Render("out by " + l.ExpiresAt.Local().Format("15:04"))
+	}
+	return ""
+}
+
+func templateLeft(t protocol.TemplateStatus) string {
+	_, name, _ := strings.Cut(t.Key, "/")
+	s := "◌ " + clean(name)
+	if t.Hardware != nil && t.Hardware.Size() != "" {
+		s += ", " + clean(t.Hardware.Size())
+	}
+	return s
+}
+
+func templateRight(m *model, t protocol.TemplateStatus) string {
+	if n := t.MaxMachines - len(templateMachines(m.st, t.Key)); n > 0 {
+		return fmt.Sprintf("%d more can start", n)
+	}
+	return "at its limit"
+}
+
 func (p *rooms) hint(m *model) string {
-	machines, i := p.selected(m)
+	items, i := p.selected(m)
 	if i < 0 {
 		return ""
 	}
-	ms := machines[i]
-	s := machineState(m.st, ms, time.Now())
-	h := ms.Key + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
-	if m.outOfDate(ms) {
-		h += " · its connect service runs " + clean(ms.ConnectVersion) + ", older than the server"
+	it := items[i]
+	switch it.kind {
+	case itemProvider:
+		return providerTitle(it.provider) + ": a provider that creates machines when a lease needs one."
+	case itemLease:
+		return clean(it.lease.User) + "'s lease in " + clean(it.lease.Room) + " of " + machineName(m, it) + "."
+	case itemTemplate:
+		return it.tmpl.Key + ": a template; the provider creates machines from it."
 	}
-	return h
+	if it.machine != nil && it.machine.State == protocol.MachineRunning {
+		used, free := 0, 0
+		for _, s := range it.machine.Rooms {
+			switch s.State {
+			case protocol.RoomLeased:
+				used++
+			case protocol.RoomFree:
+				free++
+			}
+		}
+		return fmt.Sprintf("%s: %d occupied, %d vacant", machineName(m, it), used, free)
+	}
+	s := templateState(m.st, it.tmpl, time.Now())
+	return machineName(m, it) + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
 }
 
-func (p *rooms) keys(m *model) []binding { return []binding{{"↑↓", "move"}, {"enter", "open"}} }
+func (p *rooms) keys(m *model) []binding {
+	ks := []binding{{"↑↓", "move"}, {"enter", "open"}}
+	if !m.admin() {
+		return ks
+	}
+	if items, i := p.selected(m); i >= 0 && items[i].kind == itemMachine && len(machineActions(m, items[i].tmpl)) > 0 {
+		ks = append(ks, binding{"a", "actions"})
+	}
+	return append(ks, binding{"+", "add a machine"})
+}
 
 func (p *rooms) key(m *model, k tea.KeyMsg) tea.Cmd {
-	machines, i := p.selected(m)
+	if k.String() == "+" && m.admin() {
+		return m.open(newAddMachine())
+	}
+	items, i := p.selected(m)
 	if i < 0 {
 		return nil
 	}
-	if k.String() == "enter" {
-		return m.open(&machinePage{machineKey: machines[i].Key})
+	it := items[i]
+	switch k.String() {
+	case "enter":
+		switch it.kind {
+		case itemProvider:
+			return m.open(&providerPage{name: it.provider.Name})
+		case itemLease:
+			return m.open(&roomPage{leaseID: it.lease.ID})
+		case itemTemplate:
+			return m.open(&templatePage{templateKey: it.tmpl.Key})
+		}
+		page := &templatePage{templateKey: it.tmpl.Key}
+		if it.machine != nil && it.provider.Kind != "static" {
+			page.machine = it.machine.Name
+		}
+		return m.open(page)
+	case "a":
+		if opts := machineActions(m, it.tmpl); it.kind == itemMachine && m.admin() && len(opts) > 0 {
+			m.menu(machineName(m, it), templateState(m.st, it.tmpl, time.Now()).word, opts)
+		}
+		return nil
 	}
-	p.sel = machines[move(i, len(machines), k.String())].Key
+	p.sel = items[move(i, len(items), k.String())].key()
 	return nil
 }
 
-// machinePage is one machine: its hardware and live use, and each lease with
-// its jobs; the admin actions.
-type machinePage struct {
-	machineKey string
-	// details of each room of the machine, by room name.
-	details map[string]protocol.RoomDetails
-	errs    []string
+// usageMsg is the answer of GET /v1/usage.
+type usageMsg struct {
+	gen  int
+	list protocol.UsageList
+	err  error
+}
+
+type usageTickMsg struct{ gen int }
+
+// readUsage reads the live use, at most once in each usageInterval.
+func (m *model) readUsage() tea.Cmd {
+	if m.usageLoading {
+		return nil
+	}
+	if time.Since(m.usageRead) < usageInterval {
+		return m.usageTick()
+	}
+	m.usageLoading = true
+	c, gen := m.c, m.gen
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		var list protocol.UsageList
+		err := c.Do(ctx, "GET", "/v1/usage", nil, &list)
+		return usageMsg{gen: gen, list: list, err: err}
+	}
+}
+
+func (m *model) usageTick() tea.Cmd {
+	if m.usageTicking {
+		return nil
+	}
+	m.usageTicking = true
+	gen := m.gen
+	return tea.Tick(usageInterval, func(time.Time) tea.Msg { return usageTickMsg{gen: gen} })
+}
+
+// providerPage is one provider that creates machines: its limit, its
+// templates, and its machines. A provider has no hardware.
+type providerPage struct{ name string }
+
+func (p *providerPage) provider(m *model) (protocol.ProviderStatus, bool) {
+	i := slices.IndexFunc(m.st.Providers, func(x protocol.ProviderStatus) bool { return x.Name == p.name })
+	if i < 0 {
+		return protocol.ProviderStatus{}, false
+	}
+	return m.st.Providers[i], true
+}
+
+func (p *providerPage) title() string { return p.name }
+
+func (p *providerPage) body(m *model) string {
+	pv, ok := p.provider(m)
+	if !ok {
+		return "\n" + note("This provider is not on the server any more.")
+	}
+	w := contentWidth(m)
+	summary := "Creates machines when a lease needs one"
+	if pv.MaxMachines > 0 {
+		summary += ", up to " + plural(pv.MaxMachines, "machine")
+	}
+	var b strings.Builder
+	b.WriteString(head(clean(providerTitle(pv)), clean(pv.Kind), summary))
+	b.WriteString(section("Templates", w, false))
+	for _, ms := range m.st.Templates {
+		if name, _, _ := strings.Cut(ms.Key, "/"); name != pv.Name {
+			continue
+		}
+		_, name, _ := strings.Cut(ms.Key, "/")
+		size := ""
+		if ms.Hardware != nil {
+			size = ms.Hardware.Size()
+		}
+		b.WriteString(item(w, false, clean(name), clean(strings.Join(templateTools(ms), " · ")), clean(size),
+			mutedStyle.Render(fmt.Sprintf("%d of %d running", len(templateMachines(m.st, ms.Key)), ms.MaxMachines))) + "\n\n")
+	}
+	return b.String()
+}
+
+func (p *providerPage) keys(m *model) []binding            { return nil }
+func (p *providerPage) hint(m *model) string               { return "" }
+func (p *providerPage) key(m *model, k tea.KeyMsg) tea.Cmd { return nil }
+
+// templateTools are the OS and the tools of a template.
+func templateTools(ms protocol.TemplateStatus) []string {
+	out := []string{ms.OS}
+	for _, t := range ms.Tools {
+		if !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// roomPage is one occupied room: the guest, what it does, and its jobs.
+type roomPage struct {
+	leaseID string
+	details *protocol.MachineDetails
+	err     string
 	loaded  time.Time
 	loading bool
-	// sel is the selected lease (its ID).
-	sel string
 }
 
-type detailsMsg struct {
+type roomDetailsMsg struct {
 	gen     int
-	key     string
-	details map[string]protocol.RoomDetails
-	errs    []string
+	lease   string
+	details protocol.MachineDetails
+	err     error
 }
 
-func (p *machinePage) title() string { return p.machineKey }
+func (p *roomPage) lease(m *model) (protocol.LeaseStatus, bool) {
+	i := slices.IndexFunc(m.st.Leases, func(l protocol.LeaseStatus) bool { return l.ID == p.leaseID })
+	if i < 0 {
+		return protocol.LeaseStatus{}, false
+	}
+	return m.st.Leases[i], true
+}
 
-func (p *machinePage) machine(m *model) (protocol.MachineStatus, bool) {
-	i := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == p.machineKey })
+func (p *roomPage) machine(m *model, l protocol.LeaseStatus) (protocol.MachineStatus, bool) {
+	i := slices.IndexFunc(m.st.Machines, func(r protocol.MachineStatus) bool { return r.ID == l.MachineID })
 	if i < 0 {
 		return protocol.MachineStatus{}, false
 	}
 	return m.st.Machines[i], true
 }
 
-func (p *machinePage) load(m *model) tea.Cmd {
-	if p.loading || time.Since(p.loaded) < detailsInterval && p.details != nil {
+func (p *roomPage) title() string { return "Room" }
+
+func (p *roomPage) load(m *model) tea.Cmd {
+	l, ok := p.lease(m)
+	if !ok || p.loading || time.Since(p.loaded) < detailsInterval {
+		return nil
+	}
+	r, ok := p.machine(m, l)
+	if !ok {
 		return nil
 	}
 	p.loading = true
-	c, gen, key := m.c, m.gen, p.machineKey
-	var names []string
-	for _, r := range machineRooms(m.st, key) {
-		names = append(names, r.Name)
-	}
+	c, gen, id := m.c, m.gen, p.leaseID
 	return func() tea.Msg {
-		out := detailsMsg{gen: gen, key: key, details: map[string]protocol.RoomDetails{}}
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		// The rooms in parallel, each with its own deadline: each read can
-		// take seconds (jobs and live use over SSH).
-		for _, name := range names {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-				defer cancel()
-				var d protocol.RoomDetails
-				err := c.Do(ctx, "GET", "/v1/rooms/"+name, nil, &d)
-				mu.Lock()
-				defer mu.Unlock()
-				if err != nil {
-					out.errs = append(out.errs, name+": "+err.Error())
-					return
-				}
-				out.details[name] = d
-			}()
-		}
-		wg.Wait()
-		return out
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		var d protocol.MachineDetails
+		err := c.Do(ctx, "GET", "/v1/machines/"+r.Name, nil, &d)
+		return roomDetailsMsg{gen: gen, lease: id, details: d, err: err}
 	}
 }
 
-func (p *machinePage) other(m *model, msg tea.Msg) tea.Cmd {
-	if d, ok := msg.(detailsMsg); ok && d.gen == m.gen && d.key == p.machineKey {
-		p.details, p.errs, p.loaded, p.loading = d.details, d.errs, time.Now(), false
+func (p *roomPage) other(m *model, msg tea.Msg) tea.Cmd {
+	if d, ok := msg.(roomDetailsMsg); ok && d.gen == m.gen && d.lease == p.leaseID {
+		p.loading, p.loaded, p.err = false, time.Now(), ""
+		if d.err != nil {
+			p.err = d.err.Error()
+			return nil
+		}
+		p.details = &d.details
 	}
 	return nil
 }
 
-// leases returns the leases on the machine's rooms (from the status, so that
-// they follow each change) and the index of the selected one.
-func (p *machinePage) leases(m *model) ([]protocol.LeaseStatus, int) {
-	var out []protocol.LeaseStatus
-	for _, r := range machineRooms(m.st, p.machineKey) {
-		out = append(out, roomLeases(m.st, r.ID)...)
-	}
-	i := slices.IndexFunc(out, func(l protocol.LeaseStatus) bool { return l.ID == p.sel })
-	if i < 0 && len(out) > 0 {
-		i, p.sel = 0, out[0].ID
-	}
-	return out, i
-}
-
-func gb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<30), 'f', 1, 64) + " GB" }
-
-func (p *machinePage) body(m *model) string {
-	ms, ok := p.machine(m)
+func (p *roomPage) body(m *model) string {
+	l, ok := p.lease(m)
 	if !ok {
-		return "\n" + note("This machine is not on the server any more.")
+		return "\n" + note("This lease has ended.")
 	}
 	now := time.Now()
 	w := contentWidth(m)
-	st := machineState(m.st, ms, now)
-	kind := "On demand, up to " + plural(ms.MaxRooms, "room")
-	if ms.Kind == "static" {
-		kind = "A fixed machine"
-		if ms.Connect {
-			kind += " that connects to the server"
-		}
-	}
-	summary := st.dot() + " " + m.word("m:"+ms.Key, st)
-	if st.detail != "" {
-		summary += "     " + mutedStyle.Render(clean(st.detail))
+	state := mutedStyle.Render("checked in " + ago(now.Sub(leaseSince(l))) + " ago")
+	if l.State != protocol.LeaseReady {
+		state = fg(colYellow).Render(plainLeaseState(l.State))
 	}
 	var b strings.Builder
-	b.WriteString(head(clean(p.machineKey), kind, summary))
-
-	// What the machine is: one section, or one for each on-demand room.
-	about := line(field("OS", clean(ms.OS)))
-	if rms := machineRooms(m.st, p.machineKey); len(rms) == 0 || ms.Kind != "static" {
-		// The configured tools; the inventory is in each room's section.
-		var ts []string
-		for _, t := range ms.Tools {
-			ts = append(ts, fg(colBlue).Render(clean(t)))
-		}
-		about += line(field("Tools", strings.Join(ts, "   ")))
+	b.WriteString(head(clean(l.User), clean(l.Task), state))
+	b.WriteString(section("Room", w, false))
+	b.WriteString(line(field("Room", clean(l.Room))))
+	if r, ok := p.machine(m, l); ok {
+		b.WriteString(line(field("Machine", clean(strings.TrimPrefix(r.Name, "hostel-"+m.st.ServerID+"-")))))
 	}
-	if ms.ConnectVersion != "" {
-		v := clean(ms.ConnectVersion)
-		if m.outOfDate(ms) {
-			v += "   " + fg(colYellow).Render("◆ out of date")
-		}
-		about += line(field("Connect", v))
-		if m.outOfDate(ms) {
-			about += line(field("", mutedStyle.Render("On the machine, as an administrator: ")+accentStyle.Render(machineUpdateCommand(ms.OS))))
-		}
+	b.WriteString(line(field("Tools", fg(colBlue).Render(clean(strings.Join(l.Tools, "   "))))))
+	repo := clean(l.Guest) + " · " + clean(l.Repo)
+	if l.Branch != "" {
+		repo += " · ⎇ " + clean(l.Branch)
 	}
-	rms := machineRooms(m.st, p.machineKey)
-	b.WriteString(section("Machine", w, false) + about)
-	for _, r := range rms {
-		title := "Now"
-		if ms.Kind != "static" {
-			title = clean("Room " + r.Name + " · " + r.State)
-		}
-		b.WriteString(section(title, w, true) + p.roomInfo(r))
-	}
-	for _, e := range p.errs {
-		b.WriteString(line(errStyle.Render(clean("Cannot read " + e))))
-	}
-
-	// The guests: two lines each, and their running jobs.
-	b.WriteString(section("Guests", w, true))
-	leases, sel := p.leases(m)
-	if len(leases) == 0 {
-		b.WriteString(note("Nobody uses this machine now."))
-	}
-	for i, l := range leases {
-		title := clean(l.User) + "  " + fmt.Sprintf("%q", clean(l.Task))
-		right := mutedStyle.Render("checked in " + ago(now.Sub(leaseSince(l))) + " ago")
-		if l.State != protocol.LeaseReady {
-			right = fg(colYellow).Render(spin("◐", "◓", "◑", "◒") + " " + plainLeaseState(l.State))
-		}
-		from := clean(l.Guest) + " · " + clean(l.Repo)
-		if l.Branch != "" {
-			from += " · ⎇ " + clean(l.Branch)
-		}
-		out := ""
-		if !l.ExpiresAt.IsZero() {
-			out = mutedStyle.Render("out by " + l.ExpiresAt.Local().Format("15:04"))
-		}
-		b.WriteString(item(w, i == sel, title, from, right, out) + "\n")
-		for _, d := range p.details {
-			for _, j := range d.Jobs[l.ID] {
-				if j.State == "running" {
-					b.WriteString(line("   " + fg(colGreen).Render("▶ ") + clean(strings.Join(j.Command, " ")) + mutedStyle.Render("   running "+ago(now.Sub(j.StartedAt)))))
-				}
-			}
-			if d.JobsError != "" && d.Room.ID == l.RoomID {
-				b.WriteString(note("   " + clean(d.JobsError)))
-			}
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// inventoryLines are the tools of a room with their options and check state, one
-// line each.
-func inventoryLines(r protocol.RoomStatus) string {
-	if len(r.Tools) == 0 {
-		return line(field("Tools", mutedStyle.Render("not installed yet")))
-	}
-	nameW, optW := 0, 0
-	for _, t := range r.Tools {
-		nameW = max(nameW, lipgloss.Width(clean(t.Name)))
-		optW = max(optW, lipgloss.Width(clean(strings.Join(t.Options, ", "))))
-	}
-	var b strings.Builder
-	for i, t := range r.Tools {
-		label := ""
-		if i == 0 {
-			label = "Tools"
-		}
-		s := state{"ready", colGreen, ""}
-		glyph := "●"
-		switch t.State {
-		case "installing":
-			s, glyph = state{"installing", colYellow, ""}, "◐"
-		case "failed":
-			s, glyph = state{"failed", colRed, ""}, "✕"
-		}
-		kind := ""
-		if t.Screen {
-			kind = "   " + mutedStyle.Render("screen")
-		}
-		b.WriteString(line(field(label, cell(fg(colBlue).Render(clean(t.Name)), nameW)+"   "+cell(clean(strings.Join(t.Options, ", ")), optW)+
-			"   "+fg(s.color).Render(glyph+" "+s.word)+kind)))
-	}
-	return b.String()
-}
-
-// roomInfo is the hardware, the inventory, and the live use of one room.
-func (p *machinePage) roomInfo(r protocol.RoomStatus) string {
-	var b strings.Builder
-	if hw := r.Hardware; hw != nil {
-		var parts []string
-		add := func(ok bool, s string) {
-			if ok {
-				parts = append(parts, s)
-			}
-		}
-		add(hw.CPU != "", clean(hw.CPU))
-		add(hw.Cores > 0, plural(hw.Cores, "core"))
-		add(hw.MemoryBytes > 0, gb(hw.MemoryBytes))
-		add(hw.OSVersion != "", clean(hw.OSVersion))
-		add(r.Arch != "", clean(r.Arch))
-		b.WriteString(line(field("Hardware", strings.Join(parts, mutedStyle.Render(" · ")))))
-	}
-	b.WriteString(inventoryLines(r))
-	d, ok := p.details[r.Name]
-	switch {
-	case ok && d.Usage != nil:
-		u := d.Usage
-		b.WriteString(line(field("CPU", gauge(u.CPUPercent/100, 24, shareColor(u.CPUPercent/100))+fmt.Sprintf("  %.0f%%", u.CPUPercent))))
-		if u.MemoryTotalBytes > 0 {
-			share := float64(u.MemoryUsedBytes) / float64(u.MemoryTotalBytes)
-			b.WriteString(line(field("Memory", gauge(share, 24, shareColor(share))+"  "+gb(u.MemoryUsedBytes)+" of "+gb(u.MemoryTotalBytes))))
-		}
-		if u.DiskFreeBytes > 0 {
-			b.WriteString(line(field("Disk", gb(u.DiskFreeBytes)+" free")))
-		}
-	case p.details == nil && r.State == protocol.RoomRunning:
-		b.WriteString(line(field("Use", mutedStyle.Render("reading …"))))
-	}
-	if r.Reason != "" {
-		b.WriteString(line(field("Reason", fg(colRed).Render(clean(r.Reason)))))
-	}
-	if r.Drained {
-		b.WriteString(line(field("Leases", mutedStyle.Render("◌ no new leases"))))
-	}
-	return b.String()
-}
-
-func (p *machinePage) hint(m *model) string {
-	leases, i := p.leases(m)
-	if i < 0 {
-		ms, _ := p.machine(m)
-		s := machineState(m.st, ms, time.Now())
-		return p.machineKey + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
-	}
-	l := leases[i]
-	h := clean(l.User) + "'s lease"
+	b.WriteString(line(field("From", repo)))
 	if !l.ExpiresAt.IsZero() {
-		h += ": ends at " + l.ExpiresAt.Local().Format("15:04") + " at the latest, or earlier after a time without activity"
+		b.WriteString(line(field("Out by", l.ExpiresAt.Local().Format("15:04"))))
 	}
-	return h + "."
+	b.WriteString(section("Jobs", w, true))
+	switch {
+	case p.err != "":
+		b.WriteString(line(errStyle.Render(clean("Cannot read the jobs: " + p.err))))
+	case p.details == nil:
+		b.WriteString(note("Reading …"))
+	case p.details.JobsError != "":
+		b.WriteString(note(clean(p.details.JobsError)))
+	default:
+		n := 0
+		for _, j := range p.details.Jobs[l.ID] {
+			if j.State == "running" {
+				n++
+				b.WriteString(line(fg(colGreen).Render("▶ ") + clean(strings.Join(j.Command, " ")) + mutedStyle.Render("   running "+ago(now.Sub(j.StartedAt)))))
+			}
+		}
+		if n == 0 {
+			b.WriteString(note("No job runs now."))
+		}
+	}
+	return b.String()
 }
 
-// repairable: repair is for a broken room of a static machine (a failed
-// health check, a changed host key); the server destroys a broken on-demand
-// room. An offline room comes back by itself; a running room needs no repair.
-func repairable(ms protocol.MachineStatus, r protocol.RoomStatus) bool {
-	return ms.Kind == "static" && r.State == protocol.RoomBroken && r.Reason != "unreachable"
-}
-
-func (p *machinePage) canEnd(m *model, l protocol.LeaseStatus) bool {
+func (p *roomPage) canEnd(m *model, l protocol.LeaseStatus) bool {
 	return m.admin() || (m.st.User != "" && l.User == m.st.User)
 }
 
-func (p *machinePage) keys(m *model) []binding {
-	leases, sel := p.leases(m)
-	var ks []binding
-	if len(leases) > 1 {
-		ks = append(ks, binding{"↑↓", "move"})
-	}
-	if sel >= 0 && p.canEnd(m, leases[sel]) {
-		ks = append(ks, binding{"enter", "actions"})
-	}
-	return ks
-}
-
-func (p *machinePage) key(m *model, k tea.KeyMsg) tea.Cmd {
-	leases, i := p.leases(m)
-	switch k.String() {
-	case "up", "k":
-		if i > 0 {
-			p.sel = leases[i-1].ID
-		}
-	case "down", "j":
-		if i >= 0 && i < len(leases)-1 {
-			p.sel = leases[i+1].ID
-		}
-	case "enter":
-		if i >= 0 && p.canEnd(m, leases[i]) {
-			// The option keeps the lease: the list can change meanwhile.
-			l := leases[i]
-			m.menu(clean(l.User), fmt.Sprintf("%q", clean(l.Task)), []option{
-				{label: "End the lease", key: "e", run: func() tea.Cmd { p.endLease(m, l); return nil }},
-			})
-		}
-	case "e":
-		if i >= 0 && p.canEnd(m, leases[i]) {
-			p.endLease(m, leases[i])
-		}
+func (p *roomPage) keys(m *model) []binding {
+	if l, ok := p.lease(m); ok && p.canEnd(m, l) {
+		return []binding{{"e", "end the lease"}}
 	}
 	return nil
 }
 
-func (p *machinePage) endLease(m *model, l protocol.LeaseStatus) {
-	m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
-		p.loaded = time.Time{}
-		return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
-	})
-}
+func (p *roomPage) hint(m *model) string { return "" }
 
-// roomAdmin is Front desk › Rooms (admins): Add a room first, then the
-// machines; Enter on a machine shows what an admin can do with it.
-type roomAdmin struct {
-	// sel is "" for Add a room, else the key of the selected machine.
-	sel string
-}
-
-func (p *roomAdmin) title() string { return "Rooms" }
-
-// order returns the items: "" (Add a room), then the machine keys in the
-// order of the screen, and the index of the selected one.
-func (p *roomAdmin) order(m *model) ([]string, int) {
-	keys := []string{""}
-	names, groups := providerGroups(m.st, time.Now())
-	for _, n := range names {
-		for _, ms := range groups[n] {
-			keys = append(keys, ms.Key)
-		}
+func (p *roomPage) key(m *model, k tea.KeyMsg) tea.Cmd {
+	l, ok := p.lease(m)
+	if k.String() == "e" && ok && p.canEnd(m, l) {
+		m.warn("End the lease", fmt.Sprintf("End the lease of %s (%q)?", clean(l.User), clean(l.Task)), func() tea.Cmd {
+			return m.do("POST", "/v1/leases/"+l.ID+"/release", nil, "The lease of "+clean(l.User)+" ended.")
+		})
 	}
-	i := slices.Index(keys, p.sel)
-	if i < 0 {
-		i, p.sel = 0, ""
-	}
-	return keys, i
-}
-
-func (p *roomAdmin) body(m *model) string {
-	w := contentWidth(m)
-	p.order(m)
-	var b strings.Builder
-	b.WriteString("\n" + iconItem(w, p.sel == "", "+", "Add a room", "Connect a new machine to this server", "", "") + "\n\n")
-	b.WriteString(machineList(m, w, p.sel))
-	return b.String()
-}
-
-func (p *roomAdmin) hint(m *model) string {
-	if p.sel == "" {
-		return "Add a room: connect a new machine to this server; it shows in Rooms."
-	}
-	i := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == p.sel })
-	if i < 0 {
-		return ""
-	}
-	s := machineState(m.st, m.st.Machines[i], time.Now())
-	return p.sel + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
-}
-
-func (p *roomAdmin) keys(m *model) []binding {
-	return []binding{{"↑↓", "move"}, {"enter", map[bool]string{true: "add", false: "actions"}[p.sel == ""]}}
-}
-
-func (p *roomAdmin) key(m *model, k tea.KeyMsg) tea.Cmd {
-	keys, i := p.order(m)
-	if k.String() != "enter" {
-		p.sel = keys[move(i, len(keys), k.String())]
-		return nil
-	}
-	if p.sel == "" {
-		return m.open(newAddMachine())
-	}
-	j := slices.IndexFunc(m.st.Machines, func(ms protocol.MachineStatus) bool { return ms.Key == p.sel })
-	if j < 0 {
-		return nil
-	}
-	ms := m.st.Machines[j]
-	opts := []option{{label: "Show the room", sub: "Hardware, use, and guests", key: "o", run: func() tea.Cmd { return m.open(&machinePage{machineKey: ms.Key}) }}}
-	opts = append(opts, roomActions(m, ms)...)
-	m.menu(clean(ms.Key), machineState(m.st, ms, time.Now()).word, opts)
 	return nil
-}
-
-// roomActions are the admin actions on the room of a static machine: stop or
-// allow new leases, and repair. On-demand rooms come and go (admins limit
-// them with max_rooms).
-func roomActions(m *model, ms protocol.MachineStatus) []option {
-	rms := machineRooms(m.st, ms.Key)
-	if ms.Kind != "static" || len(rms) == 0 {
-		return nil
-	}
-	r := rms[0]
-	id := strconv.FormatInt(r.ID, 10)
-	var out []option
-	if r.Drained {
-		out = append(out, option{label: "Allow new leases", sub: "The machine takes new leases again", key: "d", run: func() tea.Cmd {
-			m.ask("Allow new leases", "Allow new leases on "+clean(r.Name)+" again?", func() tea.Cmd {
-				return m.do("POST", "/v1/rooms/"+id+"/undrain", nil, "New leases on "+clean(r.Name)+" are allowed again.")
-			})
-			return nil
-		}})
-	} else {
-		out = append(out, option{label: "Stop new leases", sub: "The current leases continue", key: "d", run: func() tea.Cmd {
-			m.ask("Stop new leases", "Stop new leases on "+clean(r.Name)+"? The current leases continue.", func() tea.Cmd {
-				return m.do("POST", "/v1/rooms/"+id+"/drain", nil, "No new leases on "+clean(r.Name)+".")
-			})
-			return nil
-		}})
-	}
-	if repairable(ms, r) {
-		repair := func(accept bool) func() tea.Cmd {
-			return func() tea.Cmd {
-				return m.do("POST", "/v1/rooms/"+id+"/repair", map[string]bool{"accept_host_key": accept}, "Repair of "+clean(r.Name)+" requested.")
-			}
-		}
-		out = append(out, option{label: "Repair", sub: "The server checks the room again", key: "r", run: func() tea.Cmd {
-			if r.Reason == "host key changed" {
-				// The new key must be accepted on purpose: it can also be
-				// another machine at the same address.
-				m.warn("Accept the new key", "The host key of "+clean(r.Name)+" changed. It can also be another machine at the same address. Accept the new key and repair?", repair(true))
-				return nil
-			}
-			m.ask("Repair", "Repair "+clean(r.Name)+"? The server checks the room again.", repair(false))
-			return nil
-		}})
-	}
-	return out
 }

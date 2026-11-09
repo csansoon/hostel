@@ -1,6 +1,6 @@
 // Package gateway is the SSH server inside the Hostel server (design, section
 // 13). It terminates each guest SSH connection and opens its own connection to
-// the lease's room, so a guest never holds a credential that a room accepts.
+// the lease's machine, so a guest never holds a credential that a machine accepts.
 package gateway
 
 import (
@@ -30,39 +30,39 @@ const (
 // Target is where a lease's sessions go.
 type Target struct {
 	HelperPath string
-	Shell      string // the room's SSH shell (package shell)
-	Slot       string
+	Shell      string // the machine's SSH shell (package shell)
+	Room       string
 }
 
 // Backend connects the gateway to the server state.
 type Backend interface {
 	// Authorize accepts the key only if it is the key of a ready lease.
 	Authorize(ctx context.Context, leaseID string, key ssh.PublicKey) (Target, error)
-	// Dial opens an upstream SSH connection to the lease's room.
+	// Dial opens an upstream SSH connection to the lease's machine.
 	Dial(ctx context.Context, leaseID string) (*ssh.Client, error)
 	// Ready reports whether the lease is still ready.
 	Ready(ctx context.Context, leaseID string) bool
 	// Activity records guest activity (a cmd connection opened or closed).
 	Activity(leaseID string)
-	// AllowForward reports whether the lease registered a room port as a tunnel.
+	// AllowForward reports whether the lease registered a machine port as a tunnel.
 	AllowForward(ctx context.Context, leaseID string, port int) bool
-	// AllowDirect reports whether a guest may forward to a room port: on a room
-	// with several slots, only to a port of the lease's slot.
+	// AllowDirect reports whether a guest may forward to a machine port: on a machine
+	// with several rooms, only to a port of the lease's room.
 	AllowDirect(ctx context.Context, leaseID string, port int) bool
-	// AuthorizeRoom accepts a room token of a machine with connect = true and
+	// AuthorizeMachine accepts a machine token of a machine with connect = true and
 	// returns the machine ("<provider>/<machine>") and the token ID.
-	AuthorizeRoom(ctx context.Context, token string) (string, int64, error)
-	// RoomConnected checks again that the token is not revoked (a revoke
+	AuthorizeMachine(ctx context.Context, token string) (string, int64, error)
+	// MachineConnected checks again that the token is not revoked (a revoke
 	// during the handshake did not see the connection), then asks for a
-	// probe of the machine's room, which was unreachable until now.
-	RoomConnected(machine string, token int64) error
+	// probe of the machine's machine, which was unreachable until now.
+	MachineConnected(template string, token int64) error
 }
 
 type Gateway struct {
-	be     Backend
-	log    *slog.Logger
-	config *ssh.ServerConfig
-	rooms  *RoomConns
+	be       Backend
+	log      *slog.Logger
+	config   *ssh.ServerConfig
+	machines *MachineConns
 
 	mu       sync.Mutex
 	conns    map[string]map[*ssh.ServerConn]string // lease → connection → purpose
@@ -72,8 +72,8 @@ type Gateway struct {
 // handshakeTimeout bounds the guest handshake and the upstream dial.
 const handshakeTimeout = 30 * time.Second
 
-func New(hostKey ssh.Signer, be Backend, rooms *RoomConns, log *slog.Logger) *Gateway {
-	g := &Gateway{be: be, log: log, rooms: rooms, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
+func New(hostKey ssh.Signer, be Backend, machines *MachineConns, log *slog.Logger) *Gateway {
+	g := &Gateway{be: be, log: log, machines: machines, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
 	g.config = &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			leaseID, purpose, ok := strings.Cut(meta.User(), ".")
@@ -87,21 +87,21 @@ func New(hostKey ssh.Signer, be Backend, rooms *RoomConns, log *slog.Logger) *Ga
 				return nil, err
 			}
 			return &ssh.Permissions{Extensions: map[string]string{
-				"lease": leaseID, "purpose": purpose, "helper": t.HelperPath, "shell": t.Shell, "slot": t.Slot}}, nil
+				"lease": leaseID, "purpose": purpose, "helper": t.HelperPath, "shell": t.Shell, "room": t.Room}}, nil
 		},
-		// Rooms behind NAT ("hostel room connect"): user "room", a room token
+		// Machines behind NAT ("hostel helper connect"): user "machine", a machine token
 		// as the password.
 		PasswordCallback: func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
-			if meta.User() != "room" {
-				return nil, fmt.Errorf("password authentication is only for the user room")
+			if meta.User() != "machine" {
+				return nil, fmt.Errorf("password authentication is only for the user machine")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 			defer cancel()
-			machine, id, err := be.AuthorizeRoom(ctx, string(password))
+			template, id, err := be.AuthorizeMachine(ctx, string(password))
 			if err != nil {
 				return nil, err
 			}
-			return &ssh.Permissions{Extensions: map[string]string{"room": machine, "room_token": strconv.FormatInt(id, 10)}}, nil
+			return &ssh.Permissions{Extensions: map[string]string{"machine": template, "machine_token": strconv.FormatInt(id, 10)}}, nil
 		},
 		ServerVersion: "SSH-2.0-hostel-gateway",
 	}
@@ -174,14 +174,14 @@ func (g *Gateway) handle(nc net.Conn) {
 	}
 	nc.SetDeadline(time.Time{})
 	defer conn.Close()
-	if machine := conn.Permissions.Extensions["room"]; machine != "" {
-		token, _ := strconv.ParseInt(conn.Permissions.Extensions["room_token"], 10, 64)
-		g.serveRoom(conn, chans, reqs, machine, token)
+	if template := conn.Permissions.Extensions["machine"]; template != "" {
+		token, _ := strconv.ParseInt(conn.Permissions.Extensions["machine_token"], 10, 64)
+		g.serveMachine(conn, chans, reqs, template, token)
 		return
 	}
 	leaseID := conn.Permissions.Extensions["lease"]
 	purpose := conn.Permissions.Extensions["purpose"]
-	target := Target{HelperPath: conn.Permissions.Extensions["helper"], Shell: conn.Permissions.Extensions["shell"], Slot: conn.Permissions.Extensions["slot"]}
+	target := Target{HelperPath: conn.Permissions.Extensions["helper"], Shell: conn.Permissions.Extensions["shell"], Room: conn.Permissions.Extensions["room"]}
 
 	g.register(leaseID, purpose, conn)
 	defer g.unregister(leaseID, conn)
@@ -207,7 +207,7 @@ func (g *Gateway) handle(nc net.Conn) {
 	}
 	defer upstream.Close()
 	go func() {
-		// The guest connection ends when the room connection ends.
+		// The guest connection ends when the machine connection ends.
 		upstream.Wait()
 		conn.Close()
 	}()
@@ -228,7 +228,7 @@ func (g *Gateway) handle(nc net.Conn) {
 // helperCommand wraps a guest command in the helper, so that each guest process
 // has the lease environment and HOSTEL_LEASE (cleanup finds it by that variable).
 func helperCommand(t Target, args ...string) (string, error) {
-	return shell.Command(t.Shell, t.HelperPath, append([]string{"room"}, args...)...)
+	return shell.Command(t.Shell, t.HelperPath, append([]string{"helper"}, args...)...)
 }
 
 // stringPayload encodes an SSH string (uint32 length + bytes).
@@ -256,7 +256,7 @@ func parseString(b []byte) (string, bool) {
 func (g *Gateway) session(nch ssh.NewChannel, upstream *ssh.Client, t Target) {
 	up, upReqs, err := upstream.OpenChannel("session", nil)
 	if err != nil {
-		nch.Reject(ssh.ConnectionFailed, "open a session on the room: "+err.Error())
+		nch.Reject(ssh.ConnectionFailed, "open a session on the machine: "+err.Error())
 		return
 	}
 	ch, reqs, err := nch.Accept()
@@ -291,10 +291,10 @@ func (g *Gateway) session(nch ssh.NewChannel, upstream *ssh.Client, t Target) {
 					r.Reply(false, nil)
 					continue
 				}
-				wrapped, err = helperCommand(t, "exec", "--slot", t.Slot, "--command-b64", base64.StdEncoding.EncodeToString([]byte(cmd)))
+				wrapped, err = helperCommand(t, "exec", "--room", t.Room, "--command-b64", base64.StdEncoding.EncodeToString([]byte(cmd)))
 			case "shell":
 				typ = "exec"
-				wrapped, err = helperCommand(t, "shell", "--slot", t.Slot)
+				wrapped, err = helperCommand(t, "shell", "--room", t.Room)
 			case "subsystem":
 				r.Reply(false, nil)
 				continue

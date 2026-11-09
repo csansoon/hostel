@@ -1,10 +1,10 @@
 #!/bin/sh
 # Starts one emulator for each option of the lease from the golden AVD's
 # "clean" snapshot. -read-only keeps the AVD unchanged, so each lease gets a
-# clean emulator and several slots can use the same golden AVD. Each slot and
-# option has its own console port: HOSTEL_ANDROID_PORT (slot or machine env,
-# default 5554) + 2 * option index; a machine with several slots sets it for
-# each slot. Writes ANDROID_SERIAL (the first option) and ANDROID_SERIALS (all,
+# clean emulator and several rooms can use the same golden AVD. Each room and
+# option has its own console port: HOSTEL_ANDROID_PORT (room or machine env,
+# default 5554) + 2 * option index; a machine with several rooms sets it for
+# each room. Writes ANDROID_SERIAL (the first option) and ANDROID_SERIALS (all,
 # in the order of HOSTEL_TOOL_OPTIONS) to tool.env.
 set -eu
 
@@ -23,7 +23,7 @@ i=0
 for d in $(echo "$HOSTEL_TOOL_OPTIONS" | tr ',' ' '); do
 	name="hostel-golden-$d-$api-$tag"
 	if ! [ -d "$avd_home/$name.avd/snapshots/clean" ]; then
-		echo "no golden AVD $name; repair the room (hostel admin room repair) to run install again" >&2
+		echo "no golden AVD $name; repair the machine (hostel admin machine repair) to run install again" >&2
 		exit 1
 	fi
 	port=$((base + 2 * i))

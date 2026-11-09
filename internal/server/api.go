@@ -62,7 +62,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	wait = min(max(wait, 0), maxStatusWait)
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
-	// Rooms and the configuration change without the hook: look again every
+	// Machines and the configuration change without the hook: look again every
 	// 2 s.
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
@@ -103,19 +103,27 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // order of the status leases.
 func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Status, []store.Lease, error) {
 	lc := s.live.Load()
-	out := protocol.Status{ServerID: lc.cfg.ServerID, Machines: []protocol.MachineStatus{}, Rooms: []protocol.RoomStatus{}, Leases: []protocol.LeaseStatus{},
+	out := protocol.Status{ServerID: lc.cfg.ServerID, Providers: []protocol.ProviderStatus{}, Templates: []protocol.TemplateStatus{}, Machines: []protocol.MachineStatus{}, Leases: []protocol.LeaseStatus{},
 		Warning: lc.warning}
 	if tok.UserID != 0 {
 		out.User, out.Role = tok.Name, tok.Role
 	}
-	for _, m := range lc.cfg.Machines() {
-		ms := machineStatus(m)
-		if m.Connect {
-			ms.ConnectVersion = s.rooms.Version(m.Key())
+	for _, name := range lc.cfg.ProviderOrder {
+		p := lc.cfg.Providers[name]
+		ps := protocol.ProviderStatus{Name: name, Label: p.Label, Kind: p.Kind}
+		if p.MaxMachines != nil {
+			ps.MaxMachines = *p.MaxMachines
 		}
-		out.Machines = append(out.Machines, ms)
+		out.Providers = append(out.Providers, ps)
 	}
-	rooms, err := s.store.Rooms(ctx)
+	for _, m := range lc.cfg.Templates() {
+		ms := templateStatus(m)
+		if m.Connect {
+			ms.ConnectVersion = s.machines.Version(m.Key())
+		}
+		out.Templates = append(out.Templates, ms)
+	}
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return out, nil, err
 	}
@@ -123,19 +131,19 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 	if err != nil {
 		return out, nil, err
 	}
-	for i, m := range lc.cfg.Machines() {
-		out.Machines[i].Hardware = machineHardware(m, measured)
+	for i, m := range lc.cfg.Templates() {
+		out.Templates[i].Hardware = templateHardware(m, measured)
 	}
-	slots, err := s.store.Slots(ctx)
+	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return out, nil, err
 	}
-	rts, err := s.store.RoomTools(ctx)
+	rts, err := s.store.MachineTools(ctx)
 	if err != nil {
 		return out, nil, err
 	}
-	for _, room := range rooms {
-		out.Rooms = append(out.Rooms, roomStatus(lc.cfg, room, slots, rts))
+	for _, machine := range machines {
+		out.Machines = append(out.Machines, machineStatus(lc.cfg, machine, rooms, rts))
 	}
 	leases, err := s.store.ActiveLeases(ctx)
 	if err != nil {
@@ -154,15 +162,15 @@ func (s *Server) buildStatus(ctx context.Context, tok store.Token) (protocol.Sta
 	return out, leases, nil
 }
 
-func machineStatus(m *config.Machine) protocol.MachineStatus {
-	return protocol.MachineStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Tools: append([]string{}, m.Tools...),
-		MaxRooms: *m.MaxRooms, Connect: m.Connect}
+func templateStatus(m *config.Template) protocol.TemplateStatus {
+	return protocol.TemplateStatus{Key: m.Key(), Kind: m.Kind, OS: m.OS, Tools: append([]string{}, m.Tools...),
+		MaxMachines: *m.MaxMachines, Connect: m.Connect}
 }
 
-// machineHardware is what a new room of the machine will have: what its
-// configuration states, else what its newest room measured (only what does not
+// templateHardware is what a new machine of the machine will have: what its
+// configuration states, else what its newest machine measured (only what does not
 // change). measured comes from Store.LastHardware.
-func machineHardware(m *config.Machine, measured map[string]string) *protocol.Hardware {
+func templateHardware(m *config.Template, measured map[string]string) *protocol.Hardware {
 	if cores, gb := m.DeclaredSize(); cores > 0 || gb > 0 {
 		return &protocol.Hardware{Cores: cores, MemoryBytes: int64(gb) << 30}
 	}
@@ -174,28 +182,28 @@ func machineHardware(m *config.Machine, measured map[string]string) *protocol.Ha
 	return &hw
 }
 
-func roomStatus(cfg *config.Server, room store.Room, slots []store.Slot, rts []store.RoomTool) protocol.RoomStatus {
-	rs := protocol.RoomStatus{ID: room.ID, Name: room.Name, Provider: room.Provider, Machine: room.Machine,
-		OS: room.OS, Arch: room.Arch, State: room.State, Reason: room.BrokenReason, Drained: room.Drained,
-		Slots: []protocol.SlotStatus{}, Tools: []protocol.InventoryTool{}, Deadline: room.ProviderDeadline}
-	for _, sl := range slots {
-		if sl.RoomID == room.ID {
-			rs.Slots = append(rs.Slots, protocol.SlotStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
+func machineStatus(cfg *config.Server, machine store.Machine, rooms []store.Room, rts []store.MachineTool) protocol.MachineStatus {
+	rs := protocol.MachineStatus{ID: machine.ID, Name: machine.Name, Provider: machine.Provider, Template: machine.Template,
+		OS: machine.OS, Arch: machine.Arch, State: machine.State, Reason: machine.BrokenReason, Drained: machine.Drained,
+		Rooms: []protocol.RoomStatus{}, Tools: []protocol.InventoryTool{}, Deadline: machine.ProviderDeadline}
+	for _, sl := range rooms {
+		if sl.MachineID == machine.ID {
+			rs.Rooms = append(rs.Rooms, protocol.RoomStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})
 		}
 	}
 	for _, rt := range rts {
-		if rt.RoomID == room.ID {
+		if rt.MachineID == machine.ID {
 			t := cfg.Tools[rt.Tool]
 			rs.Tools = append(rs.Tools, protocol.InventoryTool{Name: rt.Tool, Options: nonNil(splitOptions(rt.Option)), State: rt.State,
 				Env: nonNil(rt.Env), Screen: t != nil && t.Screen})
 		}
 	}
-	if room.State == protocol.RoomBroken && room.BrokenReason == reasonUnreachable {
-		rs.LastSeen = room.LastSeenAt
+	if machine.State == protocol.MachineBroken && machine.BrokenReason == reasonUnreachable {
+		rs.LastSeen = machine.LastSeenAt
 	}
-	if room.Hardware != "" {
+	if machine.Hardware != "" {
 		var hw protocol.Hardware
-		if json.Unmarshal([]byte(room.Hardware), &hw) == nil {
+		if json.Unmarshal([]byte(machine.Hardware), &hw) == nil {
 			rs.Hardware = &hw
 		}
 	}
@@ -205,7 +213,7 @@ func roomStatus(cfg *config.Server, room store.Room, slots []store.Slot, rts []s
 func leaseStatus(l store.Lease, users map[int64]string) protocol.LeaseStatus {
 	return protocol.LeaseStatus{ID: l.ID, State: l.State, Position: l.Position, Reason: l.Reason,
 		Tools: nonNil(l.Tools), Started: nonNilStarted(l.Started), Task: l.Task, Priority: protocol.PriorityName(l.Priority), User: users[l.TokenID], Guest: l.GuestHost,
-		Repo: l.Repo, Branch: l.Branch, Provider: l.Provider, Machine: l.Machine, RoomID: l.RoomID, Slot: l.SlotName, CreatedAt: l.CreatedAt,
+		Repo: l.Repo, Branch: l.Branch, Provider: l.Provider, Template: l.Template, MachineID: l.MachineID, Room: l.RoomName, CreatedAt: l.CreatedAt,
 		ReadyAt: l.ReadyAt, ExpiresAt: l.ExpiresAt}
 }
 
@@ -219,21 +227,21 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Users get their tokens with invite codes (hostel connect).
-	if req.Role != protocol.RoleRoom {
-		writeError(w, http.StatusBadRequest, "", "only room tokens are created here; invite users with \"hostel config users invite\"")
+	if req.Role != protocol.RoleMachine {
+		writeError(w, http.StatusBadRequest, "", "only machine tokens are created here; invite users with \"hostel config users invite\"")
 		return
 	}
-	m := s.config().Machine(req.Machine)
+	m := s.config().Template(req.Template)
 	if m == nil || m.Kind != config.ProviderStatic {
-		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a room token needs machine = <provider>/<machine> of a static machine; %q is not one", req.Machine))
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a machine token needs machine = <provider>/<machine> of a static machine; %q is not one", req.Template))
 		return
 	}
-	tok, secret, err := s.store.CreateRoomToken(r.Context(), req.Name, req.Machine, time.Now())
+	tok, secret, err := s.store.CreateMachineToken(r.Context(), req.Name, req.Template, time.Now())
 	if err != nil {
 		s.internalError(w, "create token", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, protocol.TokenResponse{ID: tok.ID, Name: tok.Name, Role: tok.Role, Machine: tok.Machine, Token: secret})
+	writeJSON(w, http.StatusCreated, protocol.TokenResponse{ID: tok.ID, Name: tok.Name, Role: tok.Role, Template: tok.Template, Token: secret})
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
@@ -251,6 +259,6 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "revoke token", err)
 		return
 	}
-	s.rooms.CloseToken(id)
+	s.machines.CloseToken(id)
 	writeJSON(w, http.StatusOK, struct{}{})
 }

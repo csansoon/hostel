@@ -12,29 +12,29 @@ import (
 	"github.com/csansoon/hostel/internal/store"
 )
 
-// toolView is one configuration with the inventories of the rooms: what each
-// machine and each room gives (design, section 5).
+// toolView is one configuration with the inventories of the machines: what each
+// machine and each machine gives (design, section 5).
 type toolView struct {
-	lc    *liveConfig
-	rooms []store.Room
-	rts   []store.RoomTool
+	lc       *liveConfig
+	machines []store.Machine
+	rts      []store.MachineTool
 }
 
 func (s *Server) loadToolView(ctx context.Context) (*toolView, error) {
-	rooms, err := s.store.Rooms(ctx)
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rts, err := s.store.RoomTools(ctx)
+	rts, err := s.store.MachineTools(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &toolView{lc: s.live.Load(), rooms: rooms, rts: rts}, nil
+	return &toolView{lc: s.live.Load(), machines: machines, rts: rts}, nil
 }
 
 // configuredHaves is what the configuration says a machine gives: the
 // options of its entries, or all options of a screen tool.
-func configuredHaves(cfg *config.Server, m *config.Machine) map[string]scheduler.Have {
+func configuredHaves(cfg *config.Server, m *config.Template) map[string]scheduler.Have {
 	out := map[string]scheduler.Have{}
 	for _, mt := range m.ToolList {
 		t := cfg.Tools[mt.Name]
@@ -67,7 +67,7 @@ func splitOptions(s string) []string {
 
 // withInventory applies the options that check scripts reported: the versions
 // of a software tool replace the configured ones; a screen tool keeps the
-// configured options that the room has. ok is false for a screen tool that
+// configured options that the machine has. ok is false for a screen tool that
 // has none of them: it gives nothing (empty options would match any).
 func withInventory(h scheduler.Have, reported []string) (scheduler.Have, bool) {
 	if len(reported) == 0 {
@@ -90,33 +90,33 @@ func withInventory(h scheduler.Have, reported []string) (scheduler.Have, bool) {
 	return h, true
 }
 
-// inventory is what a room reports for a tool. A row from another install
-// (the tool or its options changed) says nothing: the room installs again.
-func (v *toolView) inventory(m *config.Machine, roomID int64, tool string) []string {
+// inventory is what a machine reports for a tool. A row from another install
+// (the tool or its options changed) says nothing: the machine installs again.
+func (v *toolView) inventory(m *config.Template, machineID int64, tool string) []string {
 	for _, rt := range v.rts {
-		if rt.RoomID == roomID && rt.Tool == tool && rt.State == store.ToolReady && rt.ScriptsSHA256 == installHash(v.lc, m, tool) {
+		if rt.MachineID == machineID && rt.Tool == tool && rt.State == store.ToolReady && rt.ScriptsSHA256 == installHash(v.lc, m, tool) {
 			return splitOptions(rt.Option)
 		}
 	}
 	return nil
 }
 
-// current reports a room that the machine's current settings describe: its
-// inventory says what a new lease can get. A stale room installs again before
+// current reports a machine that the machine's current settings describe: its
+// inventory says what a new lease can get. A stale machine installs again before
 // its next lease.
-func (v *toolView) current(r store.Room, m *config.Machine) bool {
-	if r.State == protocol.RoomDestroyed || r.State == protocol.RoomRetired || r.State == protocol.RoomDestroying {
+func (v *toolView) current(r store.Machine, m *config.Template) bool {
+	if r.State == protocol.MachineDestroyed || r.State == protocol.MachineRetired || r.State == protocol.MachineDestroying {
 		return false
 	}
-	return r.ConfigSHA256 == "" || r.ConfigSHA256 == machineHash(v.lc, m)
+	return r.ConfigSHA256 == "" || r.ConfigSHA256 == templateHash(v.lc, m)
 }
 
-// roomHaves is what a room gives: its inventory, else its machine's
+// machineHaves is what a machine gives: its inventory, else its machine's
 // configuration.
-func (v *toolView) roomHaves(m *config.Machine, roomID int64) map[string]scheduler.Have {
+func (v *toolView) machineHaves(m *config.Template, machineID int64) map[string]scheduler.Have {
 	out := configuredHaves(v.lc.cfg, m)
 	for name, h := range out {
-		if h, ok := withInventory(h, v.inventory(m, roomID, name)); ok {
+		if h, ok := withInventory(h, v.inventory(m, machineID, name)); ok {
 			out[name] = h
 		} else {
 			delete(out, name)
@@ -125,14 +125,14 @@ func (v *toolView) roomHaves(m *config.Machine, roomID int64) map[string]schedul
 	return out
 }
 
-// machineHaves is what a machine gives: the inventories of its rooms where
+// templateHaves is what a machine gives: the inventories of its machines where
 // they report options, else its configuration.
-func (v *toolView) machineHaves(m *config.Machine) map[string]scheduler.Have {
+func (v *toolView) templateHaves(m *config.Template) map[string]scheduler.Have {
 	out := configuredHaves(v.lc.cfg, m)
 	for name, h := range out {
 		var reported []string
-		for _, r := range v.rooms {
-			if r.Provider+"/"+r.Machine != m.Key() || !v.current(r, m) {
+		for _, r := range v.machines {
+			if r.Provider+"/"+r.Template != m.Key() || !v.current(r, m) {
 				continue
 			}
 			for _, o := range v.inventory(m, r.ID, name) {
@@ -150,19 +150,19 @@ func (v *toolView) machineHaves(m *config.Machine) map[string]scheduler.Have {
 	return out
 }
 
-func (v *toolView) schedMachines() []scheduler.Machine {
-	var out []scheduler.Machine
-	for _, m := range v.lc.cfg.Machines() {
+func (v *toolView) schedTemplates() []scheduler.Template {
+	var out []scheduler.Template
+	for _, m := range v.lc.cfg.Templates() {
 		pool := -1
-		for _, sl := range m.Slots {
+		for _, sl := range m.Rooms {
 			if pool < 0 || len(sl.Ports) < pool {
 				pool = len(sl.Ports)
 			}
 		}
-		out = append(out, scheduler.Machine{
-			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), Tools: v.machineHaves(m),
+		out = append(out, scheduler.Template{
+			Key: m.Key(), Provider: m.Provider, OnDemand: m.OnDemand(), Tools: v.templateHaves(m),
 			CanResume: v.lc.providers[m.Provider].Capabilities(m.Name).CanStop,
-			PoolPorts: pool, Slots: slotNames(m), MaxRooms: *m.MaxRooms,
+			PoolPorts: pool, Rooms: roomNames(m), MaxMachines: *m.MaxMachines,
 			MaxLease: m.MaxLease.D(), MaxLifetime: m.MaxLifetime.D(),
 		})
 	}
@@ -245,7 +245,7 @@ func leaseRequest(cfg *config.Server, l store.Lease) scheduler.Request {
 
 // listedBy reports whether a machine of the configuration lists the tool.
 func listedBy(cfg *config.Server, name string) bool {
-	return slices.ContainsFunc(cfg.Machines(), func(m *config.Machine) bool { return m.Tool(name) != nil })
+	return slices.ContainsFunc(cfg.Templates(), func(m *config.Template) bool { return m.Tool(name) != nil })
 }
 
 // checkLeaseTools checks the tools of a lease request (R4): each tool
@@ -285,18 +285,18 @@ func checkLeaseTools(cfg *config.Server, tools []string) ([]string, string, stri
 	return out, "", ""
 }
 
-// noMachineMessage explains why no configured machine can serve a request
+// noTemplateMessage explains why no configured machine can serve a request
 // (design, section 5).
-func noMachineMessage(machines []scheduler.Machine, r scheduler.Request) string {
+func noTemplateMessage(templates []scheduler.Template, r scheduler.Request) string {
 	toolsOnly := r
 	toolsOnly.PoolTunnels, toolsOnly.Fresh = 0, false
-	if len(scheduler.Candidates(machines, toolsOnly)) > 0 {
+	if len(scheduler.Candidates(templates, toolsOnly)) > 0 {
 		var why []string
 		if r.PoolTunnels > 0 {
-			why = append(why, fmt.Sprintf("%d tunnel ports from the slot pool", r.PoolTunnels))
+			why = append(why, fmt.Sprintf("%d tunnel ports from the room pool", r.PoolTunnels))
 		}
 		if r.Fresh {
-			why = append(why, "a new room (--fresh needs an on-demand machine)")
+			why = append(why, "a new machine (--fresh needs an on-demand machine)")
 		}
 		return fmt.Sprintf("no machine with these tools has %s; run \"hostel tools\"", strings.Join(why, " and "))
 	}
@@ -311,7 +311,7 @@ func noMachineMessage(machines []scheduler.Machine, r scheduler.Request) string 
 			entry += ":" + w.Option
 		}
 		entries = append(entries, entry)
-		if len(scheduler.Candidates(machines, scheduler.Request{Tools: []scheduler.Want{w}})) == 0 {
+		if len(scheduler.Candidates(templates, scheduler.Request{Tools: []scheduler.Want{w}})) == 0 {
 			missing = append(missing, entry)
 		}
 		if seen[w.Name] {
@@ -319,7 +319,7 @@ func noMachineMessage(machines []scheduler.Machine, r scheduler.Request) string 
 		}
 		seen[w.Name] = true
 		var ms []string
-		for _, m := range machines {
+		for _, m := range templates {
 			if h, ok := m.Tools[w.Name]; ok {
 				desc := m.Key
 				if len(h.Options) > 0 {
@@ -348,10 +348,10 @@ func leaseUses(cfg *config.Server, l store.Lease, name string) bool {
 		slices.ContainsFunc(l.Started, func(st protocol.StartedTool) bool { return st.Name == name })
 }
 
-// planStarts returns the screen tools that start for a lease on a room, with
+// planStarts returns the screen tools that start for a lease on a machine, with
 // their options, in the order of needs: the requested options, else the first
-// option that the room has.
-func planStarts(cfg *config.Server, l store.Lease, room map[string]scheduler.Have) []protocol.StartedTool {
+// option that the machine has.
+func planStarts(cfg *config.Server, l store.Lease, machine map[string]scheduler.Have) []protocol.StartedTool {
 	var out []protocol.StartedTool
 	for _, t := range leaseClosure(cfg, l.Tools) {
 		if !t.Screen {
@@ -364,7 +364,7 @@ func planStarts(cfg *config.Server, l store.Lease, room map[string]scheduler.Hav
 			}
 		}
 		if len(st.Options) == 0 {
-			if have := room[t.Name].Options; len(have) > 0 {
+			if have := machine[t.Name].Options; len(have) > 0 {
 				st.Options = []string{have[0]}
 			} else if len(t.Options) > 0 {
 				st.Options = []string{t.Options[0]}

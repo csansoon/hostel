@@ -26,11 +26,11 @@ const machineUpdateTimeout = 10 * time.Minute
 // machine that joined: it replaces the binary of the connect service with
 // the server's binary for this machine and restarts the service. The service
 // does not replace itself: it cannot write its directory, which protects the
-// room token.
+// machine token.
 func machineUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel machine update", stderr)
 	if rest, err := cli.Parse(fs, args); err != nil || len(rest) > 0 {
-		fmt.Fprintln(stderr, machineUsage)
+		fmt.Fprintln(stderr, templateUsage)
 		return 2
 	}
 	if !isAdministrator() {
@@ -55,7 +55,7 @@ func updateServiceBinary(osName string) (string, error) {
 	var st joinState
 	data, err := os.ReadFile(filepath.Join(dir, "join.json"))
 	if err != nil || json.Unmarshal(data, &st) != nil || st.Server == "" {
-		return "", fmt.Errorf("this machine has not joined a server (%s/join.json is missing). A machine that joined runs this command; on a machine that you set up by hand (\"hostel room connect\"), install the new binary yourself and restart its connection", dir)
+		return "", fmt.Errorf("this machine has not joined a server (%s/join.json is missing). A machine that joined runs this command; on a machine that you set up by hand (\"hostel helper connect\"), install the new binary yourself and restart its connection", dir)
 	}
 	bin := filepath.Join(dir, "hostel")
 	if osName == config.OSWindows {

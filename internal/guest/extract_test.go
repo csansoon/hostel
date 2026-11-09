@@ -1,5 +1,5 @@
 // Unit tests are allowed here (AGENTS.md): the path safety of "hostel cp" from
-// the room is small, deterministic code, and an E2E test cannot produce a
+// the machine is small, deterministic code, and an E2E test cannot produce a
 // crafted stream (the real helper never sends one).
 package guest
 

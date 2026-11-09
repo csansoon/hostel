@@ -14,7 +14,7 @@ import (
 
 const cacheDir = "/home/hostel/hostel/cache"
 
-// marker creates or removes a test marker in the room cache (see the
+// marker creates or removes a test marker in the machine cache (see the
 // fake-screen scripts).
 func (f *fixture) marker(name string, on bool) {
 	if on {
@@ -24,8 +24,8 @@ func (f *fixture) marker(name string, on bool) {
 	}
 }
 
-func (f *fixture) roomID() string {
-	return fmt.Sprint(f.s.room("home/box").ID)
+func (f *fixture) machineID() string {
+	return fmt.Sprint(f.s.machine("home/box").ID)
 }
 
 // admin runs a command with the admin token.
@@ -38,39 +38,39 @@ func (f *fixture) admin(args ...string) result {
 }
 
 // TestFailures is scenario 20: a failed start of a screen tool returns the
-// lease to the waiting line and marks the room broken; a cleanup failure marks
-// the room and the slot broken; admin repair makes a static room usable again.
+// lease to the waiting line and marks the machine broken; a cleanup failure marks
+// the machine and the room broken; admin repair makes a static machine usable again.
 func TestFailures(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.marker("fail-start", true)
 	r := f.e.hostel("acquire", "fake-screen", "--task", "start fails", "--wait", "40s")
-	if r.code != 75 || !strings.Contains(r.stderr, "queued") || !strings.Contains(r.stderr, "room broken: tool fake-screen: start script exited with code 1") {
+	if r.code != 75 || !strings.Contains(r.stderr, "queued") || !strings.Contains(r.stderr, "machine broken: tool fake-screen: start script exited with code 1") {
 		t.Fatalf("acquire with a failing start: %s", r)
 	}
-	if room := f.s.room("home/box"); room.State != protocol.RoomBroken || !strings.Contains(room.Reason, "start script exited with code 1") {
-		t.Fatalf("room after the start failure: %+v", room)
+	if machine := f.s.machine("home/box"); machine.State != protocol.MachineBroken || !strings.Contains(machine.Reason, "start script exited with code 1") {
+		t.Fatalf("machine after the start failure: %+v", machine)
 	}
 	f.marker("fail-start", false)
-	f.admin("admin", "room", "repair", f.roomID())
+	f.admin("admin", "machine", "repair", f.machineID())
 	f.acquire()
 
-	// A cleanup failure: the room and the slot are broken; a new lease waits.
+	// A cleanup failure: the machine and the room are broken; a new lease waits.
 	f.marker("fail-stop", true)
 	f.e.mustHostel("release")
-	f.e.waitFor("room broken by the cleanup", time.Minute, func() bool {
-		room := f.s.room("home/box")
-		return room.State == protocol.RoomBroken && strings.Contains(room.Reason, "stop failed on purpose")
+	f.e.waitFor("machine broken by the cleanup", time.Minute, func() bool {
+		machine := f.s.machine("home/box")
+		return machine.State == protocol.MachineBroken && strings.Contains(machine.Reason, "stop failed on purpose")
 	})
-	if slot := f.s.room("home/box").Slots[0]; slot.State != protocol.SlotBroken {
-		t.Fatalf("slot after the cleanup failure: %+v", slot)
+	if room := f.s.machine("home/box").Rooms[0]; room.State != protocol.RoomBroken {
+		t.Fatalf("room after the cleanup failure: %+v", room)
 	}
 	f.e.newRepoNamed("next", defaultRepoFiles())
 	if r := f.e.hostel("acquire", "fake-screen", "--task", "next", "--wait", "3s"); r.code != 75 {
-		t.Fatalf("a new lease on a broken room: %s", r)
+		t.Fatalf("a new lease on a broken machine: %s", r)
 	}
 	f.marker("fail-stop", false)
-	f.admin("admin", "room", "repair", f.roomID())
+	f.admin("admin", "machine", "repair", f.machineID())
 	f.e.mustHostel("acquire", "fake-screen", "--task", "next")
 	// Two successful stops: the cleanup after the failed start (the tool can
 	// leave processes), and the repair after the failed stop (a failing stop
@@ -81,17 +81,17 @@ func TestFailures(t *testing.T) {
 }
 
 // TestStaticOffline is scenario 25 (offline after start): the host goes offline
-// during preparing; the room is broken (unreachable), the lease is queued, and
-// the room becomes usable by itself when the host is back.
+// during preparing; the machine is broken (unreachable), the lease is queued, and
+// the machine becomes usable by itself when the host is back.
 func TestStaticOffline(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.marker("slow-start", true)
 	f.acquireUntil(protocol.LeasePreparing)
 	f.c.stop()
-	f.e.waitFor("room unreachable", time.Minute, func() bool {
-		room := f.s.room("home/box")
-		return room.State == protocol.RoomBroken && room.Reason == "unreachable"
+	f.e.waitFor("machine unreachable", time.Minute, func() bool {
+		machine := f.s.machine("home/box")
+		return machine.State == protocol.MachineBroken && machine.Reason == "unreachable"
 	})
 	if l := f.s.status().Leases; len(l) != 1 || l[0].State != protocol.LeaseQueued {
 		t.Fatalf("lease after the host went offline: %+v", l)
@@ -102,7 +102,7 @@ func TestStaticOffline(t *testing.T) {
 }
 
 // TestRestart is scenario 17: after kill -9 in each lease state, the lease
-// continues correctly and no second room is created.
+// continues correctly and no second machine is created.
 func TestRestart(t *testing.T) {
 	t.Parallel()
 	t.Run("queued and ready", func(t *testing.T) {
@@ -141,22 +141,22 @@ func TestRestart(t *testing.T) {
 		f.s.kill()
 		f.marker("slow-stop", false)
 		f.s = f.s.restart()
-		f.waitSlotFree()
+		f.waitRoomFree()
 		if l := f.lease(id); l.State != protocol.LeaseReleased {
 			t.Fatalf("lease after the cleanup: %s", l.State)
 		}
-		if f.slotExists() {
-			t.Fatal("the slot directory exists after the cleanup")
+		if f.roomExists() {
+			t.Fatal("the room directory exists after the cleanup")
 		}
 	})
 	t.Run("provisioning during the provider call", func(t *testing.T) {
 		t.Parallel()
-		f := newExternalFixture(t, "", "", map[string]string{"FAKE_DELAY": "20s"}, smallMachine)
+		f := newExternalFixture(t, "", "", map[string]string{"FAKE_DELAY": "20s"}, smallTemplate)
 		f.acquireUntil(protocol.LeaseProvisioning)
 		f.s = f.s.restartAfterKill()
 		f.acquire()
-		if rooms := f.e.fakeRooms(); len(rooms) != 1 {
-			t.Fatalf("provider rooms after the restart: %v, want one", rooms)
+		if machines := f.e.fakeMachines(); len(machines) != 1 {
+			t.Fatalf("provider machines after the restart: %v, want one", machines)
 		}
 	})
 }

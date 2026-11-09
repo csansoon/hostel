@@ -29,11 +29,11 @@ import (
 //
 // An instance is a state file. "nsc ssh" runs the command with a shell and a
 // "docker" shim (this binary under the name docker), whose "run" starts the
-// room container from FAKE_IMAGE. So the tests
+// machine container from FAKE_IMAGE. So the tests
 // run the provider's real start script.
 //
 // FAKE_STATE_DIR also gets the arguments of the calls for the tests:
-// create-<room>.args, docker-<room>.args, and extend-<room>.args (one line for
+// create-<machine>.args, docker-<machine>.args, and extend-<machine>.args (one line for
 // each call).
 func nscMain(args []string) {
 	if len(args) == 0 {
@@ -135,8 +135,8 @@ func instancesNow() ([]fakeInstance, error) {
 	return out, nil
 }
 
-// containerName is the room container of an instance: each instance has its
-// own, also two instances with the same room name.
+// containerName is the machine container of an instance: each instance has its
+// own, also two instances with the same machine name.
 func containerName(i fakeInstance) string { return i.Labels["hostel.name"] + "-" + i.ID }
 
 func removeInstance(i fakeInstance) {
@@ -286,23 +286,23 @@ func nscSSH(args []string) {
 	}
 	cmd := exec.Command("/bin/sh", "-c", strings.Join(command, " "))
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"FAKE_DOCKER="+realDocker, "FAKE_NSC_ROOM="+i.Labels["hostel.name"], "FAKE_NSC_CONTAINER="+containerName(i))
+		"FAKE_DOCKER="+realDocker, "FAKE_NSC_MACHINE="+i.Labels["hostel.name"], "FAKE_NSC_CONTAINER="+containerName(i))
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		nscFail("Process exited with status 1")
 	}
 }
 
-// dockerShimMain handles "docker run" on a fake instance: it starts the room
-// container from FAKE_IMAGE (named after the room and the instance) and
-// publishes the room's SSH port. Host networking and devices do not apply.
+// dockerShimMain handles "docker run" on a fake instance: it starts the machine
+// container from FAKE_IMAGE (named after the machine and the instance) and
+// publishes the machine's SSH port. Host networking and devices do not apply.
 func dockerShimMain(args []string) {
-	room, container := os.Getenv("FAKE_NSC_ROOM"), os.Getenv("FAKE_NSC_CONTAINER")
+	machine, container := os.Getenv("FAKE_NSC_MACHINE"), os.Getenv("FAKE_NSC_CONTAINER")
 	if len(args) == 0 || args[0] != "run" || container == "" {
 		fmt.Fprintln(os.Stderr, "fake docker: only \"docker run\" on a fake instance")
 		os.Exit(1)
 	}
-	appendArgs("docker-"+room+".args", strings.Join(args, " "))
+	appendArgs("docker-"+machine+".args", strings.Join(args, " "))
 	run := []string{"run", "-d", "--name", container, "--label", "hostel-e2e=" + runID(), "--label", "hostel-fake=1"}
 	rest := args[1:]
 	for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
@@ -327,7 +327,7 @@ func dockerShimMain(args []string) {
 	}
 	image := os.Getenv("FAKE_IMAGE")
 	if image == "" {
-		image = "hostel-e2e-room"
+		image = "hostel-e2e-machine"
 	}
 	run = append(run, "-p", fmt.Sprintf("127.0.0.1:%d:2222", port), image)
 	run = append(run, rest[1:]...)
@@ -339,7 +339,7 @@ func dockerShimMain(args []string) {
 }
 
 // nscPortForward listens on a free local port and forwards each connection to
-// the room container's published port.
+// the machine container's published port.
 func nscPortForward(args []string) {
 	i := instanceArg(args)
 	fs := flag.NewFlagSet("port-forward", flag.ContinueOnError)

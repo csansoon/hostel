@@ -6,12 +6,12 @@ import (
 	"time"
 )
 
-// Roles: users are admins or members (multiplayer.md, section 6); room
-// tokens have RoleRoom.
+// Roles: users are admins or members (multiplayer.md, section 6); machine
+// tokens have RoleMachine.
 const (
-	RoleAdmin  = "admin"
-	RoleMember = "member"
-	RoleRoom   = "room"
+	RoleAdmin   = "admin"
+	RoleMember  = "member"
+	RoleMachine = "machine"
 )
 
 // Info is the response of GET /v1/info.
@@ -46,35 +46,52 @@ type Status struct {
 	Revision string `json:"revision"`
 	ServerID string `json:"server_id"`
 	// User and Role are the caller's.
-	User     string          `json:"user,omitempty"`
-	Role     string          `json:"role,omitempty"`
-	Machines []MachineStatus `json:"machines"`
-	Rooms    []RoomStatus    `json:"rooms"`
-	Leases   []LeaseStatus   `json:"leases"`
+	User string `json:"user,omitempty"`
+	Role string `json:"role,omitempty"`
+	// Providers are in configuration order; a static provider is a group of
+	// real hosts.
+	Providers []ProviderStatus `json:"providers"`
+	Templates []TemplateStatus `json:"templates"`
+	Machines  []MachineStatus  `json:"machines"`
+	Leases    []LeaseStatus    `json:"leases"`
 	// Warning is a problem of the server that an admin must fix, for
 	// example a stored configuration of the form before M10e.
 	Warning string `json:"warning,omitempty"`
 }
 
-// MachineStatus is a machine of the configuration (M10).
-type MachineStatus struct {
+// ProviderStatus is a provider of the configuration.
+type ProviderStatus struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+	Kind  string `json:"kind"`
+	// MaxMachines is the limit of the provider on its machines; 0 for none.
+	MaxMachines int `json:"max_machines,omitempty"`
+}
+
+// UsageList is GET /v1/usage: the live use of the running machines, by name.
+type UsageList struct {
+	Machines map[string]Usage `json:"machines"`
+}
+
+// TemplateStatus is a machine of the configuration (M10).
+type TemplateStatus struct {
 	Key  string `json:"key"`
 	Kind string `json:"kind"`
 	OS   string `json:"os"`
 	// Tools are the machine's tool entries, with the tools that needs add.
-	Tools    []string `json:"tools"`
-	MaxRooms int      `json:"max_rooms"`
-	Connect  bool     `json:"connect,omitempty"`
+	Tools       []string `json:"tools"`
+	MaxMachines int      `json:"max_machines"`
+	Connect     bool     `json:"connect,omitempty"`
 	// Hardware is what the machine's configuration states, else what its
-	// newest room measured; nil when neither says.
+	// newest machine measured; nil when neither says.
 	Hardware *Hardware `json:"hardware,omitempty"`
 	// ConnectVersion is the hostel version of the machine's connect service
 	// while it is connected (M10d; "" before).
 	ConnectVersion string `json:"connect_version,omitempty"`
 }
 
-// Hardware is what the room helper found at the last provisioning of the
-// room (M10); DiskFreeBytes is the free disk of the home at that time.
+// Hardware is what the machine helper found at the last provisioning of the
+// machine (M10); DiskFreeBytes is the free disk of the home at that time.
 type Hardware struct {
 	CPU           string `json:"cpu,omitempty"`
 	Cores         int    `json:"cores,omitempty"`
@@ -98,7 +115,7 @@ func (h *Hardware) Size() string {
 	return strings.Join(parts, ", ")
 }
 
-// Usage is the live use of a room (M10b), read when its details open.
+// Usage is the live use of a machine (M10b), read when its details open.
 type Usage struct {
 	CPUPercent       float64 `json:"cpu_percent"`
 	MemoryUsedBytes  int64   `json:"memory_used_bytes,omitempty"`
@@ -122,9 +139,9 @@ type LeaseStatus struct {
 	Repo      string        `json:"repo"`
 	Branch    string        `json:"branch,omitempty"`
 	Provider  string        `json:"provider,omitempty"`
-	Machine   string        `json:"machine,omitempty"`
-	RoomID    int64         `json:"room_id,omitempty"`
-	Slot      string        `json:"slot,omitempty"`
+	Template  string        `json:"template,omitempty"`
+	MachineID int64         `json:"machine_id,omitempty"`
+	Room      string        `json:"room,omitempty"`
 	CreatedAt time.Time     `json:"created_at"`
 	ReadyAt   time.Time     `json:"ready_at,omitzero"`
 	// EstimatedWaitSeconds: for a queued lease.
@@ -155,14 +172,14 @@ type Tool struct {
 	MaxOptions   int      `json:"max_options,omitempty"`
 	WholeMachine bool     `json:"whole_machine,omitempty"`
 	// Env are the names of the tool's environment (PATH when it adds to it).
-	Env      []string      `json:"env"`
-	Guide    string        `json:"guide,omitempty"`
-	Machines []ToolMachine `json:"machines"`
-	// FreeSlots counts free slots in running rooms (for a whole-machine tool:
-	// rooms with all slots free). NewRoom is true when an
-	// on-demand machine can create a room now.
-	FreeSlots            int  `json:"free_slots"`
-	NewRoom              bool `json:"new_room"`
+	Env       []string       `json:"env"`
+	Guide     string         `json:"guide,omitempty"`
+	Templates []ToolTemplate `json:"templates"`
+	// FreeRooms counts free rooms in running machines (for a whole-machine tool:
+	// machines with all rooms free). NewMachine is true when an
+	// on-demand machine can create a machine now.
+	FreeRooms            int  `json:"free_rooms"`
+	NewMachine           bool `json:"new_machine"`
 	Waiting              int  `json:"waiting"`
 	EstimatedWaitSeconds int  `json:"estimated_wait_seconds"`
 	// TypicalLeaseSeconds is the median of the last leases that asked for
@@ -170,8 +187,8 @@ type Tool struct {
 	TypicalLeaseSeconds int `json:"typical_lease_seconds,omitempty"`
 }
 
-// ToolMachine is a machine that has a tool.
-type ToolMachine struct {
+// ToolTemplate is a machine that has a tool.
+type ToolTemplate struct {
 	Key      string   `json:"key"`
 	OS       string   `json:"os"`
 	Options  []string `json:"options"`
@@ -181,7 +198,7 @@ type ToolMachine struct {
 	Hardware *Hardware `json:"hardware,omitempty"`
 }
 
-// InventoryTool is a tool of a room's inventory.
+// InventoryTool is a tool of a machine's inventory.
 type InventoryTool struct {
 	Name string `json:"name"`
 	// Options are the versions or the options that the check reported.
@@ -191,42 +208,42 @@ type InventoryTool struct {
 	Screen  bool     `json:"screen,omitempty"`
 }
 
-type RoomStatus struct {
+type MachineStatus struct {
 	ID       int64        `json:"id"`
 	Name     string       `json:"name"`
 	Provider string       `json:"provider"`
-	Machine  string       `json:"machine"`
+	Template string       `json:"template"`
 	OS       string       `json:"os"`
 	Arch     string       `json:"arch"`
 	State    string       `json:"state"`
 	Reason   string       `json:"reason,omitempty"`
 	Drained  bool         `json:"drained,omitempty"`
-	Slots    []SlotStatus `json:"slots"`
+	Rooms    []RoomStatus `json:"rooms"`
 	// Tools is the inventory: the tools of the machine with their options
 	// and check state.
 	Tools []InventoryTool `json:"tools"`
-	// Deadline is the provider-side deadline of an on-demand room.
+	// Deadline is the provider-side deadline of an on-demand machine.
 	Deadline time.Time `json:"deadline,omitzero"`
 	Hardware *Hardware `json:"hardware,omitempty"`
-	// LastSeen is the last presence check that the room answered; only for
-	// an offline room (broken, reason "unreachable"; M10b).
+	// LastSeen is the last presence check that the machine answered; only for
+	// an offline machine (broken, reason "unreachable"; M10b).
 	LastSeen time.Time `json:"last_seen,omitzero"`
 }
 
-// RoomDetails is GET /v1/rooms/{name} (M10): the room, its machine, the jobs
-// of its leases (from the room), its queue, and its last events.
-type RoomDetails struct {
-	Room    RoomStatus     `json:"room"`
-	Machine *MachineStatus `json:"machine,omitempty"`
-	Leases  []LeaseStatus  `json:"leases"`
-	// Jobs are the jobs of each ready lease on the room; JobsError says why
+// MachineDetails is GET /v1/machines/{name} (M10): the machine, its template, the jobs
+// of its leases (from the machine), its queue, and its last events.
+type MachineDetails struct {
+	Machine  MachineStatus   `json:"machine"`
+	Template *TemplateStatus `json:"template,omitempty"`
+	Leases   []LeaseStatus   `json:"leases"`
+	// Jobs are the jobs of each ready lease on the machine; JobsError says why
 	// they are not known. A member gets the jobs and events of the member's
 	// own leases only.
 	Jobs      map[string][]JobInfo `json:"jobs"`
 	JobsError string               `json:"jobs_error,omitempty"`
 	Queue     []LeaseStatus        `json:"queue"`
 	Events    []Event              `json:"events"`
-	// Usage is the live use of the room (M10b; nil when it is not known).
+	// Usage is the live use of the machine (M10b; nil when it is not known).
 	Usage *Usage `json:"usage,omitempty"`
 }
 
@@ -238,7 +255,7 @@ type Event struct {
 	Message string    `json:"message"`
 }
 
-type SlotStatus struct {
+type RoomStatus struct {
 	Name    string `json:"name"`
 	State   string `json:"state"`
 	LeaseID string `json:"lease_id,omitempty"`
@@ -246,25 +263,25 @@ type SlotStatus struct {
 
 // CreateTokenRequest is the body of POST /v1/tokens.
 type CreateTokenRequest struct {
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Machine string `json:"machine,omitempty"` // "<provider>/<machine>", only for the room role
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Template string `json:"template,omitempty"` // "<provider>/<machine>", only for the machine role
 }
 
 // TokenResponse is the response of POST /v1/tokens. Token is shown only once.
 type TokenResponse struct {
-	ID      int64  `json:"id"`
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Machine string `json:"machine,omitempty"`
-	Token   string `json:"token"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Template string `json:"template,omitempty"`
+	Token    string `json:"token"`
 }
 
-// TunnelRequest is a tunnel in a lease request. RoomPort 0 selects a port from
-// the slot's pool.
+// TunnelRequest is a tunnel in a lease request. MachinePort 0 selects a port from
+// the room's pool.
 type TunnelRequest struct {
-	Name     string `json:"name"`
-	RoomPort int    `json:"room_port"`
+	Name        string `json:"name"`
+	MachinePort int    `json:"machine_port"`
 }
 
 // CreateLeaseRequest is the body of POST /v1/leases.
@@ -288,7 +305,7 @@ const (
 	CodeUnknownTool    = "unknown_tool"
 	CodeUnknownOption  = "unknown_option"
 	CodeTooManyOptions = "too_many_options"
-	CodeNoMachine      = "no_machine"
+	CodeNoTemplate     = "no_machine"
 	// CodeLeaseEnded: POST /v1/leases/{id}/touch for a lease that ended (HTTP 409).
 	CodeLeaseEnded = "lease_ended"
 )
@@ -309,7 +326,7 @@ type Lease struct {
 	Task      string        `json:"task"`
 	Priority  string        `json:"priority"`
 	Provider  string        `json:"provider,omitempty"`
-	Machine   string        `json:"machine,omitempty"`
+	Template  string        `json:"template,omitempty"`
 	CreatedAt time.Time     `json:"created_at"`
 	EndReason string        `json:"end_reason,omitempty"`
 	// EstimatedWaitSeconds is set for a queued lease.
@@ -328,11 +345,11 @@ type Access struct {
 	GatewayAddress     string         `json:"gateway_address"`
 	GatewayHostKey     string         `json:"gateway_host_key"`
 	HelperPath         string         `json:"helper_path"`
-	Slot               string         `json:"slot"`
+	Room               string         `json:"room"`
 	WorkDir            string         `json:"work_dir"`
 	TunnelPorts        map[string]int `json:"tunnel_ports"`
-	RoomOS             string         `json:"room_os"`
-	RoomArch           string         `json:"room_arch"`
+	MachineOS          string         `json:"machine_os"`
+	MachineArch        string         `json:"machine_arch"`
 	TunnelCheck        string         `json:"tunnel_check"`
 	PortProcessOffline string         `json:"port_process_offline"`
 	ReadyAt            time.Time      `json:"ready_at"`
@@ -485,7 +502,7 @@ type ConfigTool struct {
 	Revision  int       `json:"revision,omitempty"`
 	User      string    `json:"user,omitempty"`
 	ChangedAt time.Time `json:"changed_at,omitzero"`
-	Machines  []string  `json:"machines"`
+	Templates []string  `json:"templates"`
 }
 
 // ToolFiles are the files of a tool: file name → content.
@@ -504,7 +521,7 @@ type MachineInviteRequest struct {
 
 // MachineInviteResponse has the code and the commands to run on the machine.
 type MachineInviteResponse struct {
-	Machine   string    `json:"machine"`
+	Template  string    `json:"template"`
 	Code      string    `json:"code"`
 	Unix      string    `json:"unix"`
 	Windows   string    `json:"windows"`
@@ -519,10 +536,10 @@ type MachineJoinRequest struct {
 	Hostname string `json:"hostname"`
 }
 
-// MachineJoinResponse returns the room token once.
+// MachineJoinResponse returns the machine token once.
 type MachineJoinResponse struct {
 	ServerID        string `json:"server_id"`
-	Machine         string `json:"machine"`
+	Template        string `json:"template"`
 	Token           string `json:"token"`
 	ServerPublicKey string `json:"server_public_key"`
 }

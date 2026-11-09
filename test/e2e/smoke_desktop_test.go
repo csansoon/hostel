@@ -65,7 +65,7 @@ func TestSmokeNamespaceDesktop(t *testing.T) {
 		t.Skip("set HOSTEL_SMOKE_NAMESPACE=1 to run it against the real Namespace account (it costs money)")
 	}
 	e, s, prefix := namespaceDevboxSmoke(t, `warm_running = "10m"`, `
-[providers.ns.machines.mac]
+[providers.ns.templates.mac]
 spec = { product = "devbox", platform = "macos", size = "m", image = "tahoe-slim" }
 tools = ["macos-desktop"]
 max_lifetime = "3h"
@@ -78,12 +78,12 @@ max_lifetime = "3h"
 			r := e.hostel("acquire", "macos-desktop", "--task", "desktop smoke test", "--wait", "1m")
 			if r.code == 0 {
 				t.Logf("lease ready after %s", time.Since(start).Round(time.Second))
-				for _, room := range s.status().Rooms {
-					if strings.HasPrefix(room.Name, prefix) {
-						return room.Name
+				for _, machine := range s.status().Machines {
+					if strings.HasPrefix(machine.Name, prefix) {
+						return machine.Name
 					}
 				}
-				t.Fatal("no room of the test in the status")
+				t.Fatal("no machine of the test in the status")
 			}
 			if r.code != 75 || time.Since(start) > 20*time.Minute {
 				t.Fatalf("acquire: %s", r)
@@ -106,7 +106,7 @@ max_lifetime = "3h"
 		t.Fatalf("agent-device %s: %s", args[0], r)
 		return r
 	}
-	room := acquire()
+	machine := acquire()
 
 	e.mustHostel("run", "--", smokeMacBuild)
 	e.mustHostel("run", "--", "open ./HostelSmoke.app")
@@ -140,8 +140,8 @@ max_lifetime = "3h"
 	e.hostel("run", "--", `agent-device type "unsaved text" --platform macos`)
 	e.mustHostel("release")
 
-	if got := acquire(); got != room {
-		t.Fatalf("second lease on room %s, want the warm room %s", got, room)
+	if got := acquire(); got != machine {
+		t.Fatalf("second lease on machine %s, want the warm machine %s", got, machine)
 	}
 	r := e.mustHostel("run", "--", `pgrep -x HostelSmoke || echo no-app; pgrep -x TextEdit || echo no-textedit; ls ~/Applications/HostelSmoke.app 2>/dev/null || echo no-copy`)
 	if strings.Fields(r.stdout)[0] != "no-app" || !strings.Contains(r.stdout, "no-textedit") || !strings.Contains(r.stdout, "no-copy") {

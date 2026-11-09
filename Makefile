@@ -35,7 +35,7 @@ release: dist
 mise:
 	./build/fetch-mise.sh $(MISE_VERSION) build/mise-checksums.txt dist
 
-# The E2E rooms are Linux containers: they need only the Linux binaries.
+# The E2E machines are Linux containers: they need only the Linux binaries.
 mise-linux:
 	./build/fetch-mise.sh $(MISE_VERSION) build/mise-checksums.txt dist linux/amd64 linux/arm64
 
@@ -61,7 +61,7 @@ test-e2e-10: mise-linux
 test-smoke-namespace: dist
 	HOSTEL_SMOKE_NAMESPACE=1 $(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeNamespace(Instance|Desktop)?$$' -v ./test/e2e/...
 
-# Against a real Windows room (docs/m6-implementation.md): HOSTEL_SMOKE_WINDOWS
-# (user@host) and HOSTEL_SMOKE_WINDOWS_KEY (a key that the room user accepts).
+# Against a real Windows machine (docs/m6-implementation.md): HOSTEL_SMOKE_WINDOWS
+# (user@host) and HOSTEL_SMOKE_WINDOWS_KEY (a key that the machine user accepts).
 test-smoke-windows: dist
 	$(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeWindows(Desktop)?$$' -v ./test/e2e/...

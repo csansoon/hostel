@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strconv"
@@ -20,7 +21,7 @@ import (
 )
 
 // RunDemo starts the app with made-up data and no server ("hostel --demo"):
-// rooms get ready, the waiting line moves, leases end. It does not read or
+// machines get ready, the waiting line moves, leases end. It does not read or
 // change the guest configuration.
 func RunDemo(version string, stdout io.Writer) error {
 	m := &model{version: version, demo: true}
@@ -41,10 +42,10 @@ type demoServer struct {
 	changed chan struct{}
 	rnd     *rand.Rand
 
-	machines []protocol.MachineStatus
-	rooms    []protocol.RoomStatus
-	leases   []protocol.LeaseStatus
-	// readyAt is when a room or a lease in preparation is ready; endAt is
+	templates []protocol.TemplateStatus
+	machines  []protocol.MachineStatus
+	leases    []protocol.LeaseStatus
+	// readyAt is when a machine or a lease in preparation is ready; endAt is
 	// when a ready lease ends or a cleaning lease is gone.
 	readyAt map[string]time.Time
 	endAt   map[string]time.Time
@@ -103,36 +104,36 @@ func newDemoServer() *demoServer {
 	d := &demoServer{changed: make(chan struct{}), rnd: rand.New(rand.NewPCG(7, 11)),
 		readyAt: map[string]time.Time{}, endAt: map[string]time.Time{}, nextArr: now.Add(6 * time.Second)}
 	android := []string{"android-sdk", "android-emulator", "jdk:21", "node:22"}
-	d.machines = []protocol.MachineStatus{
+	d.templates = []protocol.TemplateStatus{
 		{Key: "home/macbook", Kind: "static", OS: "macos", Tools: []string{"xcode", "ios-simulator", "android-sdk", "android-emulator", "jdk:21", "macos-desktop"},
-			MaxRooms: 1, Connect: true, ConnectVersion: "v0.3.0"},
-		{Key: "home/win", Kind: "static", OS: "windows", Tools: []string{"windows-desktop", "dotnet:9"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.3.0"},
-		{Key: "office/mini", Kind: "static", OS: "macos", Tools: []string{"xcode", "ios-simulator", "macos-desktop"}, MaxRooms: 1, Connect: true, ConnectVersion: "v0.2.0"},
-		{Key: "lab/linux", Kind: "static", OS: "linux", Tools: android, MaxRooms: 1},
-		{Key: "ns/linux", Kind: "namespace", OS: "linux", Tools: android, MaxRooms: 2},
+			MaxMachines: 1, Connect: true, ConnectVersion: "v0.3.0"},
+		{Key: "home/win", Kind: "static", OS: "windows", Tools: []string{"windows-desktop", "dotnet:9"}, MaxMachines: 1, Connect: true, ConnectVersion: "v0.3.0"},
+		{Key: "office/mini", Kind: "static", OS: "macos", Tools: []string{"xcode", "ios-simulator", "macos-desktop"}, MaxMachines: 1, Connect: true, ConnectVersion: "v0.2.0"},
+		{Key: "lab/linux", Kind: "static", OS: "linux", Tools: android, MaxMachines: 1},
+		{Key: "ns/linux", Kind: "namespace", OS: "linux", Tools: android, MaxMachines: 2, Hardware: &protocol.Hardware{Cores: 8, MemoryBytes: 16 << 30}},
 	}
 	hw := func(cpu string, cores int, mem int64, osv string) *protocol.Hardware {
 		return &protocol.Hardware{CPU: cpu, Cores: cores, MemoryBytes: mem << 30, OSVersion: osv}
 	}
-	d.rooms = []protocol.RoomStatus{
-		{ID: 1, Name: "home-macbook", Provider: "home", Machine: "macbook", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Tools: inventory(d.machines[0].Tools...), Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
-			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}, {Name: "slot-2", State: protocol.SlotFree}}},
-		{ID: 2, Name: "home-win", Provider: "home", Machine: "win", OS: "windows", Arch: "amd64", State: protocol.RoomRunning,
-			Tools: inventory(d.machines[1].Tools...), Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
-			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
-		{ID: 3, Name: "office-mini", Provider: "office", Machine: "mini", OS: "macos", Arch: "arm64", State: protocol.RoomRunning,
-			Tools: inventory(d.machines[2].Tools...), Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
-			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotFree}}},
-		{ID: 4, Name: "lab-linux", Provider: "lab", Machine: "linux", OS: "linux", Arch: "amd64", State: protocol.RoomBroken,
+	d.machines = []protocol.MachineStatus{
+		{ID: 1, Name: "home-macbook", Provider: "home", Template: "macbook", OS: "macos", Arch: "arm64", State: protocol.MachineRunning,
+			Tools: inventory(d.templates[0].Tools...), Hardware: hw("Apple M3 Pro", 12, 36, "macOS 26.1"),
+			Rooms: []protocol.RoomStatus{{Name: "room-1", State: protocol.RoomFree}, {Name: "room-2", State: protocol.RoomFree}}},
+		{ID: 2, Name: "home-win", Provider: "home", Template: "win", OS: "windows", Arch: "amd64", State: protocol.MachineRunning,
+			Tools: inventory(d.templates[1].Tools...), Hardware: hw("Intel Xeon", 4, 16, "Windows 11"),
+			Rooms: []protocol.RoomStatus{{Name: "room-1", State: protocol.RoomFree}}},
+		{ID: 3, Name: "office-mini", Provider: "office", Template: "mini", OS: "macos", Arch: "arm64", State: protocol.MachineRunning,
+			Tools: inventory(d.templates[2].Tools...), Hardware: hw("Apple M2", 8, 16, "macOS 26.0"),
+			Rooms: []protocol.RoomStatus{{Name: "room-1", State: protocol.RoomFree}}},
+		{ID: 4, Name: "lab-linux", Provider: "lab", Template: "linux", OS: "linux", Arch: "amd64", State: protocol.MachineBroken,
 			Reason: "unreachable", LastSeen: now.Add(-3 * time.Hour), Tools: inventory(android...),
-			Slots: []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotBroken}}},
+			Rooms: []protocol.RoomStatus{{Name: "room-1", State: protocol.RoomBroken}}},
 	}
 	d.nextID = 10
-	// A busy start: two guests in rooms, one getting ready, two waiting.
-	d.place(d.newLease("ana", []string{"ios-simulator:iphone-17-pro"}, "login flow", "normal", now.Add(-21*time.Minute)), 1, "slot-1", protocol.LeaseReady, now.Add(-18*time.Minute))
-	d.place(d.newLease("dani", []string{"dotnet", "windows-desktop"}, "release build", "normal", now.Add(-9*time.Minute)), 2, "slot-1", protocol.LeaseReady, now.Add(-7*time.Minute))
-	d.place(d.newLease("lee", []string{"ios-simulator:ipad-pro-13"}, "iPad layout", "high", now.Add(-40*time.Second)), 3, "slot-1", protocol.LeasePreparing, time.Time{})
+	// A busy start: two guests in machines, one getting ready, two waiting.
+	d.place(d.newLease("ana", []string{"ios-simulator:iphone-17-pro"}, "login flow", "normal", now.Add(-21*time.Minute)), 1, "room-1", protocol.LeaseReady, now.Add(-18*time.Minute))
+	d.place(d.newLease("dani", []string{"dotnet", "windows-desktop"}, "release build", "normal", now.Add(-9*time.Minute)), 2, "room-1", protocol.LeaseReady, now.Add(-7*time.Minute))
+	d.place(d.newLease("lee", []string{"ios-simulator:ipad-pro-13"}, "iPad layout", "high", now.Add(-40*time.Second)), 3, "room-1", protocol.LeasePreparing, time.Time{})
 	d.readyAt[d.leases[2].ID] = now.Add(3 * time.Second)
 	d.queue(d.newLease("mo", []string{"dotnet", "windows-desktop"}, "settings sync", "normal", now.Add(-4*time.Minute)))
 	d.queue(d.newLease("sam", []string{"windows-desktop"}, "crash on resume", "low", now.Add(-1*time.Minute)))
@@ -143,7 +144,7 @@ func newDemoServer() *demoServer {
 	return d
 }
 
-// inventory is a room inventory of these tool entries, in name order.
+// inventory is a machine inventory of these tool entries, in name order.
 func inventory(entries ...string) []protocol.InventoryTool {
 	var out []protocol.InventoryTool
 	for _, e := range entries {
@@ -162,12 +163,12 @@ func (d *demoServer) newLease(user string, tools []string, task, prio string, cr
 		User: user, Guest: user + "-laptop", Repo: repo, Branch: strings.ReplaceAll(task, " ", "-"), CreatedAt: created}
 }
 
-func (d *demoServer) place(l *protocol.LeaseStatus, roomID int64, slot, state string, ready time.Time) {
-	r := d.room(roomID)
-	l.State, l.RoomID, l.Slot, l.Provider, l.Machine, l.ReadyAt = state, roomID, slot, r.Provider, r.Machine, ready
-	for i := range r.Slots {
-		if r.Slots[i].Name == slot {
-			r.Slots[i].State, r.Slots[i].LeaseID = protocol.SlotLeased, l.ID
+func (d *demoServer) place(l *protocol.LeaseStatus, machineID int64, room, state string, ready time.Time) {
+	r := d.machine(machineID)
+	l.State, l.MachineID, l.Room, l.Provider, l.Template, l.ReadyAt = state, machineID, room, r.Provider, r.Template, ready
+	for i := range r.Rooms {
+		if r.Rooms[i].Name == room {
+			r.Rooms[i].State, r.Rooms[i].LeaseID = protocol.RoomLeased, l.ID
 		}
 	}
 	d.leases = append(d.leases, *l)
@@ -178,10 +179,10 @@ func (d *demoServer) queue(l *protocol.LeaseStatus) {
 	d.leases = append(d.leases, *l)
 }
 
-func (d *demoServer) room(id int64) *protocol.RoomStatus {
-	for i := range d.rooms {
-		if d.rooms[i].ID == id {
-			return &d.rooms[i]
+func (d *demoServer) machine(id int64) *protocol.MachineStatus {
+	for i := range d.machines {
+		if d.machines[i].ID == id {
+			return &d.machines[i]
 		}
 	}
 	return nil
@@ -206,11 +207,11 @@ func (d *demoServer) bump() {
 
 func (d *demoServer) step(now time.Time) bool {
 	changed := false
-	for i := range d.rooms {
-		r := &d.rooms[i]
+	for i := range d.machines {
+		r := &d.machines[i]
 		if t, ok := d.readyAt[r.Name]; ok && now.After(t) {
 			delete(d.readyAt, r.Name)
-			r.State = protocol.RoomRunning
+			r.State = protocol.MachineRunning
 			changed = true
 		}
 	}
@@ -218,13 +219,13 @@ func (d *demoServer) step(now time.Time) bool {
 	for _, l := range d.leases {
 		switch l.State {
 		case protocol.LeaseAssigned, protocol.LeasePreparing:
-			r := d.room(l.RoomID)
-			if t, ok := d.readyAt[l.ID]; ok && now.After(t) && r.State == protocol.RoomRunning {
+			r := d.machine(l.MachineID)
+			if t, ok := d.readyAt[l.ID]; ok && now.After(t) && r.State == protocol.MachineRunning {
 				delete(d.readyAt, l.ID)
 				l.State, l.ReadyAt = protocol.LeaseReady, now
 				d.endAt[l.ID] = now.Add(time.Duration(25+d.rnd.IntN(50)) * time.Second)
 				changed = true
-			} else if r.State == protocol.RoomRunning && l.State == protocol.LeaseAssigned {
+			} else if r.State == protocol.MachineRunning && l.State == protocol.LeaseAssigned {
 				l.State = protocol.LeasePreparing
 				changed = true
 			}
@@ -258,19 +259,19 @@ func (d *demoServer) step(now time.Time) bool {
 	return changed
 }
 
-// free gives the lease's slot back; an on-demand room without leases goes.
+// free gives the lease's room back; an on-demand machine without leases goes.
 func (d *demoServer) free(l protocol.LeaseStatus) {
-	r := d.room(l.RoomID)
+	r := d.machine(l.MachineID)
 	if r == nil {
 		return
 	}
-	for i := range r.Slots {
-		if r.Slots[i].LeaseID == l.ID {
-			r.Slots[i] = protocol.SlotStatus{Name: r.Slots[i].Name, State: protocol.SlotFree}
+	for i := range r.Rooms {
+		if r.Rooms[i].LeaseID == l.ID {
+			r.Rooms[i] = protocol.RoomStatus{Name: r.Rooms[i].Name, State: protocol.RoomFree}
 		}
 	}
 	if r.Provider == "ns" {
-		d.rooms = slices.DeleteFunc(d.rooms, func(x protocol.RoomStatus) bool { return x.ID == r.ID })
+		d.machines = slices.DeleteFunc(d.machines, func(x protocol.MachineStatus) bool { return x.ID == r.ID })
 	}
 }
 
@@ -289,61 +290,61 @@ func wholeMachine(tools []string) bool {
 	return slices.ContainsFunc(demoTools, func(t demoTool) bool { return t.whole && slices.Contains(toolNames(tools), t.name) })
 }
 
-// fits reports whether a running room can take a lease for the tools now:
-// one free slot, or all slots for a lease that takes the whole machine.
-func fits(r protocol.RoomStatus, tools []string) bool {
+// fits reports whether a running machine can take a lease for the tools now:
+// one free room, or all rooms for a lease that takes the whole machine.
+func fits(r protocol.MachineStatus, tools []string) bool {
 	for _, t := range toolNames(tools) {
-		if !freeSlot(r, t) {
+		if !freeRoom(r, t) {
 			return false
 		}
 	}
-	if !freeSlot(r, "") {
+	if !freeRoom(r, "") {
 		return false
 	}
-	return !wholeMachine(tools) || !slices.ContainsFunc(r.Slots, func(s protocol.SlotStatus) bool { return s.State != protocol.SlotFree })
+	return !wholeMachine(tools) || !slices.ContainsFunc(r.Rooms, func(s protocol.RoomStatus) bool { return s.State != protocol.RoomFree })
 }
 
-// schedule puts queued leases on free slots, first by priority, then by age;
-// an on-demand machine makes a new room.
+// schedule puts queued leases on free rooms, first by priority, then by age;
+// an on-demand machine makes a new machine.
 func (d *demoServer) schedule(now time.Time) bool {
 	changed := false
 	for _, l := range d.ordered() {
 		i := slices.IndexFunc(d.leases, func(x protocol.LeaseStatus) bool { return x.ID == l.ID })
 		lease := &d.leases[i]
 		placed := false
-		for ri := range d.rooms {
-			r := &d.rooms[ri]
+		for ri := range d.machines {
+			r := &d.machines[ri]
 			if !fits(*r, l.Tools) {
 				continue
 			}
-			for si := range r.Slots {
-				if r.Slots[si].State != protocol.SlotFree {
+			for si := range r.Rooms {
+				if r.Rooms[si].State != protocol.RoomFree {
 					continue
 				}
 				if !placed {
-					lease.State, lease.RoomID, lease.Slot, lease.Provider, lease.Machine = protocol.LeasePreparing, r.ID, r.Slots[si].Name, r.Provider, r.Machine
+					lease.State, lease.MachineID, lease.Room, lease.Provider, lease.Template = protocol.LeasePreparing, r.ID, r.Rooms[si].Name, r.Provider, r.Template
 					d.readyAt[l.ID] = now.Add(time.Duration(4+d.rnd.IntN(5)) * time.Second)
 				} else if !wholeMachine(l.Tools) {
 					break
 				}
-				r.Slots[si].State, r.Slots[si].LeaseID = protocol.SlotLeased, l.ID
+				r.Rooms[si].State, r.Rooms[si].LeaseID = protocol.RoomLeased, l.ID
 				placed = true
 			}
 			break
 		}
 		if !placed {
-			ns := d.machines[4]
+			ns := d.templates[4]
 			if !slices.ContainsFunc(toolNames(l.Tools), func(t string) bool { return !slices.Contains(toolNames(ns.Tools), t) }) &&
-				len(machineRooms(protocol.Status{Rooms: d.rooms}, ns.Key)) < ns.MaxRooms {
+				len(templateMachines(protocol.Status{Machines: d.machines}, ns.Key)) < ns.MaxMachines {
 				d.nextID++
 				name := "ns-linux-" + strconv.Itoa(d.nextID)
-				d.rooms = append(d.rooms, protocol.RoomStatus{ID: int64(d.nextID), Name: name, Provider: "ns", Machine: "linux", OS: "linux", Arch: "amd64",
-					State: protocol.RoomProvisioning, Tools: inventory(ns.Tools...), Deadline: now.Add(2 * time.Hour),
+				d.machines = append(d.machines, protocol.MachineStatus{ID: int64(d.nextID), Name: name, Provider: "ns", Template: "linux", OS: "linux", Arch: "amd64",
+					State: protocol.MachineProvisioning, Tools: inventory(ns.Tools...), Deadline: now.Add(2 * time.Hour),
 					Hardware: &protocol.Hardware{CPU: "AMD EPYC", Cores: 8, MemoryBytes: 16 << 30, OSVersion: "Ubuntu 24.04"},
-					Slots:    []protocol.SlotStatus{{Name: "slot-1", State: protocol.SlotLeased, LeaseID: l.ID}}})
+					Rooms:    []protocol.RoomStatus{{Name: "room-1", State: protocol.RoomLeased, LeaseID: l.ID}}})
 				d.readyAt[name] = now.Add(8 * time.Second)
 				d.readyAt[l.ID] = now.Add(11 * time.Second)
-				lease.State, lease.RoomID, lease.Slot, lease.Provider, lease.Machine = protocol.LeaseAssigned, int64(d.nextID), "slot-1", "ns", "linux"
+				lease.State, lease.MachineID, lease.Room, lease.Provider, lease.Template = protocol.LeaseAssigned, int64(d.nextID), "room-1", "ns", "linux"
 				placed = true
 			}
 		}
@@ -371,7 +372,7 @@ func (d *demoServer) ordered() []protocol.LeaseStatus {
 }
 
 // positions numbers the waiting line (one for all leases) and estimates the
-// wait: the first free room with the tools, and 5 minutes for each earlier
+// wait: the first free machine with the tools, and 5 minutes for each earlier
 // lease that asks for one of the same tools.
 func (d *demoServer) positions(now time.Time) {
 	q := d.ordered()
@@ -392,11 +393,11 @@ func (d *demoServer) positions(now time.Time) {
 	}
 }
 
-// wait is the time until the first room with the tools is free.
+// wait is the time until the first machine with the tools is free.
 func (d *demoServer) wait(tools []string, now time.Time) int {
 	best := -1
 	for _, l := range d.leases {
-		if l.State == protocol.LeaseQueued || slices.ContainsFunc(toolNames(tools), func(t string) bool { return !roomHas(*d.room(l.RoomID), t) }) {
+		if l.State == protocol.LeaseQueued || slices.ContainsFunc(toolNames(tools), func(t string) bool { return !machineHas(*d.machine(l.MachineID), t) }) {
 			continue
 		}
 		s := int(d.endAt[l.ID].Sub(now).Seconds()) + 120
@@ -409,7 +410,9 @@ func (d *demoServer) wait(tools []string, now time.Time) int {
 
 func (d *demoServer) status() protocol.Status {
 	return protocol.Status{Revision: strconv.Itoa(d.rev), ServerID: "demo-7f3a", User: "sam", Role: protocol.RoleAdmin,
-		Machines: slices.Clone(d.machines), Rooms: slices.Clone(d.rooms), Leases: slices.Clone(d.leases)}
+		Providers: []protocol.ProviderStatus{{Name: "home", Label: "Home", Kind: "static"}, {Name: "office", Label: "Office", Kind: "static"},
+			{Name: "lab", Label: "Lab", Kind: "static"}, {Name: "ns", Label: "Namespace", Kind: "namespace", MaxMachines: 2}},
+		Templates: slices.Clone(d.templates), Machines: slices.Clone(d.machines), Leases: slices.Clone(d.leases)}
 }
 
 // tools is GET /v1/tools of the demo world: screen tools first.
@@ -425,14 +428,14 @@ func (d *demoServer) tools() []protocol.Tool {
 		if !dt.screen {
 			t.Options = demoVersions[dt.name]
 		}
-		for _, ms := range d.machines {
+		for _, ms := range d.templates {
 			if slices.Contains(toolNames(ms.Tools), dt.name) {
-				t.Machines = append(t.Machines, protocol.ToolMachine{Key: ms.Key, OS: ms.OS, Options: demoVersions[dt.name], OnDemand: ms.Kind != "static", Online: true})
+				t.Templates = append(t.Templates, protocol.ToolTemplate{Key: ms.Key, OS: ms.OS, Options: demoVersions[dt.name], OnDemand: ms.Kind != "static", Online: true})
 			}
 		}
-		for _, r := range d.rooms {
-			if freeSlot(r, dt.name) {
-				t.FreeSlots++
+		for _, r := range d.machines {
+			if freeRoom(r, dt.name) {
+				t.FreeRooms++
 			}
 		}
 		t.Waiting = len(queued(st, dt.name))
@@ -496,20 +499,29 @@ func (d *demoServer) Do(ctx context.Context, method, path string, in, out any) e
 			us = append(us, protocol.User{Name: u, Role: role, Computers: []string{u + "-laptop"}, CreatedAt: now.AddDate(0, 0, -30+i*4)})
 		}
 		v = us
-	case method == "GET" && parts[0] == "rooms":
+	case method == "GET" && parts[0] == "usage":
+		u := map[string]protocol.Usage{}
+		for _, r := range d.machines {
+			if r.State == protocol.MachineRunning {
+				wave := math.Sin(float64(now.Unix())/20+float64(r.ID)) + 1
+				u[r.Name] = protocol.Usage{CPUPercent: 15 + 38*wave, MemoryUsedBytes: int64((3 + 3*wave) * (1 << 30)), MemoryTotalBytes: 16 << 30}
+			}
+		}
+		v = protocol.UsageList{Machines: u}
+	case method == "GET" && parts[0] == "machines":
 		v = d.details(strings.Join(parts[1:], "/"), now)
 	case method == "POST" && route == "/v1/invites":
 		v = protocol.InviteResponse{Code: "hostel1-demo-not-a-real-code", ExpiresAt: now.Add(24 * time.Hour)}
 	case method == "POST" && route == "/v1/machines/invites":
-		v = protocol.MachineInviteResponse{Machine: "home/new", Code: "demo", Unix: "curl -fsSL https://demo.hostel.example/v1/install.sh | sh -s -- demo",
+		v = protocol.MachineInviteResponse{Template: "home/new", Code: "demo", Unix: "curl -fsSL https://demo.hostel.example/v1/install.sh | sh -s -- demo",
 			Windows: "irm https://demo.hostel.example/v1/install.ps1 | iex", ExpiresAt: now.Add(time.Hour)}
 	case method == "POST" && parts[0] == "leases" && len(parts) == 3:
 		d.leaseAction(parts[1], parts[2], in)
 		d.positions(now)
 		d.bump()
-	case method == "POST" && parts[0] == "rooms" && len(parts) == 3:
+	case method == "POST" && parts[0] == "machines" && len(parts) == 3:
 		id, _ := strconv.ParseInt(parts[1], 10, 64)
-		if r := d.room(id); r != nil {
+		if r := d.machine(id); r != nil {
 			switch parts[2] {
 			case "drain":
 				r.Drained = true
@@ -557,19 +569,19 @@ func (d *demoServer) leaseAction(id, action string, in any) {
 	}
 }
 
-func (d *demoServer) details(name string, now time.Time) protocol.RoomDetails {
-	i := slices.IndexFunc(d.rooms, func(r protocol.RoomStatus) bool { return r.Name == name })
+func (d *demoServer) details(name string, now time.Time) protocol.MachineDetails {
+	i := slices.IndexFunc(d.machines, func(r protocol.MachineStatus) bool { return r.Name == name })
 	if i < 0 {
-		return protocol.RoomDetails{}
+		return protocol.MachineDetails{}
 	}
-	r := d.rooms[i]
-	out := protocol.RoomDetails{Room: r, Leases: roomLeases(d.status(), r.ID), Jobs: map[string][]protocol.JobInfo{}}
+	r := d.machines[i]
+	out := protocol.MachineDetails{Machine: r, Leases: machineLeases(d.status(), r.ID), Jobs: map[string][]protocol.JobInfo{}}
 	for _, l := range out.Leases {
 		if l.State == protocol.LeaseReady {
 			out.Jobs[l.ID] = []protocol.JobInfo{{ID: "job-1", Command: []string{"xcodebuild", "test", "-scheme", "App"}, State: "running", StartedAt: now.Add(-90 * time.Second)}}
 		}
 	}
-	if r.State == protocol.RoomRunning && r.Hardware != nil {
+	if r.State == protocol.MachineRunning && r.Hardware != nil {
 		used := 0.35 + 0.4*d.rnd.Float64()
 		out.Usage = &protocol.Usage{CPUPercent: 10 + 70*d.rnd.Float64(), MemoryUsedBytes: int64(used * float64(r.Hardware.MemoryBytes)), MemoryTotalBytes: r.Hardware.MemoryBytes}
 	}

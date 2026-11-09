@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/csansoon/hostel/internal/config"
+	"github.com/csansoon/hostel/internal/machineops"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/provider"
-	"github.com/csansoon/hostel/internal/roomops"
 	"github.com/csansoon/hostel/internal/store"
 )
 
@@ -33,7 +33,7 @@ type liveConfig struct {
 	tools    map[string]map[string]string
 	toolsDir string
 	// uploads has the tool files and hashes for each tool and OS.
-	uploads map[string]map[string]roomops.Tool
+	uploads map[string]map[string]machineops.Tool
 	// warning is a problem of the stored configuration that an admin must
 	// fix (GET /v1/status); a new configuration clears it.
 	warning string
@@ -43,7 +43,7 @@ func (s *Server) config() *config.Server { return s.live.Load().cfg }
 
 func (s *Server) providerMap() map[string]provider.Provider { return s.live.Load().providers }
 
-func (s *Server) toolUploads() map[string]map[string]roomops.Tool {
+func (s *Server) toolUploads() map[string]map[string]machineops.Tool {
 	return s.live.Load().uploads
 }
 
@@ -60,7 +60,7 @@ func (s *Server) buildLive(ctx context.Context, cfg *config.Server, revision int
 		fresh.ProviderOrder = append(fresh.ProviderOrder, name)
 		fresh.Providers[name] = cfg.Providers[name]
 	}
-	built, err := newProviders(ctx, fresh, s.serverKey, s.rooms.Dial, s.log)
+	built, err := newProviders(ctx, fresh, s.serverKey, s.machines.Dial, s.log)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func loadConfig(ctx context.Context, file string, st *store.Store, now time.Time
 		return nil, fmt.Errorf("write the tools: %w", err)
 	}
 	removeOldToolDirs(paths.DataDir, dir)
-	document, warning := latest.Document, ""
+	document, warning := string(config.UpgradeWords([]byte(latest.Document))), ""
 	if oldErr := config.OldForm([]byte(document)); oldErr != nil {
 		// No compatibility with the configuration before M10e (owner
 		// decision, 2026-11-05), but the server stays reachable: it starts
@@ -220,15 +220,15 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 		return 0, err
 	}
 	s.live.Store(lc)
-	// The room tokens of a removed machine stop working.
-	for _, m := range old.cfg.Machines() {
-		if m.Connect && cfg.Machine(m.Key()) == nil {
-			if err := s.revokeMachineTokens(ctx, m.Key(), time.Now()); err != nil {
-				s.log.Error("revoke the room tokens of a removed machine", "machine", m.Key(), "err", err)
+	// The machine tokens of a removed machine stop working.
+	for _, m := range old.cfg.Templates() {
+		if m.Connect && cfg.Template(m.Key()) == nil {
+			if err := s.revokeTemplateTokens(ctx, m.Key(), time.Now()); err != nil {
+				s.log.Error("revoke the machine tokens of a removed machine", "machine", m.Key(), "err", err)
 			}
 		}
 	}
-	// The loop adds the rooms of new static machines (refreshRooms).
+	// The loop adds the machines of new static machines (refreshMachines).
 	s.kickScheduler()
 	return rev, nil
 }
@@ -253,7 +253,7 @@ func (s *Server) applyTool(ctx context.Context, name, state string, files map[st
 	applied := false
 	defer func() {
 		// A refused change leaves no directory; an applied one stays until the
-		// next start (a room upload can still read the previous one).
+		// next start (a machine upload can still read the previous one).
 		if !applied && dir != old.toolsDir {
 			os.RemoveAll(dir)
 		}
@@ -318,13 +318,13 @@ func (s *Server) checkActiveTools(ctx context.Context, cfg *config.Server) error
 	return nil
 }
 
-// checkRemovals refuses a configuration that removes a machine whose room has
-// an active lease, or a provider that still has rooms of its own.
+// checkRemovals refuses a configuration that removes a machine whose machine has
+// an active lease, or a provider that still has machines of its own.
 func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 	if err := s.checkActiveTools(ctx, cfg); err != nil {
 		return err
 	}
-	rooms, err := s.store.Rooms(ctx)
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return err
 	}
@@ -332,55 +332,62 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 	if err != nil {
 		return err
 	}
+	entryKey := func(r store.Machine) string {
+		kind := config.ProviderStatic
+		if p := s.config().Providers[r.Provider]; p != nil {
+			kind = p.Kind
+		}
+		return "providers." + r.Provider + "." + config.TemplatesKey(kind) + "." + r.Template
+	}
 	var errs []string
-	for _, r := range rooms {
-		if r.State == protocol.RoomRetired || r.State == protocol.RoomDestroyed {
+	for _, r := range machines {
+		if r.State == protocol.MachineRetired || r.State == protocol.MachineDestroyed {
 			continue
 		}
-		key := r.Provider + "/" + r.Machine
-		// A room keeps its provider's reference: the provider's kind must not
+		key := r.Provider + "/" + r.Template
+		// A machine keeps its provider's reference: the provider's kind must not
 		// change under it.
 		if op, np := s.config().Providers[r.Provider], cfg.Providers[r.Provider]; op != nil && np != nil &&
 			(op.Kind != np.Kind || !slices.Equal(op.Command, np.Command) || !maps.Equal(op.CommandEnv, np.CommandEnv)) {
-			errs = append(errs, fmt.Sprintf("providers.%s: kind, command, and command_env stay while the provider has the room %s (its rooms belong to that backend); remove its machines, and change them when its rooms are destroyed or retired", r.Provider, r.Name))
+			errs = append(errs, fmt.Sprintf("providers.%s: kind, command, and command_env stay while the provider has the machine %s (its machines belong to that backend); remove its machines, and change them when its machines are destroyed or retired", r.Provider, r.Name))
 			continue
 		}
 		if p := cfg.Providers[r.Provider]; p == nil && s.config().Providers[r.Provider] != nil && s.config().Providers[r.Provider].Kind != config.ProviderStatic {
-			errs = append(errs, fmt.Sprintf("providers.%s: has the room %s; remove its machines first, and remove the provider when its rooms are destroyed", r.Provider, r.Name))
+			errs = append(errs, fmt.Sprintf("providers.%s: has the machine %s; remove its machines first, and remove the provider when its machines are destroyed", r.Provider, r.Name))
 			continue
 		}
-		if nm, om := cfg.Machine(key), s.config().Machine(key); nm != nil && om != nil && nm.OnDemand() &&
+		if nm, om := cfg.Template(key), s.config().Template(key); nm != nil && om != nil && nm.OnDemand() &&
 			fmt.Sprint(om.Spec["product"]) != fmt.Sprint(nm.Spec["product"]) {
-			// The room's reference belongs to its product.
-			errs = append(errs, fmt.Sprintf("providers.%s.machines.%s.spec.product: stays while the machine has the room %s; remove the machine, and add it again with the new product when its rooms are destroyed", r.Provider, r.Machine, r.Name))
+			// The machine's reference belongs to its product.
+			errs = append(errs, fmt.Sprintf("%s.spec.product: stays while the machine %s exists; remove the template, and add it again with the new product when its machines are destroyed", entryKey(r), r.Name))
 			continue
 		}
-		if nm := cfg.Machine(key); nm != nil {
-			// Cleanup runs as the slot's user: the slots of a room with a
+		if nm := cfg.Template(key); nm != nil {
+			// Cleanup runs as the room's user: the rooms of a machine with a
 			// lease must not change under it.
-			// The server reaches the room of a lease at the same place.
-			if om := s.config().Machine(key); om != nil {
+			// The server reaches the machine of a lease at the same place.
+			if om := s.config().Template(key); om != nil {
 				for _, l := range leases {
-					changed := !reflect.DeepEqual(om.Slots, nm.Slots) || om.Address != nm.Address || om.Connect != nm.Connect ||
+					changed := !reflect.DeepEqual(om.Rooms, nm.Rooms) || om.Address != nm.Address || om.Connect != nm.Connect ||
 						om.OS != nm.OS || slices.ContainsFunc(toolNamesOf(l.Tools), func(t string) bool { return nm.Tool(t) == nil })
-					if changed && l.RoomID == r.ID && l.State != protocol.LeaseQueued {
-						errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: slots, address, connect, os, and the lease's tools stay while the room %s has the active lease %s; drain the room (hostel config rooms drain %s) and change them when the lease ends", r.Provider, r.Machine, r.Name, l.ID, r.Name))
+					if changed && l.MachineID == r.ID && l.State != protocol.LeaseQueued {
+						errs = append(errs, fmt.Sprintf("%s: rooms, address, connect, os, and the lease's tools stay while the machine %s has the active lease %s; drain the machine (hostel config machines drain %s) and change them when the lease ends", entryKey(r), r.Name, l.ID, r.Name))
 						break
 					}
 				}
 			}
 			continue
 		}
-		// The provider destroys a room through its machine's settings (for
-		// Namespace, the product): an on-demand machine stays until its rooms
+		// The provider destroys a machine through its machine's settings (for
+		// Namespace, the product): an on-demand machine stays until its machines
 		// are destroyed.
-		if om := s.config().Machine(key); om != nil && om.OnDemand() {
-			errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: the machine has the room %s (%s); destroy it first (hostel config rooms destroy %s; drain it if a lease uses it), then remove the machine", r.Provider, r.Machine, r.Name, r.State, r.Name))
+		if om := s.config().Template(key); om != nil && om.OnDemand() {
+			errs = append(errs, fmt.Sprintf("%s: the machine %s (%s) exists; destroy it first (hostel config machines destroy %s; drain it if a lease uses it), then remove the entry", entryKey(r), r.Name, r.State, r.Name))
 			continue
 		}
 		for _, l := range leases {
-			if l.RoomID == r.ID && l.State != protocol.LeaseQueued {
-				errs = append(errs, fmt.Sprintf("providers.%s.machines.%s: the room %s has the active lease %s; drain the room (hostel config rooms drain %s) and remove the machine when the lease ends", r.Provider, r.Machine, r.Name, l.ID, r.Name))
+			if l.MachineID == r.ID && l.State != protocol.LeaseQueued {
+				errs = append(errs, fmt.Sprintf("%s: the machine %s has the active lease %s; drain the machine (hostel config machines drain %s) and remove the entry when the lease ends", entryKey(r), r.Name, l.ID, r.Name))
 			}
 		}
 	}
@@ -390,12 +397,12 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 	return nil
 }
 
-// machineHash is the hash of what a room of the machine is provisioned with:
+// templateHash is the hash of what a machine of the machine is provisioned with:
 // the settings that provisioning uses, the machine's tools, and the files of
-// its defined tools (for an on-demand room, its software tools only: it
-// installs a screen tool again when a lease uses it). A free room with another
+// its defined tools (for an on-demand machine, its software tools only: it
+// installs a screen tool again when a lease uses it). A free machine with another
 // hash provisions again or is destroyed.
-func machineHash(lc *liveConfig, m *config.Machine) string {
+func templateHash(lc *liveConfig, m *config.Template) string {
 	hashes := map[string]string{}
 	for _, t := range lc.cfg.DefinedTools(m) {
 		if m.OnDemand() && t.Screen {
@@ -409,23 +416,23 @@ func machineHash(lc *liveConfig, m *config.Machine) string {
 		Spec        map[string]any
 		Tools       []string
 		Env         map[string]string
-		Slots       []config.Slot
+		Rooms       []config.Room
 		Mise        *config.Mise
 		Hashes      map[string]string
-	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Slots, lc.cfg.Mise, hashes})
+	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Rooms, lc.cfg.Mise, hashes})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// refreshRooms makes rooms follow the configuration: it adds the rooms of new
-// static machines; a free room whose machine changed provisions again
-// (static) or is destroyed (on demand); a free room whose machine is gone is
+// refreshMachines makes machines follow the configuration: it adds the machines of new
+// static machines; a free machine whose machine changed provisions again
+// (static) or is destroyed (on demand); a free machine whose machine is gone is
 // retired (static) or destroyed (on demand).
-func (s *Server) refreshRooms(ctx context.Context) error {
-	if err := s.ensureStaticRooms(ctx, false); err != nil {
+func (s *Server) refreshMachines(ctx context.Context) error {
+	if err := s.ensureStaticMachines(ctx, false); err != nil {
 		return err
 	}
-	rooms, err := s.store.Rooms(ctx)
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return err
 	}
@@ -435,42 +442,42 @@ func (s *Server) refreshRooms(ctx context.Context) error {
 	}
 	busy := map[int64]bool{}
 	for _, l := range leases {
-		if l.RoomID != 0 {
-			busy[l.RoomID] = true
+		if l.MachineID != 0 {
+			busy[l.MachineID] = true
 		}
 	}
 	lc := s.live.Load()
 	now := time.Now()
-	for _, r := range rooms {
+	for _, r := range machines {
 		if busy[r.ID] {
 			continue
 		}
-		m := lc.cfg.Machine(r.Provider + "/" + r.Machine)
+		m := lc.cfg.Template(r.Provider + "/" + r.Template)
 		p := lc.cfg.Providers[r.Provider]
 		static := p != nil && p.Kind == config.ProviderStatic
 		switch {
 		case m == nil && (p == nil || static):
-			if r.State != protocol.RoomRetired {
-				_, err = s.store.SetRoomState(ctx, r.ID, []string{r.State}, protocol.RoomRetired, "machine removed from the configuration", now)
+			if r.State != protocol.MachineRetired {
+				_, err = s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineRetired, "machine removed from the configuration", now)
 			}
 		case m == nil:
-			_, err = s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomCreating, protocol.RoomProvisioning,
-				protocol.RoomRunning, protocol.RoomResuming, protocol.RoomStopping, protocol.RoomStopped, protocol.RoomBroken},
-				protocol.RoomDestroying, "machine removed from the configuration", now)
-		case r.ConfigSHA256 == "" && (r.State == protocol.RoomRunning || r.State == protocol.RoomStopped):
-			// A room from before M9 (also a stopped one, which can resume):
+			_, err = s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineCreating, protocol.MachineProvisioning,
+				protocol.MachineRunning, protocol.MachineResuming, protocol.MachineStopping, protocol.MachineStopped, protocol.MachineBroken},
+				protocol.MachineDestroying, "machine removed from the configuration", now)
+		case r.ConfigSHA256 == "" && (r.State == protocol.MachineRunning || r.State == protocol.MachineStopped):
+			// A machine from before M9 (also a stopped one, which can resume):
 			// its settings are the current ones at the first pass.
-			err = s.store.SetConfigSHA256(ctx, r.ID, machineHash(lc, m))
-		case r.State != protocol.RoomRunning:
-		case r.ConfigSHA256 != machineHash(lc, m) && static:
-			if err = s.store.EnsureSlots(ctx, r.ID, slotNames(m)); err == nil {
-				err = s.store.RemoveFreeSlots(ctx, r.ID, slotNames(m))
+			err = s.store.SetConfigSHA256(ctx, r.ID, templateHash(lc, m))
+		case r.State != protocol.MachineRunning:
+		case r.ConfigSHA256 != templateHash(lc, m) && static:
+			if err = s.store.EnsureRooms(ctx, r.ID, roomNames(m)); err == nil {
+				err = s.store.RemoveFreeRooms(ctx, r.ID, roomNames(m))
 			}
 			if err == nil {
-				_, err = s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning}, protocol.RoomProvisioning, "configuration changed", now)
+				_, err = s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, protocol.MachineProvisioning, "configuration changed", now)
 			}
-		case r.ConfigSHA256 != machineHash(lc, m):
-			_, err = s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning}, protocol.RoomDestroying, "configuration changed", now)
+		case r.ConfigSHA256 != templateHash(lc, m):
+			_, err = s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, protocol.MachineDestroying, "configuration changed", now)
 		}
 		if err != nil {
 			return err

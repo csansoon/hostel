@@ -324,7 +324,7 @@ func TestServerUpdate(t *testing.T) {
 	f := newFixtureWithEnv(t, e, &fixtureOpts{helperDir: own})
 	f.acquire()
 	f.s.pinPorts()
-	// A job that runs during the update keeps running on the room.
+	// A job that runs during the update keeps running on the machine.
 	job := jobID(t, e.mustHostel("run", "--detach", "--", "sleep 6; echo job-done"))
 
 	linux := "hostel-linux-" + dockerArch
@@ -368,11 +368,11 @@ func TestServerUpdate(t *testing.T) {
 		t.Fatalf("the lease after the update: %s", r)
 	}
 	e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	// The next lease gets the new helper.
 	f.acquire()
 	if v := f.c.sh("/home/hostel/hostel/bin/hostel --version"); v != "hostel v1.1.0" {
-		t.Fatalf("the room's helper after the next lease: %q", v)
+		t.Fatalf("the machine's helper after the next lease: %q", v)
 	}
 	e.mustHostel("release")
 
@@ -428,17 +428,17 @@ func TestMachineUpdate(t *testing.T) {
 	port := freePort(t)
 	name := "hostel-e2e-" + e.runID + "-update"
 	if _, err := docker("run", "-d", "--name", name, "--label", dockerLabel+"="+e.runID, "--network", "host",
-		"--entrypoint", "/bin/sh", roomImage, "-c",
+		"--entrypoint", "/bin/sh", machineImage, "-c",
 		fmt.Sprintf("ssh-keygen -A && exec /usr/sbin/sshd -D -e -p %d -o ListenAddress=127.0.0.1", port)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := docker("cp", versionBin(t, "linux", dockerArch, "v1.0.0"), name+":/usr/local/bin/hostel"); err != nil {
 		t.Fatal(err)
 	}
-	r := e.adminHostel("config", "rooms", "add", "box3", "--tool", "fake-screen")
+	r := e.adminHostel("config", "machines", "add", "box3", "--tool", "fake-screen")
 	m := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(r.stdout)
 	if r.code != 0 || m == nil {
-		t.Fatalf("config rooms add: %s", r)
+		t.Fatalf("config machines add: %s", r)
 	}
 	out, err := docker("exec", name, "/usr/local/bin/hostel", "machine", "join", m[1], "--no-service")
 	if err != nil {
@@ -456,14 +456,14 @@ func TestMachineUpdate(t *testing.T) {
 	}
 	startConnect()
 	connectVersion := func() string {
-		for _, ms := range s.status().Machines {
+		for _, ms := range s.status().Templates {
 			if ms.Key == "home/box3" {
 				return ms.ConnectVersion
 			}
 		}
 		return ""
 	}
-	e.waitFor("the connect version v1.0.0", roomReady, func() bool { return connectVersion() == "v1.0.0" })
+	e.waitFor("the connect version v1.0.0", machineReady, func() bool { return connectVersion() == "v1.0.0" })
 
 	// The app shows the machine as out of date, with the command.
 	a := e.startApp(e.home, append(e.environ(), "HOSTEL_TOKEN="+e.admin)...)
@@ -479,7 +479,7 @@ func TestMachineUpdate(t *testing.T) {
 	a.quit()
 
 	if out, err := docker("exec", "-u", "hostel", name, "/etc/hostel/hostel", "machine", "update"); err == nil || !strings.Contains(err.Error()+out, "as an administrator") {
-		t.Fatalf("machine update as the room user: %v\n%s", err, out)
+		t.Fatalf("machine update as the machine user: %v\n%s", err, out)
 	}
 	out, err = docker("exec", name, "/etc/hostel/hostel", "machine", "update")
 	if err != nil || !strings.Contains(out, "updated /etc/hostel/hostel from v1.0.0 to v1.1.0") || !strings.Contains(out, "no service is installed") {
@@ -495,7 +495,7 @@ func TestMachineUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	startConnect()
-	e.waitFor("the connect version v1.1.0", roomReady, func() bool { return connectVersion() == "v1.1.0" })
+	e.waitFor("the connect version v1.1.0", machineReady, func() bool { return connectVersion() == "v1.1.0" })
 }
 
 // TestAppUpdate: the app reads the latest release in the background and
@@ -532,7 +532,7 @@ func TestAppUpdate(t *testing.T) {
 
 	a.in("1")
 	a.waitFor(10*time.Second, `This server\s+v1\.1\.0 available`)
-	a.in("\x1b[B\x1b[B\r")
+	a.in("\x1b[B\r")
 	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `▌ \S+\s+Update the server`, `Update the server: install Hostel v1\.1\.0 on the server \(it runs v1\.0\.0\)`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `Update the server from v1\.0\.0 to v1\.1\.0\?`)

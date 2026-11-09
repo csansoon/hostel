@@ -67,7 +67,7 @@ func Release(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// Diff is "hostel diff": the room changes against the last sync.
+// Diff is "hostel diff": the machine changes against the last sync.
 func Diff(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel diff", stderr)
 	if _, err := cli.Parse(fs, args); err != nil {
@@ -93,7 +93,7 @@ func Cp(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel cp", stderr)
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 2 || strings.HasPrefix(pos[0], ":") == strings.HasPrefix(pos[1], ":") {
-		fmt.Fprintln(stderr, "hostel: usage: hostel cp <local> :<room path> | hostel cp :<room path> <local>")
+		fmt.Fprintln(stderr, "hostel: usage: hostel cp <local> :<machine path> | hostel cp :<machine path> <local>")
 		return ExitUsage
 	}
 	l, code := openLease(stderr)
@@ -116,9 +116,9 @@ func Cp(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// cleanRoomPath turns a path relative to the work directory into a clean path
+// cleanMachinePath turns a path relative to the work directory into a clean path
 // ("." for the work directory itself).
-func cleanRoomPath(p string) (string, error) {
+func cleanMachinePath(p string) (string, error) {
 	p = path.Clean(strings.TrimPrefix(p, "./"))
 	if p == "." {
 		return p, nil
@@ -126,7 +126,7 @@ func cleanRoomPath(p string) (string, error) {
 	return p, syncfs.CheckPath(p)
 }
 
-// copyIn copies a local file or directory to the room path dst. If dst ends
+// copyIn copies a local file or directory to the machine path dst. If dst ends
 // with "/", the copy goes into that directory with its own name.
 func copyIn(conn *Conn, src, dst string) error {
 	if _, err := os.Lstat(src); err != nil {
@@ -135,7 +135,7 @@ func copyIn(conn *Conn, src, dst string) error {
 	if strings.HasSuffix(dst, "/") || dst == "" {
 		dst = path.Join(dst, filepath.Base(src))
 	}
-	dst, err := cleanRoomPath(dst)
+	dst, err := cleanMachinePath(dst)
 	if err != nil {
 		return err
 	}
@@ -196,10 +196,10 @@ func copyIn(conn *Conn, src, dst string) error {
 	return err
 }
 
-// copyOut copies a room file or directory to a local path. If dst is an
+// copyOut copies a machine file or directory to a local path. If dst is an
 // existing directory or ends with "/", the copy goes into it with its own name.
 func copyOut(conn *Conn, src, dst string) error {
-	src, err := cleanRoomPath(src)
+	src, err := cleanMachinePath(src)
 	if err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func copyOut(conn *Conn, src, dst string) error {
 // extract writes a tar stream whose first path component is replaced by
 // target. It never writes outside target: parent directories that are
 // symbolic links or files are refused, and a symbolic link at a file path is
-// replaced, not followed (the room side, tar-in, has the same rules).
+// replaced, not followed (the machine side, tar-in, has the same rules).
 func extract(r io.Reader, target string) error {
 	tr := tar.NewReader(r)
 	for {

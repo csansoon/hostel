@@ -22,7 +22,7 @@ func TestIdleExpiry(t *testing.T) {
 	f.e.mustHostel("run", "--", "sleep 8")
 	f.e.mustHostel("run", "--", "true")
 	// Without activity, the lease expires.
-	f.waitSlotFree()
+	f.waitRoomFree()
 	r := f.e.hostel("run", "--", "true")
 	if r.code != 1 || !strings.Contains(r.stderr, "ended (expired: idle") {
 		t.Fatalf("run after the idle expiry: %s", r)
@@ -32,7 +32,7 @@ func TestIdleExpiry(t *testing.T) {
 // TestMaxLease is scenario 10: max_lease ends an active lease.
 func TestMaxLease(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineKeys: "max_lease = \"10s\"\n"})
+	f := newFixture(t, &fixtureOpts{templateKeys: "max_lease = \"10s\"\n"})
 	// The lease is ready before acquire returns (acquire then syncs and runs
 	// the setup job), so the time before acquire is a safe lower bound.
 	start := time.Now()
@@ -72,7 +72,7 @@ func TestOwnership(t *testing.T) {
 	done := make(chan result, 1)
 	go func() { done <- f.e.hostel("run", "--", "echo started; sleep 60") }()
 	f.e.waitFor("job started", time.Minute, func() bool {
-		return strings.Contains(f.c.sh("cat /home/hostel/hostel/slots/a/jobs/*/output 2>/dev/null || true"), "started")
+		return strings.Contains(f.c.sh("cat /home/hostel/hostel/rooms/a/jobs/*/output 2>/dev/null || true"), "started")
 	})
 	if code := f.s.do("POST", "/v1/leases/"+id+"/release", f.s.token, nil); code != 200 {
 		t.Fatalf("admin release: HTTP %d", code)
@@ -85,7 +85,7 @@ func TestOwnership(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("run did not end within 30 seconds after the admin release")
 	}
-	f.waitSlotFree()
+	f.waitRoomFree()
 	f.e.vars["HOSTEL_TOKEN"] = f.s.token
 	if r := f.e.hostel("admin", "lease", "release", id); r.code != 0 {
 		t.Fatalf("admin lease release of an ended lease: %s", r)

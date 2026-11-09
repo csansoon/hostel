@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -26,28 +25,39 @@ type menuEntry struct {
 
 func menuEntries(m *model) []menuEntry {
 	entries := []menuEntry{
-		{"🛎️", "Front desk", "People, rooms, this server, check out", "Front desk: the people on this server, its rooms, the server itself, and check out.",
+		{"🛎️", "Front desk", "People, this server, check out", "Front desk: the people on this server, its machines, the server itself, and check out.",
 			func(m *model) string { return "" }, func() page { return newFrontDesk() }},
-		{"🛋️", "Lobby", "Tools, and who waits for each one", "Lobby: the tools of the machines, which machines are free, and who waits.",
+		{"🛋️", "Lobby", "Who waits, and the tools", "Lobby: the waiting line, and the tools of the machines.",
 			func(m *model) string {
 				if n := waiting(m.st); n > 0 {
 					return fg(colYellow).Render(spin("◴", "◷", "◶", "◵") + fmt.Sprintf(" %d waiting", n))
 				}
 				return mutedStyle.Render("nobody waiting")
 			}, func() page { return &lobby{} }},
-		{"🚪", "Rooms", "Machines, and who uses each one now", "Rooms: the machines where agents run, and who uses each one now.",
+		{"🚪", "Rooms", "Providers, machines, and who is in each room", "Rooms: each provider, its machines, and the guests in their rooms.",
 			func(m *model) string {
-				vacant, used := 0, 0
-				for _, ms := range m.st.Machines {
-					switch machineState(m.st, ms, time.Now()).word {
-					case "Vacant":
-						vacant++
-					case "Occupied":
-						used++
+				vacant, used, offline := 0, 0, 0
+				for _, r := range m.st.Machines {
+					if r.State != protocol.MachineRunning {
+						if r.State == protocol.MachineBroken {
+							offline++
+						}
+						continue
+					}
+					for _, s := range r.Rooms {
+						switch s.State {
+						case protocol.RoomFree:
+							vacant++
+						case protocol.RoomLeased:
+							used++
+						}
 					}
 				}
-				return fg(colGreen).Render(fmt.Sprintf("● %d vacant", vacant)) + "   " +
-					fg(colBlue).Render(fmt.Sprintf("◉ %d occupied", used))
+				out := fg(colBlue).Render(fmt.Sprintf("◉ %d occupied", used)) + "   " + fg(colGreen).Render(fmt.Sprintf("● %d vacant", vacant))
+				if offline > 0 {
+					out += "   " + fg(colRed).Render(fmt.Sprintf("✕ %d offline", offline))
+				}
+				return out
 			}, func() page { return &rooms{} }},
 	}
 	if tag := m.updateAvailable(); tag != "" {

@@ -1,11 +1,11 @@
 //go:build !windows
 
 // Command fakeprovider is an external provider for the E2E tests (design,
-// section 20). It creates Docker rooms from test/roomimage. Environment:
+// section 20). It creates Docker machines from test/machineimage. Environment:
 //
 //	FAKE_RUN_ID     label value hostel-e2e=<run id> of all its containers (required)
 //	FAKE_STATE_DIR  directory for lock files and counters (required)
-//	FAKE_IMAGE      room image (default hostel-e2e-room)
+//	FAKE_IMAGE      machine image (default hostel-e2e-machine)
 //	FAKE_DELAY      wait before docker run, for example 5s (a window for kill -9)
 //	FAKE_LIMIT      maximum number of its containers; more gives the "limit" error
 //	FAKE_FAIL       number of provision calls that fail with "other" before one works
@@ -37,7 +37,7 @@ import (
 
 type request struct {
 	Name      string `json:"name"`
-	Machine   string `json:"machine"`
+	Template  string `json:"template"`
 	ID        string `json:"id"`
 	ServerKey string `json:"server_key"`
 	Prefix    string `json:"prefix"`
@@ -120,7 +120,7 @@ func containers() (map[string]string, error) {
 func run(op string, req request) (any, error) {
 	switch op {
 	case "capabilities":
-		// extend is a no-op: test rooms end with the test.
+		// extend is a no-op: test machines end with the test.
 		return map[string]bool{"can_stop": os.Getenv("FAKE_CAN_STOP") == "1", "can_extend": true}, nil
 	case "provision":
 		return provision(req)
@@ -157,21 +157,21 @@ func run(op string, req request) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		type room struct {
+		type machine struct {
 			ID    string `json:"id"`
 			Name  string `json:"name"`
 			State string `json:"state"`
 		}
-		rooms := []room{}
+		machines := []machine{}
 		for name, state := range cs {
 			if strings.HasPrefix(name, req.Prefix) {
 				if state != "running" {
 					state = "stopped"
 				}
-				rooms = append(rooms, room{ID: name, Name: name, State: state})
+				machines = append(machines, machine{ID: name, Name: name, State: state})
 			}
 		}
-		return map[string]any{"rooms": rooms}, nil
+		return map[string]any{"machines": machines}, nil
 	}
 	return nil, fmt.Errorf("unknown operation %q", op)
 }
@@ -182,13 +182,13 @@ func exists(name string) error {
 		return err
 	}
 	if _, ok := cs[name]; !ok {
-		return fmt.Errorf("%w: no room %s", errNotFound, name)
+		return fmt.Errorf("%w: no machine %s", errNotFound, name)
 	}
 	return nil
 }
 
 // provision is idempotent by name, also under concurrent calls: a lock file
-// for each name makes a second call wait, and it then returns the room.
+// for each name makes a second call wait, and it then returns the machine.
 func provision(req request) (any, error) {
 	// A server that dies before it writes the request leaves stdin empty.
 	if req.Name == "" {
@@ -219,7 +219,7 @@ func provision(req request) (any, error) {
 		return access(req.Name)
 	}
 	if n, err := strconv.Atoi(os.Getenv("FAKE_LIMIT")); err == nil && len(cs) >= n {
-		return nil, fmt.Errorf("%w (%d rooms)", errLimit, n)
+		return nil, fmt.Errorf("%w (%d machines)", errLimit, n)
 	}
 	if n, err := strconv.Atoi(os.Getenv("FAKE_FAIL")); err == nil {
 		counter := filepath.Join(dir, "failures")
@@ -235,7 +235,7 @@ func provision(req request) (any, error) {
 	}
 	image := os.Getenv("FAKE_IMAGE")
 	if image == "" {
-		image = "hostel-e2e-room"
+		image = "hostel-e2e-machine"
 	}
 	port, err := freePort()
 	if err != nil {
@@ -291,7 +291,7 @@ func waitSSH(name string) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("room %s: no SSH banner after 1 minute", name)
+	return fmt.Errorf("machine %s: no SSH banner after 1 minute", name)
 }
 
 func access(name string) (any, error) {

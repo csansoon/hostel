@@ -8,7 +8,7 @@
 #
 # Without --server, it installs the hostel binary for this machine into DIR
 # (default ~/.local/bin): for guests and for "hostel machine connect". With
-# --server, it also puts the binaries for all rooms into DIR/helpers
+# --server, it also puts the binaries for all machines into DIR/helpers
 # (helper_dir of server.toml). The server uses the tool definitions in its
 # binary. It verifies each file against SHA256SUMS of the release.
 #

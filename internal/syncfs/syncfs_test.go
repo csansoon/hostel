@@ -80,9 +80,9 @@ func TestSyncSequence(t *testing.T) {
 		t.Fatalf("first plan = %+v", p)
 	}
 
-	// A room command creates a file, and changes a synced file.
+	// A machine command creates a file, and changes a synced file.
 	write(t, work, "build/out.bin", "built")
-	write(t, work, "a.txt", "room edit")
+	write(t, work, "a.txt", "machine edit")
 
 	// The guest edits b.txt with the same size, and deletes nothing.
 	write(t, guest, "dir/b.txt", "TWO")
@@ -92,7 +92,7 @@ func TestSyncSequence(t *testing.T) {
 		t.Fatalf("second plan send = %v", p.Send)
 	}
 	if !reflect.DeepEqual(p.Overwrite, []string{"a.txt"}) {
-		t.Fatalf("second plan overwrite = %v, want the room edit of a.txt", p.Overwrite)
+		t.Fatalf("second plan overwrite = %v, want the machine edit of a.txt", p.Overwrite)
 	}
 	if read(t, work, "a.txt") != "one" || read(t, work, "dir/b.txt") != "TWO" || read(t, work, "build/out.bin") != "built" {
 		t.Fatal("wrong files after the second sync")
@@ -139,13 +139,13 @@ func TestTypeChanges(t *testing.T) {
 		t.Fatal("a not written")
 	}
 
-	// Back to a/b while the room added a/x to the directory: the plan lists the
-	// directory in overwrite (the room object blocks a send path).
+	// Back to a/b while the machine added a/x to the directory: the plan lists the
+	// directory in overwrite (the machine object blocks a send path).
 	os.Remove(filepath.Join(guest, "a"))
 	write(t, guest, "a/b", "nested")
 	m4 := manifest(t, guest, "a/b")
 	sync(t, guest, work, m3, m4)
-	write(t, work, "a/x", "room file")
+	write(t, work, "a/x", "machine file")
 	os.RemoveAll(filepath.Join(guest, "a"))
 	write(t, guest, "a", "file")
 	m5 := manifest(t, guest, "a")
@@ -232,16 +232,16 @@ func TestApplyKeepsUnplannedBlockers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// After the plan, a room job writes a file where the directory a must go.
-	write(t, work, "a", "room data")
+	// After the plan, a machine job writes a file where the directory a must go.
+	write(t, work, "a", "machine data")
 	var buf bytes.Buffer
 	if err := WriteTar(&buf, guest, m, plan.Send); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Apply(work, plan, m, &buf); err == nil {
-		t.Fatal("apply removed a room file that the plan does not list")
+		t.Fatal("apply removed a machine file that the plan does not list")
 	}
-	if read(t, work, "a") != "room data" {
-		t.Fatal("the room file changed")
+	if read(t, work, "a") != "machine data" {
+		t.Fatal("the machine file changed")
 	}
 }

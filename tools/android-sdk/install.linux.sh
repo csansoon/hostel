@@ -18,7 +18,7 @@ dpkg -s libasound2t64 >/dev/null 2>&1 || dpkg -s libasound2 >/dev/null 2>&1 || m
 dpkg -s libpng16-16t64 >/dev/null 2>&1 || dpkg -s libpng16-16 >/dev/null 2>&1 || missing="$missing libpng16-16t64"
 if [ -n "$missing" ]; then
 	if ! sudo -n true 2>/dev/null; then
-		echo "missing packages:$missing; install them, or give the room user sudo without a password" >&2
+		echo "missing packages:$missing; install them, or give the machine user sudo without a password" >&2
 		exit 1
 	fi
 	echo "install:$missing"

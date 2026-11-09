@@ -11,8 +11,8 @@ import (
 )
 
 // handleSetTunnels is PUT /v1/leases/{id}/tunnels: it replaces the tunnels of a
-// ready lease. A tunnel with room_port 0 keeps its pool port, or gets the lowest
-// free one. A fixed port that another lease on the room uses is refused (409).
+// ready lease. A tunnel with machine_port 0 keeps its pool port, or gets the lowest
+// free one. A fixed port that another lease on the machine uses is refused (409).
 func (s *Server) handleSetTunnels(w http.ResponseWriter, r *http.Request) {
 	l, ok := s.leaseFor(w, r)
 	if !ok {
@@ -31,17 +31,17 @@ func (s *Server) handleSetTunnels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	room, err := s.store.Room(ctx, l.RoomID)
-	if err != nil {
-		s.internalError(w, "read room", err)
-		return
-	}
-	m, err := s.machineOf(room)
+	machine, err := s.store.Machine(ctx, l.MachineID)
 	if err != nil {
 		s.internalError(w, "read machine", err)
 		return
 	}
-	others, err := s.store.RoomTunnelPorts(ctx, l.RoomID, l.ID)
+	m, err := s.templateOf(machine)
+	if err != nil {
+		s.internalError(w, "read machine", err)
+		return
+	}
+	others, err := s.store.MachineTunnelPorts(ctx, l.MachineID, l.ID)
 	if err != nil {
 		s.internalError(w, "read tunnels", err)
 		return
@@ -51,33 +51,33 @@ func (s *Server) handleSetTunnels(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "read tunnels", err)
 		return
 	}
-	pool := slotConfig(m, l.SlotName).Ports
+	pool := roomConfig(m, l.RoomName).Ports
 	ports := map[string]int{}
 	used := map[int]bool{}
 	for _, t := range req {
-		if t.RoomPort == 0 {
+		if t.MachinePort == 0 {
 			continue
 		}
-		if others[t.RoomPort] {
-			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("room port %d is in use by another lease on the room", t.RoomPort))
+		if others[t.MachinePort] {
+			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("machine port %d is in use by another lease on the machine", t.MachinePort))
 			return
 		}
-		if used[t.RoomPort] {
-			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("room port %d is listed twice", t.RoomPort))
+		if used[t.MachinePort] {
+			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("machine port %d is listed twice", t.MachinePort))
 			return
 		}
-		// A port of another slot belongs to that slot's lease.
-		for _, sl := range m.Slots {
-			if sl.Name != l.SlotName && slices.Contains(sl.Ports, t.RoomPort) {
-				writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("room port %d belongs to slot %s of the room; choose another port", t.RoomPort, sl.Name))
+		// A port of another room belongs to that room's lease.
+		for _, sl := range m.Rooms {
+			if sl.Name != l.RoomName && slices.Contains(sl.Ports, t.MachinePort) {
+				writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("machine port %d belongs to room %s of the machine; choose another port", t.MachinePort, sl.Name))
 				return
 			}
 		}
-		ports[t.Name], used[t.RoomPort] = t.RoomPort, true
+		ports[t.Name], used[t.MachinePort] = t.MachinePort, true
 	}
 	var names []string
 	for _, t := range req {
-		if t.RoomPort == 0 {
+		if t.MachinePort == 0 {
 			names = append(names, t.Name)
 		}
 	}
@@ -98,7 +98,7 @@ func (s *Server) handleSetTunnels(w http.ResponseWriter, r *http.Request) {
 			free = free[1:]
 		}
 		if len(free) == 0 {
-			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("tunnel %s: no free pool port on the slot", n))
+			writeError(w, http.StatusConflict, "port_in_use", fmt.Sprintf("tunnel %s: no free pool port on the room", n))
 			return
 		}
 		ports[n], used[free[0]] = free[0], true

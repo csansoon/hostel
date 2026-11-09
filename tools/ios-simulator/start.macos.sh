@@ -2,7 +2,7 @@
 # Clones the golden simulator of each option of the lease, boots the clones,
 # and writes SIMULATOR_UDID (the first option) and SIMULATOR_UDIDS (all, in the
 # order of HOSTEL_TOOL_OPTIONS) to tool.env. The clones have the name
-# hostel-<slot>-<option>, so stop finds them without tool.env.
+# hostel-<room>-<option>, so stop finds them without tool.env.
 set -eu
 
 udids() {
@@ -13,10 +13,10 @@ all=""
 for d in $(echo "$HOSTEL_TOOL_OPTIONS" | tr ',' ' '); do
 	golden=$(udids "hostel-golden-$d-[0-9.]*" | head -n 1)
 	if [ -z "$golden" ]; then
-		echo "no golden simulator for $d; repair the room (hostel admin room repair) to run install again" >&2
+		echo "no golden simulator for $d; repair the machine (hostel admin machine repair) to run install again" >&2
 		exit 1
 	fi
-	name="hostel-$HOSTEL_SLOT-$d"
+	name="hostel-$HOSTEL_ROOM-$d"
 	for old in $(udids "$name"); do
 		xcrun simctl shutdown "$old" 2>/dev/null || true
 		xcrun simctl delete "$old"

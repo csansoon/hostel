@@ -1,7 +1,7 @@
 package config
 
 // agent-device (github.com/callstack/agent-device) drives simulators,
-// emulators, and desktops for agents. Hostel installs it on each room (mise
+// emulators, and desktops for agents. Hostel installs it on each machine (mise
 // agent_device) with its own Node, so the repository's Node does not matter.
 // T3 Code pins the same version.
 const (
@@ -9,11 +9,11 @@ const (
 	AgentDeviceNode    = "22.22.0"
 )
 
-// AgentDeviceEnabled reports whether rooms get agent-device (default true).
+// AgentDeviceEnabled reports whether machines get agent-device (default true).
 func (m *Mise) AgentDeviceEnabled() bool { return m.AgentDevice == nil || *m.AgentDevice }
 
 // winapp (github.com/microsoft/winappCli) drives Windows apps with UI
-// Automation ("winapp ui"). Windows rooms get this pinned build with
+// Automation ("winapp ui"). Windows machines get this pinned build with
 // agent_device; m7-implementation.md.
 const (
 	WinAppVersion = "0.7.1"

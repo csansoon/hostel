@@ -9,7 +9,7 @@ comma-separated):
   hostel run -- 'xcrun simctl install "$SIMULATOR_UDID" <path to the .app>'
   hostel run -- 'xcrun simctl launch "$SIMULATOR_UDID" <bundle id>'
 
-To tap, type, and read the screen, use agent-device on the room. Open the app
+To tap, type, and read the screen, use agent-device on the machine. Open the app
 on the lease's simulator once; later commands use that session:
 
   hostel run -- 'agent-device open <bundle id> --platform ios --udid "$SIMULATOR_UDID" --foreground'

@@ -19,7 +19,7 @@ turns. This does not scale:
    not available.
 
 Hostel moves builds and UI QA to remote machines. Each agent gets its own machine
-(or slot) for a short time. The agent's code stays local, and the API under test
+(or room) for a short time. The agent's code stays local, and the API under test
 still runs locally on the agent's machine. A tunnel connects the remote app to it.
 
 ## Typical use
@@ -28,7 +28,7 @@ An example: an app monorepo with an API and native iOS and Android clients. What
 it needs from Hostel:
 
 - **The local API:** each worktree runs its own API on its own port; the app on
-  the room reaches it through a tunnel (`hostel.toml`, `[tunnels.api]`).
+  the machine reaches it through a tunnel (`hostel.toml`, `[tunnels.api]`).
 - **iOS:** an Xcode build for a simulator (the tools `xcode` and
   `ios-simulator`, with an option for the Xcode version), install, launch,
   sign-in through the local API, and screenshots.
@@ -44,13 +44,13 @@ A first prototype in TypeScript stayed on the owner's Mac (never pushed). Its de
 
 - No central server. Each machine ran a broker (`harbor`) that the client called over
   SSH with one JSON request on stdin.
-- The machine configured its own slots and devices.
+- The machine configured its own rooms and devices.
 - The client made a snapshot commit with a temporary git index and pushed it over SSH
   to the machine.
 
 Why it was abandoned: an on-demand machine does not exist before a request, so it
 cannot keep a queue. A central server can. The owner then asked for three pieces
-(server, guests, rooms) and for a file push without git.
+(server, guests, machines) and for a file push without git.
 
 Lessons that still apply:
 
@@ -66,7 +66,7 @@ Lessons that still apply:
 Crabbox (crabbox.sh, `openclaw/crabbox`, Go, MIT) gives agents leases on remote
 machines, with working-tree sync, run, SSH, screenshots, VNC, and a provider
 contract over JSON. It was not selected because it has no queue or priority, no
-slots, no reverse tunnel, and its Namespace providers are Linux only. Its external
+rooms, no reverse tunnel, and its Namespace providers are Linux only. Its external
 provider contract inspired Hostel's `external` provider.
 
 ### Namespace spike (2026-10-20)

@@ -72,8 +72,8 @@ func DefaultServerID() string {
 	return id
 }
 
-// Template returns the commented server.toml that "hostel server init" writes.
-func Template(serverID, listen, tlsMode string, publicURLs []string, helperDir string) string {
+// ServerTOML returns the commented server.toml that "hostel server init" writes.
+func ServerTOML(serverID, listen, tlsMode string, publicURLs []string, helperDir string) string {
 	urls := make([]string, len(publicURLs))
 	for i, u := range publicURLs {
 		urls[i] = fmt.Sprintf("%q", u)
@@ -87,14 +87,14 @@ func Template(serverID, listen, tlsMode string, publicURLs []string, helperDir s
 		}
 	}
 	if helperDir != "" {
-		extra += fmt.Sprintf("helper_dir = %q   # the binaries for the rooms (install.sh --server)\n", helperDir)
+		extra += fmt.Sprintf("helper_dir = %q   # the binaries for the machines (install.sh --server)\n", helperDir)
 	}
 	return `#:schema ./hostel.schema.json
 # Hostel server: the keys that the server needs on this machine. Check the
 # file with "hostel admin config check"; docs/design.md, section 9, describes
 # all keys.
 
-server_id = "` + serverID + `"   # [a-z0-9]{1,20}; part of the names of created rooms
+server_id = "` + serverID + `"   # [a-z0-9]{1,20}; part of the names of created machines
 listen = "` + listen + `"
 # self-signed: HTTPS with the server's own certificate (clients pin its key);
 # off: plain HTTP behind a proxy that has TLS.

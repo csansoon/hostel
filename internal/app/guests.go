@@ -180,7 +180,7 @@ func (p *guestList) makeSelf(m *model) tea.Cmd {
 
 func (p *guestList) askInvite(m *model) tea.Cmd {
 	m.menu("Invite a guest", "The new guest is a:", []option{
-		{label: "Member", sub: "Uses rooms; ends own leases", key: "m",
+		{label: "Member", sub: "Uses machines; ends own leases", key: "m",
 			run: p.invite(m, protocol.InviteRequest{Role: protocol.RoleMember}, "Send this to the new member. They run it on their computer:")},
 		{label: "Admin", sub: "Also manages people and machines", key: "a",
 			run: p.invite(m, protocol.InviteRequest{Role: protocol.RoleAdmin}, "Send this to the new admin. They run it on their computer:")},
@@ -279,14 +279,14 @@ func newAddMachine() *addMachine {
 	return &addMachine{field: f}
 }
 
-func (p *addMachine) title() string { return "Add a room" }
+func (p *addMachine) title() string { return "Add a machine" }
 
 func (p *addMachine) typing() bool { return p.step <= 1 }
 
 func (p *addMachine) body(m *model) string {
 	w := contentWidth(m)
 	var b strings.Builder
-	b.WriteString(head("Add a room", "Connect a new machine to this server", ""))
+	b.WriteString(head("Add a machine", "Connect a new machine to this server", ""))
 	if p.step <= 1 {
 		b.WriteString(section(fmt.Sprintf("Step %d of 2", p.step+1), w, false))
 		if p.step > 0 {
@@ -300,7 +300,7 @@ func (p *addMachine) body(m *model) string {
 		b.WriteString(note("Making the machine code …"))
 	case 3:
 		b.WriteString(section("Machine code", w, false))
-		b.WriteString(line("Run one of these on the machine "+boldStyle.Render(clean(p.resp.Machine))+", as an administrator.") + "\n")
+		b.WriteString(line("Run one of these on the machine "+boldStyle.Render(clean(p.resp.Template))+", as an administrator.") + "\n")
 		b.WriteString(note("macOS or Linux"))
 		for _, l := range strings.Split(wrap(p.resp.Unix, w-3), "\n") {
 			b.WriteString(line(accentStyle.Render(l)))
@@ -310,7 +310,7 @@ func (p *addMachine) body(m *model) string {
 			b.WriteString(line(accentStyle.Render(l)))
 		}
 		b.WriteString("\n" + note("The code works once and ends at "+p.resp.ExpiresAt.Local().Format("2006-01-02 15:04")+"."))
-		b.WriteString(note("The machine shows in Rooms when it connects."))
+		b.WriteString(note("The machine shows in Machines when it connects."))
 		b.WriteString(note("Hostel prints these commands again when you quit, to copy them."))
 	}
 	if p.errMsg != "" {
@@ -329,7 +329,7 @@ func (p *addMachine) keys(m *model) []binding {
 func (p *addMachine) hint(m *model) string {
 	switch p.step {
 	case 0:
-		return "A short name for the machine: letters, digits, and dashes. The room is then home/<name>."
+		return "A short name for the machine: letters, digits, and dashes. The machine is then home/<name>."
 	case 1:
 		return "For example xcode, ios-simulator, android-emulator, jdk:21; empty when it gives only its OS."
 	}

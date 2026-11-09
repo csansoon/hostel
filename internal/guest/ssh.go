@@ -25,7 +25,7 @@ const dialTimeout = 30 * time.Second
 
 // ErrConnLost: the SSH connection to the gateway failed or dropped. The remote
 // command can still run (jobs continue).
-var ErrConnLost = errors.New("connection to the room lost")
+var ErrConnLost = errors.New("connection to the machine lost")
 
 // Conn is an SSH connection to the gateway for one lease.
 type Conn struct {
@@ -88,21 +88,21 @@ func gatewayTarget(addr string) (string, *tls.Config, error) {
 	return addr, tlsConfig, err
 }
 
-// helperCmd returns the command line of a helper command for the lease slot.
+// helperCmd returns the command line of a helper command for the lease room.
 // The gateway wraps it in the helper, which runs it with sh, or with
 // PowerShell on Windows.
 func (c *Conn) helperCmd(args ...string) string {
 	kind := shell.SH
-	if c.access.RoomOS == config.OSWindows {
+	if c.access.MachineOS == config.OSWindows {
 		kind = shell.PowerShell
 	}
-	cmd, _ := shell.Command(kind, c.access.HelperPath, append(append([]string{"room"}, args...), "--slot", c.access.Slot)...)
+	cmd, _ := shell.Command(kind, c.access.HelperPath, append(append([]string{"helper"}, args...), "--room", c.access.Room)...)
 	return cmd
 }
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// Run runs a command on the room (the gateway wraps it in the lease
+// Run runs a command on the machine (the gateway wraps it in the lease
 // environment). It returns the exit code; err is set if the connection failed.
 func (c *Conn) Run(ctx context.Context, cmd string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	sess, err := c.client.NewSession()
@@ -157,11 +157,11 @@ func (c *Conn) Helper(ctx context.Context, args []string, in, out any) error {
 		if json.Unmarshal(stdout.Bytes(), &he) == nil && he.Error != "" {
 			return errors.New(he.Error)
 		}
-		return fmt.Errorf("room command %s failed with code %d: %s", args[0], code, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("machine command %s failed with code %d: %s", args[0], code, strings.TrimSpace(stderr.String()))
 	}
 	if out != nil {
 		if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
-			return fmt.Errorf("room command %s: decode output: %w", args[0], err)
+			return fmt.Errorf("machine command %s: decode output: %w", args[0], err)
 		}
 	}
 	return nil

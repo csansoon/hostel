@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/csansoon/hostel/internal/cli"
+	"github.com/csansoon/hostel/internal/helper"
 	"github.com/csansoon/hostel/internal/protocol"
-	"github.com/csansoon/hostel/internal/room"
 )
 
 // Job states that run and attach report.
@@ -142,7 +142,7 @@ func sleepUntil(ctx context.Context, d time.Duration, deadline time.Time) bool {
 // drops during the start, it connects again and repeats the start with the same
 // ID, so the job runs once and the guest knows its ID.
 func startJob(ctx context.Context, l *lease, req protocol.JobRequest, deadline time.Time) (string, error) {
-	req.JobID = room.NewJobID()
+	req.JobID = helper.NewJobID()
 	for {
 		conn, err := Dial(ctx, l.st, "cmd")
 		if err == nil {

@@ -28,31 +28,31 @@ import (
 	"github.com/csansoon/hostel/internal/tlspin"
 )
 
-const machineUsage = `hostel: usage:
-  hostel machine join <machine code> [--no-service]   add this machine as a room (as an administrator)
+const templateUsage = `hostel: usage:
+  hostel machine join <machine code> [--no-service]   add this computer as a machine (as an administrator)
   hostel machine connect --server <url> --token-file <file> [--server-key k] [--ssh 127.0.0.1:22]
   hostel machine update                               replace the binary of the connect service with the server's (as an administrator)
-An admin makes the code with "hostel config rooms add <name>".`
+An admin makes the code with "hostel config machines add <name>".`
 
-// machineCmd is "hostel machine": commands on a room machine (M9).
-func machineCmd(args []string, stdout, stderr io.Writer) int {
+// templateCmd is "hostel machine": commands on a machine (M9).
+func templateCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
 		case "join":
 			return machineJoin(args[1:], stdout, stderr)
 		case "connect":
-			return roomCmd(append([]string{"connect"}, args[1:]...), stdout, stderr)
+			return helperCmd(append([]string{"connect"}, args[1:]...), stdout, stderr)
 		case "update":
 			return machineUpdate(args[1:], stdout, stderr)
 		}
 	}
-	fmt.Fprintln(stderr, machineUsage)
+	fmt.Fprintln(stderr, templateUsage)
 	return 2
 }
 
-// roomUser is the local user that the server logs in as (no administrator
+// machineUser is the local user that the server logs in as (no administrator
 // rights).
-const roomUser = "hostel"
+const machineUser = "hostel"
 
 // runSetup runs a setup command with a deadline; the error has its output.
 func runSetup(name string, args ...string) error {
@@ -97,7 +97,7 @@ type joinState struct {
 	Code            string `json:"code"`
 	Server          string `json:"server"`
 	Key             string `json:"key,omitempty"`
-	Machine         string `json:"machine"`
+	Template        string `json:"template"`
 	ServerPublicKey string `json:"server_public_key"`
 }
 
@@ -106,7 +106,7 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 	noService := fs.Bool("no-service", false, "do not install the service; print the command that it would run")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 1 {
-		fmt.Fprintln(stderr, machineUsage)
+		fmt.Fprintln(stderr, templateUsage)
 		return 2
 	}
 	code, err := invite.Decode(pos[0])
@@ -127,12 +127,12 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	dir := serviceDir(osName)
-	tokenFile := filepath.Join(dir, "room-token")
+	tokenFile := filepath.Join(dir, "machine-token")
 	stateFile := filepath.Join(dir, "join.json")
 
-	fmt.Fprintf(stdout, "1. The room user %q and the directory %s.\n", roomUser, dir)
-	if err := ensureRoomUser(osName); err != nil {
-		return fail("create the user "+roomUser, err)
+	fmt.Fprintf(stdout, "1. The machine user %q and the directory %s.\n", machineUser, dir)
+	if err := ensureMachineUser(osName); err != nil {
+		return fail("create the user "+machineUser, err)
 	}
 	if err := secureServiceDir(osName, dir); err != nil {
 		return fail("prepare "+dir, err)
@@ -142,8 +142,8 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 	_, tokenErr := os.Stat(tokenFile)
 	sum := sha256.Sum256(code.Secret)
 	codeHash := hex.EncodeToString(sum[:])
-	if stateErr == nil && tokenErr == nil && json.Unmarshal(data, &st) == nil && st.Machine != "" && st.Code == codeHash {
-		fmt.Fprintf(stdout, "2. Joined already as %s (%s).\n", st.Machine, stateFile)
+	if stateErr == nil && tokenErr == nil && json.Unmarshal(data, &st) == nil && st.Template != "" && st.Code == codeHash {
+		fmt.Fprintf(stdout, "2. Joined already as %s (%s).\n", st.Template, stateFile)
 	} else {
 		fmt.Fprintln(stdout, "2. Join the server.")
 		resp, server, key, err := joinServer(code, osName)
@@ -151,21 +151,21 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "hostel: join:", err)
 			return 1
 		}
-		st = joinState{Code: codeHash, Server: server, Key: key, Machine: resp.Machine, ServerPublicKey: resp.ServerPublicKey}
+		st = joinState{Code: codeHash, Server: server, Key: key, Template: resp.Template, ServerPublicKey: resp.ServerPublicKey}
 		// The code is used now: without these files, a second run cannot
 		// continue.
 		lost := func(what string, err error) int {
-			fmt.Fprintf(stderr, "hostel: %s: %v\nThe server added %s, but this machine could not save its token. Remove the machine (hostel config rooms remove %s), ask for a new code, fix the error, and run the new command.\n", what, err, resp.Machine, resp.Machine)
+			fmt.Fprintf(stderr, "hostel: %s: %v\nThe server added %s, but this machine could not save its token. Remove the machine (hostel config machines remove %s), ask for a new code, fix the error, and run the new command.\n", what, err, resp.Template, resp.Template)
 			return 1
 		}
 		if err := writeToken(osName, tokenFile, resp.Token, !*noService); err != nil {
-			return lost("write the room token", err)
+			return lost("write the machine token", err)
 		}
 		data, _ := json.MarshalIndent(st, "", "  ")
 		if err := os.WriteFile(stateFile, append(data, '\n'), 0o644); err != nil {
 			return lost("write "+stateFile, err)
 		}
-		fmt.Fprintf(stdout, "   The server %s added the machine %s.\n", resp.ServerID, resp.Machine)
+		fmt.Fprintf(stdout, "   The server %s added the machine %s.\n", resp.ServerID, resp.Template)
 	}
 
 	if !*noService {
@@ -174,7 +174,7 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	fmt.Fprintln(stdout, "3. The server's key for the room user.")
+	fmt.Fprintln(stdout, "3. The server's key for the machine user.")
 	if err := installServerKey(osName, st.ServerPublicKey); err != nil {
 		return fail("install the server key", err)
 	}
@@ -196,15 +196,15 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 		return fail("install the service", err)
 	}
 
-	fmt.Fprintf(stdout, "\nDone: %s connects to %s. \"hostel status\" shows its room within a minute.\n", st.Machine, st.Server)
+	fmt.Fprintf(stdout, "\nDone: %s connects to %s. \"hostel status\" shows its machine within a minute.\n", st.Template, st.Server)
 	switch osName {
 	case config.OSMacOS:
-		fmt.Fprintln(stdout, `Steps that only a person can do (docs/static-room-setup.md):
+		fmt.Fprintln(stdout, `Steps that only a person can do (docs/static-machine-setup.md):
   - System Settings > General > Sharing > Remote Login: on, for the user "hostel".
   - For iOS: install Xcode and its iOS Simulator runtime.
   - For desktop leases (label "desktop"): sign in "hostel" to the desktop, and set "Require password" to Never.`)
 	case config.OSWindows:
-		fmt.Fprintln(stdout, `Steps that only a person can do (docs/static-room-setup.md):
+		fmt.Fprintln(stdout, `Steps that only a person can do (docs/static-machine-setup.md):
   - OpenSSH Server must run and start automatically (Get-Service sshd).
   - For desktop leases (label "desktop"): the "Hostel desktop" task, section "Desktop".`)
 	default:
@@ -250,31 +250,31 @@ func randomPassword() string {
 	return base64.RawURLEncoding.EncodeToString(b) + "aA1!"
 }
 
-// ensureRoomUser creates the room user if it is missing: no administrator
+// ensureMachineUser creates the machine user if it is missing: no administrator
 // rights, and no password that anybody knows (the server logs in with its key).
-func ensureRoomUser(osName string) error {
+func ensureMachineUser(osName string) error {
 	switch osName {
 	case config.OSLinux:
-		if runSetup("id", roomUser) == nil {
+		if runSetup("id", machineUser) == nil {
 			return nil
 		}
-		if err := runSetup("useradd", "--create-home", "--shell", "/bin/bash", roomUser); err != nil {
+		if err := runSetup("useradd", "--create-home", "--shell", "/bin/bash", machineUser); err != nil {
 			return err
 		}
 		// "*": no password login, but key login (a locked "!" account can fail
 		// with PAM).
-		return runSetup("usermod", "--password", "*", roomUser)
+		return runSetup("usermod", "--password", "*", machineUser)
 	case config.OSMacOS:
-		if runSetup("id", roomUser) == nil {
+		if runSetup("id", machineUser) == nil {
 			return nil
 		}
 		// sysadminctl takes the password as an argument: the error must not
 		// show the arguments.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if out, err := exec.CommandContext(ctx, "sysadminctl", "-addUser", roomUser, "-fullName", "Hostel",
+		if out, err := exec.CommandContext(ctx, "sysadminctl", "-addUser", machineUser, "-fullName", "Hostel",
 			"-password", randomPassword()).CombinedOutput(); err != nil {
-			return fmt.Errorf("sysadminctl -addUser %s: %v: %s", roomUser, err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("sysadminctl -addUser %s: %v: %s", machineUser, err, strings.TrimSpace(string(out)))
 		}
 		return nil
 	case config.OSWindows:
@@ -290,10 +290,10 @@ func ensureRoomUser(osName string) error {
 	return fmt.Errorf("unsupported OS %s", osName)
 }
 
-// installServerKey puts the server's public key into the room user's
+// installServerKey puts the server's public key into the machine user's
 // authorized_keys and authorized_keys.base (cleanup restores the first from
-// the second). The room user owns these files, and a lease can make them
-// links: on macOS and Linux the files are written as the room user itself, so
+// the second). The machine user owns these files, and a lease can make them
+// links: on macOS and Linux the files are written as the machine user itself, so
 // a link cannot make root write elsewhere.
 func installServerKey(osName, key string) error {
 	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key))
@@ -316,9 +316,9 @@ icacls "$h\hostel" /grant 'hostel:(OI)(CI)F' | Out-Null`, "HOSTEL_KEY="+key)
 	// The key has only letters, digits, "+/=", "-", and a space.
 	script := `umask 077; mkdir -p "$HOME/.ssh" "$HOME/hostel" && for f in "$HOME/.ssh/authorized_keys" "$HOME/hostel/authorized_keys.base"; do touch "$f" && { grep -qxF '` + key + `' "$f" || printf '%s\n' '` + key + `' >> "$f"; } || exit 1; done`
 	if osName == config.OSLinux {
-		return runSetup("runuser", "-l", roomUser, "-c", script)
+		return runSetup("runuser", "-l", machineUser, "-c", script)
 	}
-	return runSetup("sudo", "-u", roomUser, "-H", "sh", "-c", script)
+	return runSetup("sudo", "-u", machineUser, "-H", "sh", "-c", script)
 }
 
 // serviceDir has the token, the join state, and the binary of the service;
@@ -331,7 +331,7 @@ func serviceDir(osName string) string {
 }
 
 // secureServiceDir creates the service directory, or checks that an
-// administrator owns it (the room user must not own it: the owner can read
+// administrator owns it (the machine user must not own it: the owner can read
 // the token and replace the service's binary).
 func secureServiceDir(osName, dir string) error {
 	if osName == config.OSWindows {
@@ -401,11 +401,11 @@ func installBinary(osName, dir string) (string, error) {
 	}
 }
 
-// connectAccount is the account of the service on Linux: not the room user,
+// connectAccount is the account of the service on Linux: not the machine user,
 // which a lease controls.
 const connectAccount = "hostel-connect"
 
-// writeToken writes the room token so that only the service's account and
+// writeToken writes the machine token so that only the service's account and
 // administrators can read it.
 func writeToken(osName, file, token string, service bool) error {
 	if err := os.WriteFile(file, []byte(token+"\n"), 0o600); err != nil {

@@ -29,7 +29,7 @@ func TestProviderLogin(t *testing.T) {
 	e.writeConfig(serverHeader())
 	s := e.startServer("")
 
-	doc := s.configDoc().Document + "\n[providers.ns]\nkind = \"namespace\"\n" + instanceMachine
+	doc := s.configDoc().Document + "\n[providers.ns]\nkind = \"namespace\"\n" + instanceTemplate
 	if r := e.applyDoc(doc); r.code != 1 || !strings.Contains(r.stderr, "nsc CLI is not ready") {
 		t.Fatalf("a Namespace provider before the login: %s", r)
 	}

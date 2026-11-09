@@ -87,8 +87,8 @@ func (s *Server) pass(ctx context.Context) error {
 	if err := s.checkPresence(ctx); err != nil {
 		return fmt.Errorf("presence: %w", err)
 	}
-	if err := s.refreshRooms(ctx); err != nil {
-		return fmt.Errorf("rooms after a configuration change: %w", err)
+	if err := s.refreshMachines(ctx); err != nil {
+		return fmt.Errorf("machines after a configuration change: %w", err)
 	}
 	if err := s.warm(ctx); err != nil {
 		return fmt.Errorf("warm policy: %w", err)
@@ -96,15 +96,15 @@ func (s *Server) pass(ctx context.Context) error {
 	if err := s.schedule(ctx); err != nil {
 		return fmt.Errorf("schedule: %w", err)
 	}
-	rooms, err := s.store.Rooms(ctx)
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return err
 	}
-	for _, r := range rooms {
+	for _, r := range machines {
 		switch r.State {
-		case protocol.RoomCreating, protocol.RoomProvisioning, protocol.RoomResuming, protocol.RoomStopping, protocol.RoomDestroying:
+		case protocol.MachineCreating, protocol.MachineProvisioning, protocol.MachineResuming, protocol.MachineStopping, protocol.MachineDestroying:
 			id := r.ID
-			s.workers.start(ctx, fmt.Sprintf("room:%d", id), func(ctx context.Context) { s.runRoom(ctx, id) }, s.kickScheduler)
+			s.workers.start(ctx, fmt.Sprintf("machine:%d", id), func(ctx context.Context) { s.runMachine(ctx, id) }, s.kickScheduler)
 		}
 	}
 	leases, err := s.store.ActiveLeases(ctx)
@@ -127,17 +127,17 @@ func (s *Server) pass(ctx context.Context) error {
 	return nil
 }
 
-var roomNameRE = regexp.MustCompile(`^hostel-([a-z0-9]+)-([0-9]+)$`)
+var machineNameRE = regexp.MustCompile(`^hostel-([a-z0-9]+)-([0-9]+)$`)
 
-// reconcile (design, section 7) compares each on-demand provider's rooms with
-// the database (static rooms that were unreachable come back through the
-// presence check, presence.go): unknown rooms
-// with this server's prefix are destroyed; database rooms that the provider
-// lost are marked destroyed. It never acts on rooms without the prefix.
+// reconcile (design, section 7) compares each on-demand provider's machines with
+// the database (static machines that were unreachable come back through the
+// presence check, presence.go): unknown machines
+// with this server's prefix are destroyed; database machines that the provider
+// lost are marked destroyed. It never acts on machines without the prefix.
 func (s *Server) reconcile(ctx context.Context) error {
 	// One configuration for the whole pass.
 	lc := s.live.Load()
-	rooms, err := s.store.Rooms(ctx)
+	machines, err := s.store.Machines(ctx)
 	if err != nil {
 		return err
 	}
@@ -151,98 +151,98 @@ func (s *Server) reconcile(ctx context.Context) error {
 		listed, err := p.List(lctx, prefix)
 		cancel()
 		if err != nil {
-			s.log.Warn("reconcile: list rooms", "provider", name, "err", err)
+			s.log.Warn("reconcile: list machines", "provider", name, "err", err)
 			continue
 		}
 		seen := map[int64]bool{}
 		for _, ref := range listed {
-			m := roomNameRE.FindStringSubmatch(ref.Name)
+			m := machineNameRE.FindStringSubmatch(ref.Name)
 			if m == nil || m[1] != lc.cfg.ServerID {
 				continue
 			}
 			id, _ := strconv.ParseInt(m[2], 10, 64)
 			seen[id] = true
-			r, err := s.store.Room(ctx, id)
-			if err == nil && r.State != protocol.RoomDestroyed && r.Provider == name {
-				// A second provider room with the name, for example from a
+			r, err := s.store.Machine(ctx, id)
+			if err == nil && r.State != protocol.MachineDestroyed && r.Provider == name {
+				// A second provider machine with the name, for example from a
 				// create call of a killed server that ended late. Provider IDs
 				// are set only at creation.
-				if r.State == protocol.RoomCreating || ref.ID == "" || r.ProviderRef == "" || ref.ID == r.ProviderRef {
+				if r.State == protocol.MachineCreating || ref.ID == "" || r.ProviderRef == "" || ref.ID == r.ProviderRef {
 					continue
 				}
-				s.log.Warn("reconcile: destroy a second provider room of a room", "provider", name, "room", ref.Name, "id", ref.ID)
+				s.log.Warn("reconcile: destroy a second provider machine of a machine", "provider", name, "machine", ref.Name, "id", ref.ID)
 			} else {
-				s.log.Warn("reconcile: destroy a room that the database does not track", "provider", name, "room", ref.Name)
+				s.log.Warn("reconcile: destroy a machine that the database does not track", "provider", name, "machine", ref.Name)
 			}
 			dctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
 			if err := p.Destroy(dctx, ref); err != nil && !errors.Is(err, provider.ErrNotFound) {
-				s.log.Warn("reconcile: destroy", "room", ref.Name, "err", err)
+				s.log.Warn("reconcile: destroy", "machine", ref.Name, "err", err)
 			}
 			cancel()
 		}
-		for _, r := range rooms {
-			if r.Provider != name || seen[r.ID] || r.State == protocol.RoomCreating {
+		for _, r := range machines {
+			if r.Provider != name || seen[r.ID] || r.State == protocol.MachineCreating {
 				continue
 			}
-			s.log.Warn("reconcile: the provider lost a room", "room_id", r.ID, "room", r.Name)
+			s.log.Warn("reconcile: the provider lost a machine", "machine_id", r.ID, "machine", r.Name)
 			s.markLost(ctx, r, "the provider no longer lists it")
 		}
 	}
 	return nil
 }
 
-// warm applies the warm policy (design, section 17): an idle on-demand room
-// stops (or is destroyed) after warm_running; a stopped room is destroyed after
-// warm_stopped; idle rooms that are broken or have too little lifetime left
+// warm applies the warm policy (design, section 17): an idle on-demand machine
+// stops (or is destroyed) after warm_running; a stopped machine is destroyed after
+// warm_stopped; idle machines that are broken or have too little lifetime left
 // are destroyed.
 func (s *Server) warm(ctx context.Context) error {
+	machines, err := s.store.Machines(ctx)
+	if err != nil {
+		return err
+	}
+	idle, err := s.idleMachines(ctx, machines)
+	if err != nil {
+		return err
+	}
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return err
 	}
-	idle, err := s.idleRooms(ctx, rooms)
-	if err != nil {
-		return err
-	}
-	slots, err := s.store.Slots(ctx)
-	if err != nil {
-		return err
-	}
-	// A room is busy while a slot has an active lease. A broken slot keeps the
+	// A machine is busy while a room has an active lease. A broken room keeps the
 	// ID of its ended lease, so lease_id alone does not count.
 	busy := map[int64]bool{}
-	for _, sl := range slots {
+	for _, sl := range rooms {
 		switch sl.State {
-		case protocol.SlotAssigned, protocol.SlotPreparing, protocol.SlotLeased, protocol.SlotCleaning:
-			busy[sl.RoomID] = true
+		case protocol.RoomAssigned, protocol.RoomPreparing, protocol.RoomLeased, protocol.RoomCleaning:
+			busy[sl.MachineID] = true
 		}
 	}
 	now := time.Now()
-	for _, r := range rooms {
-		m := s.config().Machine(r.Provider + "/" + r.Machine)
+	for _, r := range machines {
+		m := s.config().Template(r.Provider + "/" + r.Template)
 		if m == nil || !m.OnDemand() {
 			continue
 		}
 		switch {
-		case r.State == protocol.RoomBroken && !busy[r.ID]:
-			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomBroken}, protocol.RoomDestroying, r.BrokenReason, now)
-		case r.State == protocol.RoomRunning && !idle[r.ID]:
+		case r.State == protocol.MachineBroken && !busy[r.ID]:
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineBroken}, protocol.MachineDestroying, r.BrokenReason, now)
+		case r.State == protocol.MachineRunning && !idle[r.ID]:
 			if !r.WarmUntil.IsZero() {
 				s.store.SetWarmUntil(ctx, r.ID, time.Time{})
 			}
-		case r.State == protocol.RoomRunning && m.MaxLifetime.D() > 0 &&
+		case r.State == protocol.MachineRunning && m.MaxLifetime.D() > 0 &&
 			r.CreatedAt.Add(m.MaxLifetime.D()).Sub(now) < m.MaxLease.D()+5*time.Minute:
-			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning}, protocol.RoomDestroying, "too little lifetime left for a lease", now)
-		case r.State == protocol.RoomRunning && r.WarmUntil.IsZero():
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, protocol.MachineDestroying, "too little lifetime left for a lease", now)
+		case r.State == protocol.MachineRunning && r.WarmUntil.IsZero():
 			s.store.SetWarmUntil(ctx, r.ID, now.Add(m.WarmRunning.D()))
-		case r.State == protocol.RoomRunning && now.After(r.WarmUntil):
-			to := protocol.RoomDestroying
-			if s.providerMap()[r.Provider].Capabilities(r.Machine).CanStop {
-				to = protocol.RoomStopping
+		case r.State == protocol.MachineRunning && now.After(r.WarmUntil):
+			to := protocol.MachineDestroying
+			if s.providerMap()[r.Provider].Capabilities(r.Template).CanStop {
+				to = protocol.MachineStopping
 			}
-			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomRunning}, to, "idle for warm_running", now)
-		case r.State == protocol.RoomStopped && !r.WarmUntil.IsZero() && now.After(r.WarmUntil):
-			s.store.SetRoomState(ctx, r.ID, []string{protocol.RoomStopped}, protocol.RoomDestroying, "stopped for warm_stopped", now)
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, to, "idle for warm_running", now)
+		case r.State == protocol.MachineStopped && !r.WarmUntil.IsZero() && now.After(r.WarmUntil):
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopped}, protocol.MachineDestroying, "stopped for warm_stopped", now)
 		}
 	}
 	return nil

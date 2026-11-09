@@ -1,4 +1,4 @@
-// Command hostel is the single binary for the Hostel server, guests, and rooms.
+// Command hostel is the single binary for the Hostel server, guests, and machines.
 package main
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/csansoon/hostel/internal/client"
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/guest"
-	"github.com/csansoon/hostel/internal/room"
+	"github.com/csansoon/hostel/internal/helper"
 	"github.com/csansoon/hostel/internal/update"
 	"github.com/csansoon/hostel/internal/version"
 )
@@ -28,7 +28,7 @@ type command struct {
 var commands = []command{
 	{name: "connect", summary: "Connect this computer to a Hostel server with an invite code", run: connectCmd},
 	{name: "disconnect", summary: "Remove this computer's connection", run: disconnectCmd},
-	{name: "tools", summary: "List the tools of the machines with free slots, waiting leases, and estimated wait", run: guest.Tools},
+	{name: "tools", summary: "List the tools of the machines with free rooms, waiting leases, and estimated wait", run: guest.Tools},
 	{name: "acquire", summary: "Create or continue the lease of this worktree, with the tools that it needs", run: guest.Acquire},
 	{name: "info", summary: "Print the facts of the lease: machine, tools, and started screens", run: guest.Info},
 	{name: "sync", summary: "Send changed files to the lease again", run: guest.Sync},
@@ -38,25 +38,27 @@ var commands = []command{
 	{name: "stop", summary: "Stop a job", run: guest.Stop},
 	{name: "screenshot", summary: "Take a screenshot of a screen tool of the lease", run: guest.Screenshot},
 	{name: "cp", summary: "Copy files to or from the lease work directory", run: guest.Cp},
-	{name: "diff", summary: "Show changes on the room since the last sync", run: guest.Diff},
+	{name: "diff", summary: "Show changes on the machine since the last sync", run: guest.Diff},
 	{name: "ssh", summary: "Open an interactive shell in the lease", run: guest.SSH},
 	{name: "ssh-config", summary: "Write an ssh_config file for the lease", run: guest.SSHConfig},
-	{name: "tunnel", summary: "List or change tunnels from the room to this machine", run: guest.Tunnel},
-	{name: "forward", summary: "Forward a local port to a port on the room", run: guest.Forward},
-	{name: "status", summary: "Show the rooms, leases, and the waiting line; \"hostel status <room|machine|tool>\" shows details", run: statusCmd},
+	{name: "tunnel", summary: "List or change tunnels from the machine to this computer", run: guest.Tunnel},
+	{name: "forward", summary: "Forward a local port to a port on the machine", run: guest.Forward},
+	{name: "status", summary: "Show the machines, leases, and the waiting line; \"hostel status <machine|tool>\" shows details", run: statusCmd},
 	{name: "ls", hidden: true, run: statusCmd},
-	{name: "rooms", hidden: true, run: statusCmd},
+	{name: "machines", hidden: true, run: statusCmd},
 	{name: "release", summary: "End the lease", run: guest.Release},
 	{name: "update", summary: "Replace this hostel binary with the latest release", run: updateCmd},
 	{name: "agent-guide", summary: "Print usage instructions for coding agents", run: guest.AgentGuide},
 	{name: "config", summary: "The server configuration: machines, providers, settings, users (admins change it)", run: configCmd},
-	{name: "admin", summary: "Admin commands: room tokens, leases, rooms, configuration", run: adminCmd},
+	{name: "admin", summary: "Admin commands: machine tokens, leases, machines, configuration", run: adminCmd},
 	{name: "server", summary: "Initialize or run the Hostel server", run: serverCmd},
 	{name: "ports", hidden: true, run: guest.Ports},
 	{name: "keep-place", hidden: true, run: guest.KeepPlace},
 	{name: "gateway-proxy", hidden: true, run: guest.GatewayProxy},
-	{name: "machine", summary: "On a room machine: join a server (hostel machine join <code>)", run: machineCmd},
-	{name: "room", hidden: true, run: roomCmd},
+	{name: "machine", summary: "On a machine: join a server (hostel machine join <code>)", run: templateCmd},
+	{name: "helper", hidden: true, run: helperCmd},
+	// A desktop task that was installed before M10g runs "room desktop serve".
+	{name: "room", hidden: true, run: helperCmd},
 }
 
 func main() {
@@ -115,11 +117,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // needsConnection: commands that talk to a server need a connection; these do
-// not (they run on the server or a room machine, or set up the connection).
+// not (they run on the server or a machine, or set up the connection).
 func needsConnection(name string, args []string) bool {
 	switch name {
 	// The others report the missing connection themselves.
-	case "connect", "disconnect", "server", "room", "machine", "agent-guide", "ports", "gateway-proxy", "update":
+	case "connect", "disconnect", "server", "helper", "room", "machine", "agent-guide", "ports", "gateway-proxy", "update":
 		return false
 	case "admin":
 		// "admin config check|schema" is local; without a subcommand, admin
@@ -145,6 +147,6 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "Run \"hostel --version\" to print the version.")
 }
 
-func roomCmd(args []string, stdout, stderr io.Writer) int {
-	return room.Main(args, os.Stdin, stdout, stderr)
+func helperCmd(args []string, stdout, stderr io.Writer) int {
+	return helper.Main(args, os.Stdin, stdout, stderr)
 }

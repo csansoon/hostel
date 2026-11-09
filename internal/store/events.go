@@ -8,42 +8,42 @@ import (
 )
 
 type Event struct {
-	ID      int64
-	Time    time.Time
-	LeaseID string
-	RoomID  int64
-	Kind    string
-	Message string
+	ID        int64
+	Time      time.Time
+	LeaseID   string
+	MachineID int64
+	Kind      string
+	Message   string
 }
 
-// eventRoom is the room of an event: the given room, else the room of the
-// lease at this time (so the room details show the lease's events on this
-// room only, also when the lease moves to another room later).
-const eventRoom = `CASE WHEN ? != 0 THEN ? ELSE COALESCE((SELECT room_id FROM leases WHERE id = ?), 0) END`
+// eventMachine is the machine of an event: the given machine, else the machine of the
+// lease at this time (so the machine details show the lease's events on this
+// machine only, also when the lease moves to another machine later).
+const eventMachine = `CASE WHEN ? != 0 THEN ? ELSE COALESCE((SELECT machine_id FROM leases WHERE id = ?), 0) END`
 
-func insertEvent(ctx context.Context, tx *sql.Tx, now time.Time, leaseID string, roomID int64, kind, msg string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO events (time, lease_id, room_id, kind, message) VALUES (?, ?, `+eventRoom+`, ?, ?)`,
-		now.UnixMilli(), leaseID, roomID, roomID, leaseID, kind, msg)
+func insertEvent(ctx context.Context, tx *sql.Tx, now time.Time, leaseID string, machineID int64, kind, msg string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO events (time, lease_id, machine_id, kind, message) VALUES (?, ?, `+eventMachine+`, ?, ?)`,
+		now.UnixMilli(), leaseID, machineID, machineID, leaseID, kind, msg)
 	return err
 }
 
 // AddEvent appends an event.
-func (s *Store) AddEvent(ctx context.Context, now time.Time, leaseID string, roomID int64, kind, msg string) error {
-	return s.tx(ctx, func(tx *sql.Tx) error { return insertEvent(ctx, tx, now, leaseID, roomID, kind, msg) })
+func (s *Store) AddEvent(ctx context.Context, now time.Time, leaseID string, machineID int64, kind, msg string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error { return insertEvent(ctx, tx, now, leaseID, machineID, kind, msg) })
 }
 
 // AddEventBy appends an event that a user caused (an admin action).
-func (s *Store) AddEventBy(ctx context.Context, now time.Time, leaseID string, roomID int64, kind, msg string, userID int64) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO events (time, lease_id, room_id, kind, message, user_id) VALUES (?, ?, `+eventRoom+`, ?, ?, ?)`,
-		now.UnixMilli(), leaseID, roomID, roomID, leaseID, kind, msg, userID)
+func (s *Store) AddEventBy(ctx context.Context, now time.Time, leaseID string, machineID int64, kind, msg string, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO events (time, lease_id, machine_id, kind, message, user_id) VALUES (?, ?, `+eventMachine+`, ?, ?, ?)`,
+		now.UnixMilli(), leaseID, machineID, machineID, leaseID, kind, msg, userID)
 	return err
 }
 
-// RoomEvents returns the last n events of a room, the oldest first (with the
-// events of the leases while they were on the room).
-func (s *Store) RoomEvents(ctx context.Context, roomID int64, n int) ([]Event, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, time, lease_id, room_id, kind, message FROM
-		(SELECT * FROM events WHERE room_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, roomID, n)
+// MachineEvents returns the last n events of a machine, the oldest first (with the
+// events of the leases while they were on the machine).
+func (s *Store) MachineEvents(ctx context.Context, machineID int64, n int) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, time, lease_id, machine_id, kind, message FROM
+		(SELECT * FROM events WHERE machine_id = ? ORDER BY id DESC LIMIT ?) ORDER BY id`, machineID, n)
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
 	}
@@ -52,7 +52,7 @@ func (s *Store) RoomEvents(ctx context.Context, roomID int64, n int) ([]Event, e
 	for rows.Next() {
 		var e Event
 		var t int64
-		if err := rows.Scan(&e.ID, &t, &e.LeaseID, &e.RoomID, &e.Kind, &e.Message); err != nil {
+		if err := rows.Scan(&e.ID, &t, &e.LeaseID, &e.MachineID, &e.Kind, &e.Message); err != nil {
 			return nil, err
 		}
 		e.Time = time.UnixMilli(t)
@@ -63,7 +63,7 @@ func (s *Store) RoomEvents(ctx context.Context, roomID int64, n int) ([]Event, e
 
 // Events returns the last n events, oldest first.
 func (s *Store) Events(ctx context.Context, n int) ([]Event, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, time, lease_id, room_id, kind, message FROM
+	rows, err := s.db.QueryContext(ctx, `SELECT id, time, lease_id, machine_id, kind, message FROM
 		(SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id`, n)
 	if err != nil {
 		return nil, fmt.Errorf("list events: %w", err)
@@ -73,7 +73,7 @@ func (s *Store) Events(ctx context.Context, n int) ([]Event, error) {
 	for rows.Next() {
 		var e Event
 		var t int64
-		if err := rows.Scan(&e.ID, &t, &e.LeaseID, &e.RoomID, &e.Kind, &e.Message); err != nil {
+		if err := rows.Scan(&e.ID, &t, &e.LeaseID, &e.MachineID, &e.Kind, &e.Message); err != nil {
 			return nil, err
 		}
 		e.Time = time.UnixMilli(t)

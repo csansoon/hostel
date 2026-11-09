@@ -40,6 +40,7 @@ type Server struct {
 	applyMu sync.Mutex
 	// joinMu: one machine join at a time.
 	joinMu  sync.Mutex
+	usage   usageCache
 	schedMu sync.Mutex
 	// localData is server.toml at the start: its keys change only with a
 	// restart.
@@ -53,8 +54,8 @@ type Server struct {
 	notify     notifier
 	full       fullFlags
 	gateway    *gateway.Gateway
-	// rooms are the connections of rooms behind NAT.
-	rooms *gateway.RoomConns
+	// machines are the connections of machines behind NAT.
+	machines *gateway.MachineConns
 	// gatewayAddr is the gateway address for guests.
 	gatewayAddr string
 	// tlsKeyHash is the hash of the own TLS key (TLS self-signed), for invites.
@@ -80,18 +81,18 @@ type Server struct {
 	lastReconcile, lastPresence time.Time
 }
 
-func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, dialRoom provider.RoomDialer, log *slog.Logger) (map[string]provider.Provider, error) {
+func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, dialMachine provider.MachineDialer, log *slog.Logger) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for _, name := range cfg.ProviderOrder {
 		p := cfg.Providers[name]
 		switch p.Kind {
 		case config.ProviderStatic:
-			out[name] = provider.NewStatic(p, serverKey, dialRoom)
+			out[name] = provider.NewStatic(p, serverKey, dialMachine)
 		case config.ProviderNamespace:
-			for _, mn := range p.MachineOrder {
-				m := p.Machines[mn]
+			for _, mn := range p.TemplateOrder {
+				m := p.Templates[mn]
 				if product, _ := m.Spec["product"].(string); product == "instance" && m.OS != config.OSLinux {
-					return nil, fmt.Errorf("providers.%s.machines.%s: %s instances are not supported yet; use a linux machine_type", name, mn, m.OS)
+					return nil, fmt.Errorf("providers.%s.templates.%s: %s instances are not supported yet; use a linux machine_type", name, mn, m.OS)
 				}
 			}
 			ns := provider.NewNamespace(p, serverKey, log)
@@ -147,9 +148,9 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	signalCtx := ctx
 	ctx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
-	rooms := gateway.NewRoomConns()
-	s := &Server{exe: exe, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
-		rooms: rooms, kick: make(chan struct{}, 1), localData: start.local}
+	machines := gateway.NewMachineConns()
+	s := &Server{usage: usageCache{busy: make(chan struct{}, 1)}, exe: exe, store: st, log: log, gatewayKey: gatewayKey, serverKey: serverKey,
+		machines: machines, kick: make(chan struct{}, 1), localData: start.local}
 	lc, err := s.buildLive(ctx, cfg, start.revision, start.document, start.tools, start.toolsDir, nil)
 	if err != nil {
 		return err
@@ -178,8 +179,8 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	if err := st.ResetTimers(ctx, time.Now()); err != nil {
 		return err
 	}
-	if err := s.ensureStaticRooms(ctx, true); err != nil {
-		return fmt.Errorf("static rooms: %w", err)
+	if err := s.ensureStaticMachines(ctx, true); err != nil {
+		return fmt.Errorf("static machines: %w", err)
 	}
 
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -217,7 +218,7 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 	if cfg.GatewayPublic != config.GatewayPath {
 		s.gatewayAddr = publicAddr(cfg.GatewayPublic, gwLn.Addr(), ln.Addr())
 	}
-	s.gateway = gateway.New(gatewayKey, gwBackend{s}, rooms, log)
+	s.gateway = gateway.New(gatewayKey, gwBackend{s}, machines, log)
 	httpServer := &http.Server{Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 2)
 	go func() { errc <- httpServer.Serve(ln) }()
@@ -261,20 +262,21 @@ func Run(ctx context.Context, file string, log *slog.Logger) error {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	// "hostel room connect" reads the gateway address with a room token.
-	mux.HandleFunc("GET /v1/info", s.authRoom(s.handleInfo))
+	// "hostel helper connect" reads the gateway address with a machine token.
+	mux.HandleFunc("GET /v1/info", s.authMachine(s.handleInfo))
 	mux.HandleFunc("GET /v1/status", s.auth(s.handleStatus))
-	mux.HandleFunc("GET /v1/rooms/{name...}", s.auth(s.handleRoomDetails))
+	mux.HandleFunc("GET /v1/usage", s.auth(s.handleUsage))
+	mux.HandleFunc("GET /v1/machines/{name...}", s.auth(s.handleMachineDetails))
 	mux.HandleFunc("GET /v1/tools", s.auth(s.handleTools))
 	mux.HandleFunc("POST /v1/leases", s.auth(s.handleCreateLease))
 	mux.HandleFunc("GET /v1/leases/{id}", s.auth(s.handleGetLease))
 	mux.HandleFunc("POST /v1/leases/{id}/touch", s.auth(s.handleTouch))
 	mux.HandleFunc("POST /v1/leases/{id}/release", s.auth(s.handleRelease))
 	mux.HandleFunc("PUT /v1/leases/{id}/tunnels", s.auth(s.handleSetTunnels))
-	mux.HandleFunc("POST /v1/rooms/{id}/drain", s.auth(s.admin(s.handleRoomDrain(true))))
-	mux.HandleFunc("POST /v1/rooms/{id}/undrain", s.auth(s.admin(s.handleRoomDrain(false))))
-	mux.HandleFunc("POST /v1/rooms/{id}/repair", s.auth(s.admin(s.handleRoomRepair)))
-	mux.HandleFunc("POST /v1/rooms/{id}/destroy", s.auth(s.admin(s.handleRoomDestroy)))
+	mux.HandleFunc("POST /v1/machines/{id}/drain", s.auth(s.admin(s.handleMachineDrain(true))))
+	mux.HandleFunc("POST /v1/machines/{id}/undrain", s.auth(s.admin(s.handleMachineDrain(false))))
+	mux.HandleFunc("POST /v1/machines/{id}/repair", s.auth(s.admin(s.handleMachineRepair)))
+	mux.HandleFunc("POST /v1/machines/{id}/destroy", s.auth(s.admin(s.handleMachineDestroy)))
 	mux.HandleFunc("POST /v1/connect", s.handleConnect)
 	mux.HandleFunc("POST /v1/logins/{cli}", s.auth(s.admin(s.handleLogin)))
 	mux.HandleFunc("GET /v1/logins/{cli}", s.auth(s.admin(s.handleLoginState)))
@@ -330,14 +332,14 @@ func versioned(next http.Handler) http.Handler {
 
 type tokenKey struct{}
 
-// auth checks the bearer token and passes it in the request context. Room
+// auth checks the bearer token and passes it in the request context. Machine
 // tokens are refused.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, false) }
 
-// authRoom is auth that also accepts room tokens.
-func (s *Server) authRoom(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, true) }
+// authMachine is auth that also accepts machine tokens.
+func (s *Server) authMachine(next http.HandlerFunc) http.HandlerFunc { return s.authWith(next, true) }
 
-func (s *Server) authWith(next http.HandlerFunc, allowRoom bool) http.HandlerFunc {
+func (s *Server) authWith(next http.HandlerFunc, allowMachine bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || secret == "" {
@@ -345,7 +347,7 @@ func (s *Server) authWith(next http.HandlerFunc, allowRoom bool) http.HandlerFun
 			return
 		}
 		tok, err := s.store.TokenBySecret(r.Context(), secret)
-		if errors.Is(err, store.ErrNotFound) || (err == nil && tok.Role == protocol.RoleRoom && !allowRoom) {
+		if errors.Is(err, store.ErrNotFound) || (err == nil && tok.Role == protocol.RoleMachine && !allowMachine) {
 			writeError(w, http.StatusUnauthorized, "", "invalid or revoked token")
 			return
 		}

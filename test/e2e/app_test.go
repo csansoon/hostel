@@ -128,6 +128,24 @@ func (a *ptyApp) waitGone(timeout time.Duration, pattern string) {
 	}
 }
 
+// moveTo presses Down until the selected line matches pattern.
+func (a *ptyApp) moveTo(pattern string) {
+	a.t.Helper()
+	re := regexp.MustCompile(pattern)
+	for i := 0; i < 40; i++ {
+		if re.MatchString(a.screen()) {
+			return
+		}
+		before := a.screen()
+		a.in("\x1b[B")
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) && a.screen() == before {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	a.t.Fatalf("no selected line matches %s:\n%s", pattern, a.screen())
+}
+
 func (a *ptyApp) in(s string) {
 	a.t.Helper()
 	if _, err := a.f.WriteString(s); err != nil {
@@ -200,11 +218,11 @@ func TestAppCheckIn(t *testing.T) {
 		t.Fatalf("the connection file after check in: %v\n%s", err, data)
 	}
 
-	// Front desk for a member: Guests, This server, Check out (no Rooms).
+	// Front desk for a member: Guests, This server, Check out (no Machines).
 	a.in("\r")
 	a.waitFor(10*time.Second, `⌂ HOSTEL\s+https://\S+ › Front desk\s+Ana Pérez\s+member`, `▌ \S+\s+Guests`, `This server`, `Check out`)
 	if s := a.screen(); strings.Contains(s, "Add a machine") {
-		t.Fatalf("a member sees the admin Rooms entry:\n%s", s)
+		t.Fatalf("a member sees the admin Machines entry:\n%s", s)
 	}
 	a.in("\r")
 	a.waitFor(10*time.Second, `▌ \S+\s+Add your other computer`, `PEOPLE`)
@@ -254,9 +272,12 @@ func TestAppDemo(t *testing.T) {
 	e := newEnv(t)
 	home := t.TempDir()
 	a := e.startAppArgs(appCols, home, []string{"--demo"})
-	a.waitFor(30*time.Second, `demo\.hostel\.example`, `▌ \S+\s+Front desk`, `Lobby\s+\S \d+ waiting`, `Rooms\s+● \d+ vacant\s+◉ \d+ occupied`, `HOSTEL`)
+	a.waitFor(30*time.Second, `demo\.hostel\.example`, `▌ \S+\s+Front desk`, `Lobby\s+\S \d+ waiting`, `Rooms\s+◉ \d+ occupied\s+● \d+ vacant`, `HOSTEL`)
+	a.in("3")
+	a.waitFor(10*time.Second, `HOME`, `macbook\s+[■□ ]+`, `12 cores, 36 GB\s+CPU ━+\s+Memory ━+`, `□ room-2\s+Vacant`, `NAMESPACE\s+─+ creates machines when needed`, `◌ linux, 8 cores, 16 GB`)
 	a.in("2")
-	a.waitFor(10*time.Second, `SCREENS`, `▌ android-emulator\s+[●◉○]`, `pixel-9, pixel-tablet · 3 machines`, `ios-simulator`, `windows-desktop`)
+	a.waitFor(10*time.Second, `WAITING LINE`, `SCREENS`, `android-emulator\s+[●◉○]`, `ios-simulator`, `windows-desktop`, `SOFTWARE`)
+	a.moveTo(`▌ android-emulator`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `OPTIONS`, `pixel-9\s+pixel-tablet\s+the first is the default · up to 2 in one lease`, `MACHINES`, `home/macbook\s+\S+\s+pixel-9, pixel-tablet`,
 		`WAITING LINE`, `GUIDE`, `hostel tools android-emulator shows the whole guide\.`)
@@ -269,7 +290,7 @@ func TestAppDemo(t *testing.T) {
 	a.waitFor(10*time.Second, `OPTIONS`)
 	a.in("1")
 	a.waitFor(10*time.Second, `▌ \S+\s+Guests`, `Check out`)
-	a.in("\x1b[B\x1b[B\x1b[B\r")
+	a.in("\x1b[B\x1b[B\r")
 	a.waitFor(10*time.Second, `Demo: check out does nothing here\.`)
 	a.quit()
 	if _, err := os.Stat(filepath.Join(home, ".config", "hostel")); !os.IsNotExist(err) {
@@ -307,7 +328,8 @@ func TestAppLobby(t *testing.T) {
 	glyph := regexp.MustCompile(`Lobby\s+(\S) 2 waiting`).FindStringSubmatch(mv.screen())[1]
 	mv.waitFor(5*time.Second, `Lobby\s+[^`+glyph+`\s] 2 waiting`)
 	mv.in("2")
-	mv.waitFor(10*time.Second, `SCREENS`, `▌ fake-screen\s+◉ all occupied`, `\S 2 waiting · next room ~`, `SOFTWARE`, `fake-sdk`)
+	mv.waitFor(10*time.Second, `WAITING LINE · 2 WAITING`, `▌ 1\. ana  "wait"  fake-screen`, `SCREENS`, `fake-screen\s+◉ all occupied\s+1 machine · 2 waiting`, `SOFTWARE`, `fake-sdk`)
+	mv.moveTo(`▌ fake-screen`)
 	mv.in("\r")
 	mv.waitFor(10*time.Second, `OPTIONS`, `option-a\s+option-b\s+option-c\s+the first is the default`,
 		`MACHINES`, `WAITING LINE`, `▌ ◉ home/box\s+Occupied\s+option-a, option-b, option-c`, `enter  open the machine`)
@@ -332,11 +354,12 @@ func TestAppLobby(t *testing.T) {
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
 	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`)
 	a.in("2")
-	a.waitFor(10*time.Second, `▌ fake-screen\s+◉ all occupied`, `\S 2 waiting · next room`)
+	a.waitFor(10*time.Second, `fake-screen\s+◉ all occupied\s+1 machine · 2 waiting`)
+	a.moveTo(`▌ fake-screen`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `◉ all occupied\s+\S 2 waiting`, `▌ ◉ home/box\s+Occupied`, `WAITING LINE`)
 	a.in("\t")
-	a.waitFor(10*time.Second, `▌ 1  ana  "wait"\s+\S room in ~\S+`, `normal priority · waiting \S+ · asks for fake-screen`, `enter  actions`,
+	a.waitFor(10*time.Second, `▌ 1  ana  "wait"\s+\S machine in ~\S+`, `normal priority · waiting \S+ · asks for fake-screen`, `enter  actions`,
 		`GUIDE`, `A simulated screen for the E2E tests\.`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `End the lease\s+e`, `Move down\s+J`, `Change the priority\s+p`)
@@ -362,12 +385,12 @@ func TestAppLobby(t *testing.T) {
 	a.quit()
 }
 
-// TestAppRooms (M10b): Rooms lists the machines with their tools and who
+// TestAppMachines (M10b): Machines lists the machines with their tools and who
 // uses them; the page of a machine shows its hardware, its live use, and the
 // lease with the user, the task, the computer, the repository, the branch,
 // and the running job. An admin stops new leases (d, y) and allows them again,
 // and ends the lease (e, y).
-func TestAppRooms(t *testing.T) {
+func TestAppMachines(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.e.git(f.e.cwd, "checkout", "-q", "-b", "fix-login")
@@ -375,66 +398,52 @@ func TestAppRooms(t *testing.T) {
 	f.e.mustHostel("run", "--detach", "--", "sleep 300")
 
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
-	a.waitFor(30*time.Second, `Rooms\s+● 0 vacant\s+◉ 1 occupied`)
+	a.waitFor(30*time.Second, `Rooms\s+◉ 1 occupied\s+● 0 vacant`)
 	a.in("3")
-	a.waitFor(10*time.Second, `HOME`, `▌ box\s+◉ Occupied`, `linux · fake-screen · fake-sdk\s+guest · "e2e test"`)
+	a.waitFor(30*time.Second, `HOME`, `▌ box\s+■`, `\d+ cores?, \d+ GB\s+CPU ━+\s+Memory ━+`, `◉ guest e2e test\s+out by \d\d:\d\d`, `box: 1 occupied, 0 vacant`)
 	a.in("\r")
 	a.waitFor(30*time.Second, `home/box`, `A fixed machine`, `◉ Occupied\s+guest · "e2e test"`, `OS\s+linux`,
 		`Tools\s+fake-screen\s+option-a, option-b, option-c\s+● ready\s+screen`, `(?m)^\s+fake-sdk\s+1\.4\.2\s+● ready$`,
 		`Hardware\s+.*\d+ cores? · \d+\.\d GB · Debian`, `CPU\s+━+\s+\d+%`, `Memory\s+━+\s+\d+\.\d GB of \d+\.\d GB`, `Disk\s+\d+\.\d GB free`,
 		`▌ guest  "e2e test"\s+checked in \S+ ago`, `\S+ · repo · ⎇ fix-login\s+out by \d\d:\d\d`,
-		`▶ sleep 300\s+running`, `enter  actions   esc  back`)
+		`▶ sleep 300\s+running`, `enter  actions   a  machine actions   esc  back`)
 
-	// Front desk › Rooms: the admin actions of the machine.
-	a.in("1")
-	a.waitFor(10*time.Second, `▌ \S+\s+Guests`, `Rooms\s+1 machine`)
-	a.in("\x1b[B\r")
-	a.waitFor(10*time.Second, `Front desk › Rooms`, `▌ \+\s+Add a room`, `HOME`)
-	a.in("\x1b[B\r")
-	a.waitFor(10*time.Second, `Show the room\s+o`, `Stop new leases\s+d`)
+	// The admin actions of the machine are on the Rooms screen.
+	a.in("\x1b")
+	a.waitFor(10*time.Second, `▌ box\s+■`, `a  actions`, `\+  add a machine`)
+	a.in("a")
+	a.waitFor(10*time.Second, `Stop new leases\s+d`)
 	if strings.Contains(a.screen(), "Repair") {
-		t.Fatalf("repair is offered for a running room:\n%s", a.screen())
+		t.Fatalf("repair is offered for a running machine:\n%s", a.screen())
 	}
 	a.in("d")
 	a.waitFor(10*time.Second, `Stop new leases on home/box\? The current leases continue\.`)
 	a.in("y")
-	f.e.waitFor("the drained room", 30*time.Second, func() bool { return f.s.room("home/box").Drained })
-	a.waitFor(30*time.Second, `No new leases on home/box\.`)
-	// The popup follows the status, which can come a moment after the
-	// message: open it again until it offers to allow new leases.
-	for i := 0; i < 20 && !strings.Contains(a.screen(), "Allow new leases"); i++ {
-		if strings.Contains(a.screen(), "Show the room") {
-			a.in("\x1b")
-			a.waitGone(5*time.Second, `Show the room`)
-		}
-		a.in("\r")
-		a.waitFor(5*time.Second, `Show the room`)
-	}
+	f.e.waitFor("the drained machine", 30*time.Second, func() bool { return f.s.machine("home/box").Drained })
+	a.waitFor(30*time.Second, `No new leases on home/box\.`, `◌ no new leases`)
+	a.in("a")
 	a.waitFor(10*time.Second, `Allow new leases\s+d`)
 	a.in("d")
 	a.waitFor(10*time.Second, `Allow new leases on home/box again\?`)
 	a.in("y")
-	f.e.waitFor("the room takes leases again", 30*time.Second, func() bool { return !f.s.room("home/box").Drained })
+	f.e.waitFor("the machine takes leases again", 30*time.Second, func() bool { return !f.s.machine("home/box").Drained })
 
-	// Show the room, then end the lease from it.
+	// The room page, and the end of the lease from it.
+	a.moveTo(`▌\s+◉ guest`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `Show the room\s+o`)
-	a.in("o")
-	a.waitFor(10*time.Second, `Front desk › Rooms › home/box`, `▌ guest  "e2e test"`)
-	a.in("\r")
-	a.waitFor(10*time.Second, `End the lease\s+e`)
+	a.waitFor(30*time.Second, `› Room`, `Room\s+\S+`, `Machine\s+\S+`, `Tools\s+fake-screen`, `From\s+\S+ · repo · ⎇ fix-login`, `▶ sleep 300\s+running`, `e  end the lease`)
 	a.in("e")
 	a.waitFor(10*time.Second, `End the lease of guest \("e2e test"\)\?`)
 	a.in("y")
 	f.e.waitFor("the end of the lease", time.Minute, func() bool { return f.lease(lease).State == "released" })
-	a.waitFor(time.Minute, `Nobody uses this machine now\.`)
+	a.waitFor(time.Minute, `This lease has ended\.`)
 	a.quit()
 }
 
 // TestAppFrontDesk (M10b): an admin opens Front desk › Invite a guest, invites
 // a member (m; the code shows, and the app prints it again after quit), and the code
 // connects; the admin makes the new user an admin (r, y) and removes the user
-// (x, y). Add a room asks for the name and the tools, and shows the join
+// (x, y). Add a machine asks for the name and the tools, and shows the join
 // commands.
 func TestAppFrontDesk(t *testing.T) {
 	t.Parallel()
@@ -444,7 +453,7 @@ func TestAppFrontDesk(t *testing.T) {
 		t.Helper()
 		a.waitFor(30*time.Second, `▌ \S+\s+Front desk`)
 		a.in("\r")
-		a.waitFor(10*time.Second, `▌ \S+\s+Guests`, `Rooms`, `This server`, `Check out`)
+		a.waitFor(10*time.Second, `▌ \S+\s+Guests`, `This server`, `Check out`)
 		a.in("\r")
 		a.waitFor(10*time.Second, `▌ \+\s+Invite a guest`, `Add your other computer`, `PEOPLE`, `\d computers? · since`)
 	}
@@ -497,13 +506,11 @@ func TestAppFrontDesk(t *testing.T) {
 	// The message comes first; the guest list reloads after it.
 	a.waitGone(30*time.Second, `(?m)^ +(▌ +)?bob\s`)
 
-	// Front desk › Rooms › Add a room.
-	a.in("\x1b")
-	a.waitFor(10*time.Second, `▌ \S+\s+Guests`)
-	a.in("\x1b[B\r")
-	a.waitFor(10*time.Second, `▌ \+\s+Add a room`)
-	a.in("\r")
-	a.waitFor(10*time.Second, `HOSTEL\s+\S+ › Front desk › Rooms › Add a room`, `The name of the new machine`)
+	// Rooms › Add a machine.
+	a.in("3")
+	a.waitFor(10*time.Second, `\+  add a machine`)
+	a.in("+")
+	a.waitFor(10*time.Second, `HOSTEL\s+\S+ › Rooms › Add a machine`, `The name of the new machine`)
 	a.in("box2\r")
 	a.waitFor(10*time.Second, `Its tools, separated by commas`)
 	a.in("fake-screen\r")
@@ -514,32 +521,32 @@ func TestAppFrontDesk(t *testing.T) {
 	}
 }
 
-// TestRoomOffline (M10b): an idle static machine that goes offline (the host
-// stops) is offline in the status and in the app (Rooms: "Offline", "last
+// TestMachineOffline (M10b): an idle static machine that goes offline (the host
+// stops) is offline in the status and in the app (Machines: "Offline", "last
 // seen"); the Lobby leaves it out ("no machine online"); a new lease waits in
-// the queue. When the host is back, the room is vacant again by itself, and the
-// lease gets it. When the host comes back with another host key, the room is
+// the queue. When the host is back, the machine is vacant again by itself, and the
+// lease gets it. When the host comes back with another host key, the machine is
 // broken (host key changed), and the repair asks to accept the new key.
-func TestRoomOffline(t *testing.T) {
+func TestMachineOffline(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.c.stop()
-	f.e.waitFor("the room offline", time.Minute, func() bool {
-		r := f.s.room("home/box")
-		return r.State == protocol.RoomBroken && r.Reason == "unreachable" && !r.LastSeen.IsZero()
+	f.e.waitFor("the machine offline", time.Minute, func() bool {
+		r := f.s.machine("home/box")
+		return r.State == protocol.MachineBroken && r.Reason == "unreachable" && !r.LastSeen.IsZero()
 	})
 	if r := f.e.mustHostel("status"); !regexp.MustCompile(`(?m)^home/box\s+fake-screen option-a/option-b/option-c, fake-sdk 1\.4\.2\s+offline \(last seen \d+[smh]\S* ago\)$`).MatchString(r.stdout) {
 		t.Fatalf("plain status of an offline machine:\n%s", r.stdout)
 	}
 
 	a := f.e.startApp(f.e.home, append(f.e.environ(), "HOSTEL_TOKEN="+f.e.admin)...)
-	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`, `Rooms\s+● 0 vacant\s+◉ 0 occupied`)
+	a.waitFor(30*time.Second, `▌ \S+\s+Front desk`, `Rooms\s+◉ 0 occupied\s+● 0 vacant\s+✕ 1 offline`)
 	a.in("2")
 	a.waitFor(10*time.Second, `▌ fake-screen\s+○ no machine online`)
 	a.in("\r")
 	a.waitFor(10*time.Second, `No machine with fake-screen is online\.`)
 	a.in("3")
-	a.waitFor(10*time.Second, `▌ box\s+○ Offline`, `home/box: Offline · last seen \S+ ago`)
+	a.waitFor(10*time.Second, `▌ box\s+✕ Offline`, `box: Offline · last seen \S+ ago`)
 
 	// A lease waits instead of failing.
 	if r := f.e.hostel("acquire", "fake-screen", "--task", "offline", "--wait", "2s"); r.code != 75 ||
@@ -547,10 +554,10 @@ func TestRoomOffline(t *testing.T) {
 		t.Fatalf("acquire while the only machine is offline: %s, want exit code 75 and the reason", r)
 	}
 	f.c.start()
-	a.waitFor(2*time.Minute, `▌ box\s+[●◉] (Vacant|Occupied)`)
+	a.waitFor(2*time.Minute, `▌ box\s+[■□]`)
 	f.e.mustHostel("acquire", "fake-screen", "--task", "offline")
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 
 	// Back with another host key: broken (host key changed), and the repair
 	// asks to accept the new key.
@@ -560,19 +567,16 @@ func TestRoomOffline(t *testing.T) {
 	f.c.stop()
 	f.c.start()
 	f.e.waitFor("the changed host key", 2*time.Minute, func() bool {
-		r := f.s.room("home/box")
-		return r.State == protocol.RoomBroken && r.Reason == "host key changed"
+		r := f.s.machine("home/box")
+		return r.State == protocol.MachineBroken && r.Reason == "host key changed"
 	})
 	a.waitFor(30*time.Second, `▌ box\s+✕ Broken`)
-	// Repair is in Front desk › Rooms.
-	a.in("1")
-	a.in("\x1b[B\r")
-	a.waitFor(10*time.Second, `▌ \+\s+Add a room`)
-	a.in("\x1b[B\r")
+	// Repair is on the Rooms screen.
+	a.in("a")
 	a.waitFor(10*time.Second, `Repair\s+r`)
 	a.in("r")
 	a.waitFor(10*time.Second, `The host key of home/box changed\.`, `Accept the new key\s+y`)
 	a.in("y")
-	f.e.waitFor("the repaired room", 2*time.Minute, func() bool { return f.s.room("home/box").State == protocol.RoomRunning })
+	f.e.waitFor("the repaired machine", 2*time.Minute, func() bool { return f.s.machine("home/box").State == protocol.MachineRunning })
 	a.quit()
 }

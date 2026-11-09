@@ -67,16 +67,16 @@ func (f *fixture) lease(id string) protocol.Lease {
 	return l
 }
 
-// TestTwoGuestsOneSlot is scenarios 2 and 7: the second guest waits, sees its
-// position, and gets the slot after the first releases; the same acquire
+// TestTwoGuestsOneRoom is scenarios 2 and 7: the second guest waits, sees its
+// position, and gets the room after the first releases; the same acquire
 // command continues the same lease.
-func TestTwoGuestsOneSlot(t *testing.T) {
+func TestTwoGuestsOneRoom(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.acquire()
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
 	r := f.e.hostel("acquire", "fake-screen", "--task", "second", "--wait", "5s")
-	if r.code != 75 || !strings.Contains(r.stderr, "queued, position 1 (no free slot)") {
+	if r.code != 75 || !strings.Contains(r.stderr, "queued, position 1 (no free room)") {
 		t.Fatalf("second guest: %s", r)
 	}
 	id := createdID(t, r)
@@ -113,14 +113,14 @@ func TestPriority(t *testing.T) {
 	}
 }
 
-// TestBlockedMachines is scenario 5: a lease that waits for a full machine
+// TestBlockedTemplates is scenario 5: a lease that waits for a full machine
 // does not block a lease for another machine.
-func TestBlockedMachines(t *testing.T) {
+func TestBlockedTemplates(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	dev := e.startStaticRoom("dev")
-	plain := e.startStaticRoom("plain")
+	dev := e.startStaticMachine("dev")
+	plain := e.startStaticMachine("plain")
 	e.useTools("fake-sdk", "fake-screen")
 	e.writeConfig(serverHeader() + `
 [providers.home]
@@ -136,8 +136,8 @@ address = "` + plain.address() + `"
 os = "linux"
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/dev", protocol.RoomRunning, roomReady)
-	s.waitRoom("home/plain", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/dev", protocol.MachineRunning, machineReady)
+	s.waitMachine("home/plain", protocol.MachineRunning, machineReady)
 	e.useGuestToken()
 	f := &fixture{e: e, s: s, c: dev}
 	e.newRepo(defaultRepoFiles())
@@ -176,7 +176,7 @@ func TestRequestErrors(t *testing.T) {
 			t.Fatalf("%s: want exit code 69 and %q: %s", c.name, c.want, r)
 		}
 	}
-	// More tunnels than the slot has pool ports.
+	// More tunnels than the room has pool ports.
 	var tunnels strings.Builder
 	for i := range 11 {
 		tunnels.WriteString("[tunnels.t" + string(rune('a'+i)) + "]\nlocal_port = 3000\n")
@@ -209,7 +209,7 @@ func TestPollTimeout(t *testing.T) {
 // TestAcquireBackground: "acquire --background" returns at once, and a
 // detached keeper polls the waiting lease, so it keeps its place in the queue
 // for longer than poll_timeout without acquire; a lease without it ends after
-// poll_timeout (acquire says so). When the room is free, the kept lease is
+// poll_timeout (acquire says so). When the machine is free, the kept lease is
 // ready, the same command continues it, and the keeper stops.
 func TestAcquireBackground(t *testing.T) {
 	t.Parallel()
@@ -268,7 +268,7 @@ func TestAcquireBackground(t *testing.T) {
 	// A new waiting lease in the same worktree gets its own keeper at once;
 	// release stops it.
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	f.useRepo("repo")
 	f.acquire()
 	f.useRepo("repo2")
@@ -303,21 +303,21 @@ func TestAcquireBackground(t *testing.T) {
 	f.e.waitFor("the keeper stops after release", time.Minute, func() bool { _, err := os.Stat(beat); return os.IsNotExist(err) })
 	f.useRepo("repo")
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 
-	// With a free slot, --background does not wait in the queue: when the
+	// With a free room, --background does not wait in the queue: when the
 	// lease is ready (the prepare script can take longer than the first look:
 	// exit code 75, run it again), the same command syncs and sets it up.
 	f.useRepo("repo2")
-	f.e.waitFor("acquire --background with a free slot", 2*time.Minute, func() bool {
-		r = f.e.hostel("acquire", "fake-screen", "--task", "free slot", "--background")
+	f.e.waitFor("acquire --background with a free room", 2*time.Minute, func() bool {
+		r = f.e.hostel("acquire", "fake-screen", "--task", "free room", "--background")
 		if r.code != 0 && r.code != 75 {
-			t.Fatalf("acquire --background with a free slot: %s", r)
+			t.Fatalf("acquire --background with a free room: %s", r)
 		}
 		return r.code == 0
 	})
 	if !strings.Contains(r.stdout, "is ready") {
-		t.Fatalf("acquire --background with a free slot: %s", r)
+		t.Fatalf("acquire --background with a free room: %s", r)
 	}
 	f.e.mustHostel("release")
 }

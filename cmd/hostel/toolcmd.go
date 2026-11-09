@@ -78,12 +78,12 @@ func toolsList(stdout, stderr io.Writer) int {
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tSCREEN\tMACHINES\tSOURCE")
 	for _, t := range list {
-		machines := strings.Join(t.Machines, ", ")
-		if len(t.Machines) > 2 {
-			machines = fmt.Sprintf("%d machines", len(t.Machines))
+		templates := strings.Join(t.Templates, ", ")
+		if len(t.Templates) > 2 {
+			templates = fmt.Sprintf("%d machines", len(t.Templates))
 		}
-		if machines == "" {
-			machines = "-"
+		if templates == "" {
+			templates = "-"
 		}
 		screen := "-"
 		if t.Screen {
@@ -93,25 +93,25 @@ func toolsList(stdout, stderr io.Writer) int {
 		if t.Source != "default" && t.Revision > 0 {
 			source = fmt.Sprintf("%s (rev %d, %s, %s)", t.Source, t.Revision, t.User, t.ChangedAt.Local().Format(time.DateOnly))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Name, screen, machines, source)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Name, screen, templates, source)
 	}
 	tw.Flush()
 	fmt.Fprintln(stdout, "Any mise tool (for example node:22 or jdk:21) needs no definition: list it on a machine.")
 	return 0
 }
 
-// toolTemplates are the scripts of a new tool, for each step (docs/design.md,
+// toolFiles are the scripts of a new tool, for each step (docs/design.md,
 // section 8, "Tool directories"). start, screenshot, and stop are for screen
 // tools only.
-var toolTemplates = []struct {
+var toolFiles = []struct {
 	step, what string
 	screen     bool
 }{
-	{"install", "once for each room, and again when the files change: install what the tool needs", false},
+	{"install", "once for each machine, and again when the files change: install what the tool needs", false},
 	{"check", "after install and cleanup, and at repair: exit with an error if the tool does not work; print the version (or the options of a screen tool) on the last line", false},
 	{"start", "each lease that asks for the tool, before it is ready: start the screen and write its facts to tool.env", true},
 	{"screenshot", "hostel screenshot: write a PNG to $1", true},
-	{"stop", "at cleanup: stop and delete what start started for this slot", true},
+	{"stop", "at cleanup: stop and delete what start started for this room", true},
 }
 
 func toolNew(name, dir, osName string, screen bool, stdout, stderr io.Writer) int {
@@ -138,7 +138,7 @@ func toolNew(name, dir, osName string, screen bool, stdout, stderr io.Writer) in
 screen = true
 options = ["%s-1"]               # the options that a lease can ask for; the first is the default
 # max_options = 1
-# whole_machine = false          # true: the lease takes the whole room
+# whole_machine = false          # true: the lease takes the whole machine
 # needs = ["other-tool"]
 # script_timeouts = { start = "5m" }
 `, name, name)
@@ -146,13 +146,13 @@ options = ["%s-1"]               # the options that a lease can ask for; the fir
 	files := map[string]string{config.ToolFile: toml,
 		config.GuideFile: fmt.Sprintf("%s: what it gives, its environment variables, and how to use it.\n", name)}
 	ext := config.ScriptExt(osName)
-	for _, t := range toolTemplates {
+	for _, t := range toolFiles {
 		if t.screen && !screen {
 			continue
 		}
-		body := fmt.Sprintf("#!/bin/sh\n# %s: %s.\n# Variables: HOSTEL_TOOL, HOSTEL_TOOL_OPTIONS, HOSTEL_SLOT_DIR, HOSTEL_CACHE_DIR\n# (docs/design.md, section 8). It must be safe to run again.\nset -eu\n", t.step, t.what)
+		body := fmt.Sprintf("#!/bin/sh\n# %s: %s.\n# Variables: HOSTEL_TOOL, HOSTEL_TOOL_OPTIONS, HOSTEL_ROOM_DIR, HOSTEL_CACHE_DIR\n# (docs/design.md, section 8). It must be safe to run again.\nset -eu\n", t.step, t.what)
 		if ext == ".ps1" {
-			body = fmt.Sprintf("# %s: %s.\n# Variables: $env:HOSTEL_TOOL, $env:HOSTEL_TOOL_OPTIONS, $env:HOSTEL_SLOT_DIR\n# (docs/design.md, section 8). It must be safe to run again.\n$ErrorActionPreference = 'Stop'\n", t.step, t.what)
+			body = fmt.Sprintf("# %s: %s.\n# Variables: $env:HOSTEL_TOOL, $env:HOSTEL_TOOL_OPTIONS, $env:HOSTEL_ROOM_DIR\n# (docs/design.md, section 8). It must be safe to run again.\n$ErrorActionPreference = 'Stop'\n", t.step, t.what)
 		}
 		switch t.step {
 		case "check":
@@ -186,7 +186,7 @@ options = ["%s-1"]               # the options that a lease can ask for; the fir
 		}
 	}
 	fmt.Fprintf(stdout, "Wrote the tool %s to %s. Change the files, then run:\n  hostel config tools push %s\n", name, dir, dir)
-	fmt.Fprintf(stdout, "Then add %q to the tools of a machine (hostel config rooms set <machine> tools=...).\n", name)
+	fmt.Fprintf(stdout, "Then add %q to the tools of a machine (hostel config machines set <machine> tools=...).\n", name)
 	return 0
 }
 
@@ -250,7 +250,7 @@ func toolPush(name, dir string, stdout, stderr io.Writer) int {
 		files[e.Name()] = string(data)
 	}
 	return toolRequest("PUT", name, "", protocol.ToolFiles{Name: name, Files: files},
-		fmt.Sprintf("Saved the tool %s. Rooms install it again when they are free.", name), stdout, stderr)
+		fmt.Sprintf("Saved the tool %s. Machines install it again when they are free.", name), stdout, stderr)
 }
 
 func toolRequest(method, name, suffix string, body any, done string, stdout, stderr io.Writer) int {

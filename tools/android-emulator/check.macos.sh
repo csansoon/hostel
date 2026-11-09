@@ -8,7 +8,7 @@ avd_home="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 "$HOSTEL_CACHE_DIR/android-sdk/emulator/emulator" -version >/dev/null
 for d in $(echo "$HOSTEL_TOOL_ALL_OPTIONS" | tr ',' ' '); do
 	if ! [ -d "$avd_home/hostel-golden-$d-$api-$tag.avd/snapshots/clean" ]; then
-		echo "no golden AVD for $d; repair the room to run install again" >&2
+		echo "no golden AVD for $d; repair the machine to run install again" >&2
 		exit 1
 	fi
 done

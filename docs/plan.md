@@ -438,6 +438,29 @@ The five follow-ups of the M10e done-when report, in one pull request:
 - The docs say what cleanup keeps, and who can read it.
 - The agent guide explains long builds (`run --detach`, `attach --wait`).
 
+## M10g. Providers, machines, and rooms
+
+Status: in review.
+
+Owner decisions of 2026-11-06 (`requirements.md`, section 3).
+
+- New words everywhere: a machine is a real computer or VM, a room is a place on
+  it for one lease, and a template is what an on-demand provider creates machines
+  from. Configuration: `[providers.<p>.machines.<m>]` for a static provider,
+  `[providers.<p>.templates.<t>]` for an on-demand provider, `rooms`, and
+  `max_machines`. The helper mode is `hostel helper`. At the update, the server
+  rewrites a stored configuration with the old words, and open leases end. Joined
+  machines run `hostel machine update`, because the gateway user changes.
+- A provider has an optional display name (`label`). The status sends the
+  providers; the server samples the live use of each running machine.
+- Lobby: the waiting line first, then Screens, then Software in a short form.
+- Rooms: one list, provider › machine › room, with squares for the rooms and thin
+  gauges for the use. The provider, machine, and room pages hold the details and
+  the admin actions; Front desk › Rooms goes.
+
+Done when: the demo and a real server show the same structure; the E2E suite
+passes.
+
 ## M11. Hardening against backdoors (later; not required for version 1)
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor

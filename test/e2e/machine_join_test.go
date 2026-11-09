@@ -14,10 +14,10 @@ import (
 )
 
 // TestMachineJoin (M9): an admin makes a machine code from a client; on a new
-// Linux machine without the room user, "hostel machine join <code>" (as root)
-// creates the user, installs the server key, and gets a room token; the
+// Linux machine without the machine user, "hostel machine join <code>" (as root)
+// creates the user, installs the server key, and gets a machine token; the
 // server adds the machine to the configuration (connect = true). Then
-// "hostel machine connect" connects it, and a lease runs on its room. The code
+// "hostel machine connect" connects it, and a lease runs on its machine. The code
 // works once; the install script and the binary come from the server. The
 // machine is a container with host networking (it reaches the server on
 // 127.0.0.1), with its SSH server on a free port; systemd is not in the
@@ -33,7 +33,7 @@ func TestMachineJoin(t *testing.T) {
 	port := freePort(t)
 	name := "hostel-e2e-" + e.runID + "-joined"
 	if _, err := docker("run", "-d", "--name", name, "--label", dockerLabel+"="+e.runID, "--network", "host",
-		"--entrypoint", "/bin/sh", roomImage, "-c",
+		"--entrypoint", "/bin/sh", machineImage, "-c",
 		fmt.Sprintf("ssh-keygen -A && exec /usr/sbin/sshd -D -e -p %d -o ListenAddress=127.0.0.1", port)); err != nil {
 		t.Fatal(err)
 	}
@@ -52,10 +52,10 @@ func TestMachineJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := e.adminHostel("config", "rooms", "add", "box2", "--tool", "fake-screen")
+	r := e.adminHostel("config", "machines", "add", "box2", "--tool", "fake-screen")
 	m := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(r.stdout)
 	if r.code != 0 || m == nil || !strings.Contains(r.stdout, "--pinnedpubkey sha256//") || !strings.Contains(r.stdout, "/v1/install.sh | sudo sh -s -- ") {
-		t.Fatalf("config rooms add: %s", r)
+		t.Fatalf("config machines add: %s", r)
 	}
 	code := m[1]
 	if c := s.send("GET", "/v1/install.sh", "", nil, nil); c != 200 {
@@ -68,7 +68,7 @@ func TestMachineJoin(t *testing.T) {
 		t.Fatalf("download another file: HTTP %d, want 404", c)
 	}
 
-	code2 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "rooms", "add", "box2").stdout)[1]
+	code2 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "machines", "add", "box2").stdout)[1]
 	join := func(c string) (string, error) {
 		return docker("exec", name, "/usr/local/bin/hostel", "machine", "join", c, "--no-service")
 	}
@@ -90,8 +90,8 @@ func TestMachineJoin(t *testing.T) {
 			t.Fatalf("%s: %q, want the server key", f, got)
 		}
 	}
-	if got := rootSh("stat -c %U:%a /etc/hostel/room-token /etc/hostel/hostel"); got != "root:600\nroot:755" {
-		t.Fatalf("room token: %s", got)
+	if got := rootSh("stat -c %U:%a /etc/hostel/machine-token /etc/hostel/hostel"); got != "root:600\nroot:755" {
+		t.Fatalf("machine token: %s", got)
 	}
 	doc := s.configDoc().Document
 	for _, want := range []string{"[providers.home.machines.box2]", `connect = true`, `os = "linux"`, `tools = ["fake-screen"]`} {
@@ -104,7 +104,7 @@ func TestMachineJoin(t *testing.T) {
 	if _, err := docker(append([]string{"exec", "-d", name}, append(strings.Fields(connect[1]), "--ssh", fmt.Sprintf("127.0.0.1:%d", port))...)...); err != nil {
 		t.Fatal(err)
 	}
-	s.waitRoom("home/box2", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/box2", protocol.MachineRunning, machineReady)
 
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
@@ -133,21 +133,21 @@ func TestMachineJoin(t *testing.T) {
 	if err := fresh(code2); err == nil || !strings.Contains(err.Error(), "home/box2 exists already") {
 		t.Fatalf("a second code for the same machine: %v", err)
 	}
-	// Removed: its room token stops working. A new code joins the machine
+	// Removed: its machine token stops working. A new code joins the machine
 	// again, also with a new host key (the code proves the host).
-	token := strings.TrimSpace(rootSh("cat /etc/hostel/room-token"))
+	token := strings.TrimSpace(rootSh("cat /etc/hostel/machine-token"))
 	if code := s.get("/v1/info", token, nil); code != 200 {
-		t.Fatalf("the room token before the removal: HTTP %d", code)
+		t.Fatalf("the machine token before the removal: HTTP %d", code)
 	}
-	if r := e.adminHostel("config", "rooms", "remove", "box2"); r.code != 0 {
+	if r := e.adminHostel("config", "machines", "remove", "box2"); r.code != 0 {
 		t.Fatalf("remove the machine: %s", r)
 	}
-	s.waitRoom("home/box2", protocol.RoomRetired, time.Minute)
+	s.waitMachine("home/box2", protocol.MachineRetired, time.Minute)
 	if code := s.get("/v1/info", token, nil); code != 401 {
-		t.Fatalf("the room token after the removal: HTTP %d, want 401", code)
+		t.Fatalf("the machine token after the removal: HTTP %d, want 401", code)
 	}
 	rootSh("pkill -f '[h]ostel machine connect' || true; rm -f /etc/ssh/ssh_host_*; ssh-keygen -A")
-	code3 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "rooms", "add", "box2", "--tool", "fake-screen").stdout)[1]
+	code3 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "machines", "add", "box2", "--tool", "fake-screen").stdout)[1]
 	out, err = join(code3)
 	if err != nil || !strings.Contains(out, "added the machine home/box2") {
 		t.Fatalf("join again with a new code: %v\n%s", err, out)
@@ -156,7 +156,7 @@ func TestMachineJoin(t *testing.T) {
 	if _, err := docker(append([]string{"exec", "-d", name}, append(strings.Fields(connect[1]), "--ssh", fmt.Sprintf("127.0.0.1:%d", port))...)...); err != nil {
 		t.Fatal(err)
 	}
-	s.waitRoom("home/box2", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/box2", protocol.MachineRunning, machineReady)
 
 	// A machine code is not a user code.
 	if r := e.hostelAt(t.TempDir(), "connect", code2, "--name", "x"); r.code != 1 || !strings.Contains(r.stderr, "not valid") {

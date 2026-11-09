@@ -18,14 +18,14 @@ import (
 	"github.com/csansoon/hostel/internal/store"
 )
 
-// twoMachines starts a server with two static rooms: a with the tools of
+// twoTemplates starts a server with two static machines: a with the tools of
 // toolsA, b with those of toolsB (TOML lists) and the machine env of b.
-func twoMachines(t *testing.T, toolsA, toolsB, envB string) *fixture {
+func twoTemplates(t *testing.T, toolsA, toolsB, envB string) *fixture {
 	t.Helper()
 	e := newEnv(t)
 	e.init()
-	a := e.startStaticRoom("a")
-	b := e.startStaticRoom("b")
+	a := e.startStaticMachine("a")
+	b := e.startStaticMachine("b")
 	e.useTools("fake-sdk", "fake-screen", "fake-desktop")
 	e.writeConfig(serverHeader() + `
 [providers.home]
@@ -43,8 +43,8 @@ tools = ` + toolsB + `
 env = ` + envB + `
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/a", protocol.RoomRunning, roomReady)
-	s.waitRoom("home/b", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/a", protocol.MachineRunning, machineReady)
+	s.waitMachine("home/b", protocol.MachineRunning, machineReady)
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
 	return &fixture{e: e, s: s, c: a}
@@ -57,7 +57,7 @@ env = ` + envB + `
 // tool.
 func TestTools(t *testing.T) {
 	t.Parallel()
-	f := twoMachines(t, `["fake-screen"]`, `["fake-desktop"]`, "{}")
+	f := twoTemplates(t, `["fake-screen"]`, `["fake-desktop"]`, "{}")
 	r := f.e.mustHostel("tools")
 	lines := strings.Split(r.stdout, "\n")
 	if len(lines) < 5 || !regexp.MustCompile(`^TOOL\s+OPTIONS\s+SCREEN\s+MACHINES\s+FREE\s+WAITING\s+EST\. WAIT$`).MatchString(lines[0]) ||
@@ -86,7 +86,7 @@ func TestTools(t *testing.T) {
 	}
 	i := slices.IndexFunc(list.Tools, func(t protocol.Tool) bool { return t.Name == "fake-sdk" })
 	if i < 0 || !slices.Equal(list.Tools[i].Options, []string{"1.4.2"}) || !slices.Equal(list.Tools[i].Env, []string{"FAKE_SDK_HOME", "PATH"}) ||
-		len(list.Tools[i].Machines) != 1 || list.Tools[i].Machines[0].Key != "home/a" || !list.Tools[i].Machines[0].Online {
+		len(list.Tools[i].Templates) != 1 || list.Tools[i].Templates[0].Key != "home/a" || !list.Tools[i].Templates[0].Online {
 		t.Fatalf("tools --json: %+v", list.Tools)
 	}
 	var one protocol.Tool
@@ -152,7 +152,7 @@ func TestToolLease(t *testing.T) {
 	t.Parallel()
 	files := defaultRepoFiles()
 	files["hostel.toml"] = fixtureRepoConfig + toolSections
-	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-panel", "fake-big"}, files: files,
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "fake-panel", "fake-big"}, files: files,
 		tools: map[string]map[string]string{"fake-panel": panelTool, "fake-big": bigTool}})
 	log := func() string { return f.c.sh("cat " + cacheDir + "/fake-screen.log") }
 
@@ -179,7 +179,7 @@ func TestToolLease(t *testing.T) {
 		t.Fatalf("acquire of other tools in a worktree with a lease: %s", r)
 	}
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 
 	// A screen tool with an option.
 	id = f.acquire("fake-screen:option-b")
@@ -199,7 +199,7 @@ func TestToolLease(t *testing.T) {
 		t.Fatalf("started: %+v", l.Started)
 	}
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 
 	// A screen tool and its need: start in the order of needs, stop in
 	// reverse order; the facts of both.
@@ -209,7 +209,7 @@ func TestToolLease(t *testing.T) {
 		t.Fatalf("the environment of a fake-panel lease: %q", r.stdout)
 	}
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	if !regexp.MustCompile(`start linux ` + id + ` option-a exclusive=\nstart panel ` + id + `\nstop panel ` + id + ` panel-` + id + `\nstop linux ` + id + ` option-a`).MatchString(log()) {
 		t.Fatalf("the order of start and stop:\n%s", log())
 	}
@@ -218,7 +218,7 @@ func TestToolLease(t *testing.T) {
 	// lease waits as after a failed preparation.
 	f.marker("fail-panel", true)
 	r = f.e.hostel("acquire", "fake-panel", "--task", "panel fails", "--wait", "40s")
-	if r.code != 75 || !strings.Contains(r.stderr, "room broken: tool fake-panel: start script exited with code 1") {
+	if r.code != 75 || !strings.Contains(r.stderr, "machine broken: tool fake-panel: start script exited with code 1") {
 		t.Fatalf("acquire with a failing start: %s", r)
 	}
 	failed := createdID(t, r)
@@ -226,13 +226,13 @@ func TestToolLease(t *testing.T) {
 	if !regexp.MustCompile(`stop panel ` + failed + ` \n(.*\n)*stop linux ` + failed + ` option-a`).MatchString(log()) {
 		t.Fatalf("stops after the failed start:\n%s", log())
 	}
-	// The waiting lease has no started tools: they were on the old slot.
+	// The waiting lease has no started tools: they were on the old room.
 	if l := f.lease(failed); l.State != protocol.LeaseQueued || len(l.Started) != 0 {
 		t.Fatalf("the lease after the failed start: %s, started %+v", l.State, l.Started)
 	}
 	f.e.mustHostel("release")
 	f.marker("fail-panel", false)
-	f.admin("admin", "room", "repair", f.roomID())
+	f.admin("admin", "machine", "repair", f.machineID())
 
 	// A start script that cannot run at all: the stops of the tools that
 	// started before it still get their facts.
@@ -242,7 +242,7 @@ func TestToolLease(t *testing.T) {
 		t.Fatalf("stops after a start that could not run:\n%s", log())
 	}
 	f.e.mustHostel("release")
-	f.admin("admin", "room", "repair", f.roomID())
+	f.admin("admin", "machine", "repair", f.machineID())
 
 	// Two options of a screen tool: a screenshot names one.
 	id = f.acquire("fake-screen:option-a", "fake-screen:option-c")
@@ -272,11 +272,11 @@ func TestToolOptions(t *testing.T) {
 	e.useTools("fake-sdk")
 	e.writeTool("fake-sdk", map[string]string{"install.linux.sh": "#!/bin/sh\nset -e\nmkdir -p \"$HOSTEL_CACHE_DIR/fake-sdk/bin\"\n" +
 		"echo \"${FAKE_SDK_VERSION:-1.4.2}\" > \"$HOSTEL_CACHE_DIR/fake-sdk/version\"\n"})
-	f := twoMachinesIn(t, e, `["fake-sdk"]`, `["fake-sdk"]`, `{ FAKE_SDK_VERSION = "2.0.1" }`)
-	for _, c := range []struct{ tool, machine string }{{"fake-sdk:2", "home/b"}, {"fake-sdk:1.4", "home/a"}, {"fake-sdk:2.0.1", "home/b"}} {
+	f := twoTemplatesIn(t, e, `["fake-sdk"]`, `["fake-sdk"]`, `{ FAKE_SDK_VERSION = "2.0.1" }`)
+	for _, c := range []struct{ tool, template string }{{"fake-sdk:2", "home/b"}, {"fake-sdk:1.4", "home/a"}, {"fake-sdk:2.0.1", "home/b"}} {
 		f.e.newRepoNamed(strings.ReplaceAll(c.tool, ":", "-"), defaultRepoFiles())
-		if r := f.e.mustHostel("acquire", c.tool, "--task", c.tool); !strings.Contains(r.stderr, "on "+c.machine) {
-			t.Fatalf("acquire %s: %s, want %s", c.tool, r, c.machine)
+		if r := f.e.mustHostel("acquire", c.tool, "--task", c.tool); !strings.Contains(r.stderr, "on "+c.template) {
+			t.Fatalf("acquire %s: %s, want %s", c.tool, r, c.template)
 		}
 		f.e.mustHostel("release")
 	}
@@ -285,8 +285,8 @@ func TestToolOptions(t *testing.T) {
 			t.Fatalf("acquire %s: %s, want exit code 69", tool, r)
 		}
 	}
-	f.e.waitFor("both slots free", time.Minute, func() bool {
-		return f.s.room("home/a").Slots[0].State == protocol.SlotFree && f.s.room("home/b").Slots[0].State == protocol.SlotFree
+	f.e.waitFor("both rooms free", time.Minute, func() bool {
+		return f.s.machine("home/a").Rooms[0].State == protocol.RoomFree && f.s.machine("home/b").Rooms[0].State == protocol.RoomFree
 	})
 	// home/b is busy; a lease for version 2 waits for it, and a later lease
 	// for any version takes home/a.
@@ -303,17 +303,17 @@ func TestToolOptions(t *testing.T) {
 	}
 }
 
-// TestToolStaleInventory (M10e): a room whose machine settings changed gives
+// TestToolStaleInventory (M10e): a machine whose machine settings changed gives
 // no options to the check at the request: a version that only its old
-// inventory has fails at once, also while a lease holds the room and it cannot
+// inventory has fails at once, also while a lease holds the machine and it cannot
 // install again.
 func TestToolStaleInventory(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.useTools("fake-sdk")
-	f := twoMachinesIn(t, e, `["jq:1.7.1"]`, `["fake-screen"]`, `{ X = "y" }`)
+	f := twoTemplatesIn(t, e, `["jq:1.7.1"]`, `["fake-screen"]`, `{ X = "y" }`)
 	f.e.mustHostel("acquire", "jq:1.7", "--task", "holder")
-	if r := f.e.adminHostel("config", "rooms", "set", "a", "tools=jq:1.6"); r.code != 0 {
+	if r := f.e.adminHostel("config", "machines", "set", "a", "tools=jq:1.6"); r.code != 0 {
 		t.Fatalf("set the tools of the machine: %s", r)
 	}
 	f.e.newRepoNamed("old", defaultRepoFiles())
@@ -340,7 +340,7 @@ func TestToolMiseNeed(t *testing.T) {
 	t.Parallel()
 	files := defaultRepoFiles()
 	files["hostel.toml"] = fixtureRepoConfig + "\n[tool.jq]\nenv = { JQ_SECTION = \"on\" }\n"
-	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-needs-jq", "jq:1.7.1"}, files: files,
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-needs-jq", "jq:1.7.1"}, files: files,
 		tools: map[string]map[string]string{"fake-needs-jq": {"tool.toml": "description = \"Needs jq\"\nneeds = [\"jq\"]\n"}}})
 	f.e.mustHostel("acquire", "fake-needs-jq", "--task", "need")
 	if r := f.e.mustHostel("run", "--", "echo $JQ_SECTION"); r.stdout != "on\n" {
@@ -348,27 +348,27 @@ func TestToolMiseNeed(t *testing.T) {
 	}
 }
 
-// TestToolWholeMachineCapacity (M10e): a whole-machine tool counts rooms with
-// all slots free, not free slots: a machine with two free slots gives one, and
-// a lease on one slot leaves none.
+// TestToolWholeMachineCapacity (M10e): a whole-machine tool counts machines with
+// all rooms free, not free rooms: a machine with two free rooms gives one, and
+// a lease on one room leaves none.
 func TestToolWholeMachineCapacity(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineKeys: "slots = [{ name = \"a\" }, { name = \"b\" }]\n",
-		machineTools: []string{"fake-screen", "fake-desktop"}})
+	f := newFixture(t, &fixtureOpts{templateKeys: "rooms = [{ name = \"a\" }, { name = \"b\" }]\n",
+		templateTools: []string{"fake-screen", "fake-desktop"}})
 	free := func() int {
 		t.Helper()
 		var one protocol.Tool
 		if err := json.Unmarshal([]byte(f.e.mustHostel("tools", "fake-desktop", "--json").stdout), &one); err != nil {
 			t.Fatal(err)
 		}
-		return one.FreeSlots
+		return one.FreeRooms
 	}
 	if got := free(); got != 1 {
-		t.Fatalf("free capacity of the whole machine, all slots free: %d, want 1", got)
+		t.Fatalf("free capacity of the whole machine, all rooms free: %d, want 1", got)
 	}
 	f.acquire()
 	if got := free(); got != 0 {
-		t.Fatalf("free capacity of the whole machine, one slot in use: %d, want 0", got)
+		t.Fatalf("free capacity of the whole machine, one room in use: %d, want 0", got)
 	}
 }
 
@@ -381,7 +381,7 @@ func TestToolEnvInstall(t *testing.T) {
 	e.writeTool("fake-sdk", map[string]string{"install.linux.sh": "#!/bin/sh\nset -e\nmkdir -p \"$HOSTEL_CACHE_DIR/fake-sdk/bin\"\n" +
 		"echo \"${FAKE_SDK_VERSION:-1.4.2}\" > \"$HOSTEL_CACHE_DIR/fake-sdk/version\"\n"})
 	e.init()
-	a := e.startStaticRoom("a")
+	a := e.startStaticMachine("a")
 	doc := func(version string) string {
 		return `
 [providers.home]
@@ -396,27 +396,27 @@ env = { FAKE_SDK_VERSION = "` + version + `" }
 	}
 	e.writeConfig(serverHeader() + doc("2.0.1"))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/a", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/a", protocol.MachineRunning, machineReady)
 	if r := e.applyDoc(doc("3.0.0")); r.code != 0 {
 		t.Fatalf("change the machine env: %s", r)
 	}
 	e.waitFor("the new version on home/a", 2*time.Minute, func() bool {
-		inv := inventoryOf(s.room("home/a"), "fake-sdk")
+		inv := inventoryOf(s.machine("home/a"), "fake-sdk")
 		return inv != nil && slices.Equal(inv.Options, []string{"3.0.0"})
 	})
 }
 
-// TestToolNewOptionOnDemand (M10e): an on-demand room installs a screen tool
+// TestToolNewOptionOnDemand (M10e): an on-demand machine installs a screen tool
 // at its first lease. A new option of the tool passes the request check while
-// the room still has the old install, and the lease gets it.
+// the machine still has the old install, and the lease gets it.
 func TestToolNewOptionOnDemand(t *testing.T) {
 	t.Parallel()
-	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallMachine)
+	f := newExternalFixture(t, "", `warm_running = "10m"`, nil, smallTemplate)
 	f.acquire()
 	f.e.mustHostel("release")
-	f.e.waitFor("the slot free", time.Minute, func() bool {
-		rooms := f.cloudRooms()
-		return len(rooms) == 1 && rooms[0].Slots[0].State == protocol.SlotFree
+	f.e.waitFor("the room free", time.Minute, func() bool {
+		machines := f.cloudMachines()
+		return len(machines) == 1 && machines[0].Rooms[0].State == protocol.RoomFree
 	})
 	toml, err := os.ReadFile(filepath.Join(f.e.toolDir("fake-screen"), "tool.toml"))
 	if err != nil {
@@ -430,12 +430,12 @@ func TestToolNewOptionOnDemand(t *testing.T) {
 	}
 }
 
-// twoMachinesIn is twoMachines in an environment that has tool changes.
-func twoMachinesIn(t *testing.T, e *env, toolsA, toolsB, envB string) *fixture {
+// twoTemplatesIn is twoMachines in an environment that has tool changes.
+func twoTemplatesIn(t *testing.T, e *env, toolsA, toolsB, envB string) *fixture {
 	t.Helper()
 	e.init()
-	a := e.startStaticRoom("a")
-	b := e.startStaticRoom("b")
+	a := e.startStaticMachine("a")
+	b := e.startStaticMachine("b")
 	e.useTools("fake-screen", "fake-desktop")
 	e.writeConfig(serverHeader() + `
 [providers.home]
@@ -453,8 +453,8 @@ tools = ` + toolsB + `
 env = ` + envB + `
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/a", protocol.RoomRunning, roomReady)
-	s.waitRoom("home/b", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/a", protocol.MachineRunning, machineReady)
+	s.waitMachine("home/b", protocol.MachineRunning, machineReady)
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
 	return &fixture{e: e, s: s, c: a}
@@ -466,7 +466,7 @@ env = ` + envB + `
 // machines; an admin's move places a lease before leases of other tools.
 func TestToolWaitingLine(t *testing.T) {
 	t.Parallel()
-	f := twoMachines(t, `["fake-screen"]`, `["fake-desktop"]`, "{}")
+	f := twoTemplates(t, `["fake-screen"]`, `["fake-desktop"]`, "{}")
 	f.acquire("fake-screen")
 	f.e.newRepoNamed("desk", defaultRepoFiles())
 	f.acquire("fake-desktop")
@@ -516,11 +516,11 @@ func TestToolConfig(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	c := e.startStaticRoom("box")
+	c := e.startStaticMachine("box")
 	e.useTools("fake-sdk")
 	e.writeTool("mac-only", map[string]string{"tool.toml": "description = \"Mac only\"\n", "check.macos.sh": "#!/bin/sh\necho 1\n"})
 	e.writeTool("needs-mac", map[string]string{"tool.toml": "description = \"Needs a Mac tool\"\nneeds = [\"mac-only\"]\n", "check.linux.sh": "#!/bin/sh\necho 1\n"})
-	machine := `
+	template := `
 [providers.home]
 kind = "static"
 
@@ -529,9 +529,9 @@ address = "` + c.address() + `"
 os = "linux"
 tools = ["fake-sdk"]
 `
-	e.writeConfig(serverHeader() + machine)
+	e.writeConfig(serverHeader() + template)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
 	doc := s.configDoc().Document
 	for _, c := range []struct{ tools, want string }{
 		{`["mac-only"]`, "providers.home.machines.box.tools[0]: mac-only has no scripts for linux; it works on macos"},
@@ -573,13 +573,13 @@ tools = ["fake-sdk"]
 	}
 	s = s.restart()
 	warning := fmt.Sprintf("Warning: the stored configuration (revision %d) has the form before M10e, so the server runs without providers and machines", rev)
-	if r := e.mustHostel("status"); !strings.Contains(r.stdout, warning) || len(s.status().Machines) != 0 {
+	if r := e.mustHostel("status"); !strings.Contains(r.stdout, warning) || len(s.status().Templates) != 0 {
 		t.Fatalf("status with an old stored configuration:\n%s", r.stdout)
 	}
 	if r := e.applyDoc(doc); r.code != 0 {
 		t.Fatalf("apply the new form: %s", r)
 	}
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
 	if r := e.mustHostel("status"); strings.Contains(r.stdout, "Warning") {
 		t.Fatalf("status after the new configuration:\n%s", r.stdout)
 	}
@@ -596,7 +596,7 @@ tools = ["fake-sdk"]
 		t.Fatalf("config check with platforms_dir: %s", r)
 	}
 	s = s.restart()
-	s.waitRoom("home/box", protocol.RoomRunning, roomReady)
+	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
 	if !strings.Contains(s.log.String(), "server.toml has platforms_dir, which M10e removed") {
 		t.Fatalf("no warning for platforms_dir in the server log:\n%s", s.log.String())
 	}
@@ -608,7 +608,7 @@ tools = ["fake-sdk"]
 // for, and the screen tools that started); "hostel info" prints them again.
 func TestLeaseFacts(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-desktop"}})
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "fake-desktop"}})
 	r := f.e.mustHostel("acquire", "fake-sdk", "--task", "facts")
 	facts := []string{
 		`(?m)^Lease [a-z0-9]+ is ready on home/box\.$`,
@@ -624,7 +624,7 @@ func TestLeaseFacts(t *testing.T) {
 		}
 	}
 	f.e.mustHostel("release")
-	f.waitSlotFree()
+	f.waitRoomFree()
 	r = f.e.mustHostel("acquire", "fake-screen:option-c", "--task", "facts")
 	if !regexp.MustCompile(`(?m)^  started:    fake-screen option-c \(FAKE_SCREEN_ID, FAKE_SCREEN_IDS, FAKE_SCREEN_OS\)$`).MatchString(r.stdout) ||
 		!strings.Contains(r.stdout, "hostel screenshot") {
@@ -641,17 +641,17 @@ func TestLeaseFacts(t *testing.T) {
 	}
 }
 
-// TestToolMachineOptions (M10e review): install and check get the options
+// TestToolTemplateOptions (M10e review): install and check get the options
 // that the machine lists for a screen tool (HOSTEL_TOOL_ALL_OPTIONS), not all
 // options of the tool. A check that reports none of the machine's options
-// fails: the room is broken, and it does not serve the tool.
-func TestToolMachineOptions(t *testing.T) {
+// fails: the machine is broken, and it does not serve the tool.
+func TestToolTemplateOptions(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	e.init()
-	a := e.startStaticRoom("a")
-	b := e.startStaticRoom("b")
-	c := e.startStaticRoom("c")
+	a := e.startStaticMachine("a")
+	b := e.startStaticMachine("b")
+	c := e.startStaticMachine("c")
 	e.useTools("fake-sdk", "fake-screen")
 	e.writeTool("fake-screen", map[string]string{"check.linux.sh": "#!/bin/sh\n[ -z \"$FAKE_CHECK_EMPTY\" ] || exit 0\necho \"${FAKE_CHECK_OPTIONS:-$HOSTEL_TOOL_ALL_OPTIONS}\"\n"})
 	e.writeConfig(serverHeader() + `
@@ -676,21 +676,21 @@ tools = ["fake-screen:option-b"]
 env = { FAKE_CHECK_EMPTY = "1" }
 `)
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	room := s.waitRoom("home/a", protocol.RoomRunning, roomReady)
-	if inv := inventoryOf(room, "fake-screen"); inv == nil || !slices.Equal(inv.Options, []string{"option-b"}) {
+	machine := s.waitMachine("home/a", protocol.MachineRunning, machineReady)
+	if inv := inventoryOf(machine, "fake-screen"); inv == nil || !slices.Equal(inv.Options, []string{"option-b"}) {
 		t.Fatalf("fake-screen in the inventory of home/a: %+v", inv)
 	}
 	if got := a.sh("grep '^install' " + cacheDir + "/fake-screen.log"); got != "install linux option-b" {
 		t.Fatalf("the install of fake-screen on home/a: %q, want only option-b", got)
 	}
-	room = s.waitRoom("home/b", protocol.RoomBroken, roomReady)
-	if !strings.Contains(room.Reason, "fake-screen check reported option-c, none of the options of the machine (option-b)") {
-		t.Fatalf("home/b: %s", room.Reason)
+	machine = s.waitMachine("home/b", protocol.MachineBroken, machineReady)
+	if !strings.Contains(machine.Reason, "fake-screen check reported option-c, none of the options of the machine (option-b)") {
+		t.Fatalf("home/b: %s", machine.Reason)
 	}
 	// A check that reports nothing confirms no option either.
-	room = s.waitRoom("home/c", protocol.RoomBroken, roomReady)
-	if !strings.Contains(room.Reason, "fake-screen check reported no option, none of the options of the machine (option-b)") {
-		t.Fatalf("home/c: %s", room.Reason)
+	machine = s.waitMachine("home/c", protocol.MachineBroken, machineReady)
+	if !strings.Contains(machine.Reason, "fake-screen check reported no option, none of the options of the machine (option-b)") {
+		t.Fatalf("home/c: %s", machine.Reason)
 	}
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
@@ -701,8 +701,8 @@ env = { FAKE_CHECK_EMPTY = "1" }
 
 // TestToolChangeDuringCleanup (M10e review): an admin cannot change a tool
 // that a lease in cleanup needs; a tool that it does not use can change, and
-// the room installs the new version after the cleanup (the check of the
-// cleanup records the version that the room has, not the new one).
+// the machine installs the new version after the cleanup (the check of the
+// cleanup records the version that the machine has, not the new one).
 func TestToolChangeDuringCleanup(t *testing.T) {
 	t.Parallel()
 	extra := func(v string) map[string]string {
@@ -712,7 +712,7 @@ func TestToolChangeDuringCleanup(t *testing.T) {
 			"check.linux.sh":   "#!/bin/sh\necho 1.0\n",
 		}
 	}
-	f := newFixture(t, &fixtureOpts{machineTools: []string{"fake-screen", "fake-extra"}, tools: map[string]map[string]string{"fake-extra": extra("v1")}})
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "fake-extra"}, tools: map[string]map[string]string{"fake-extra": extra("v1")}})
 	f.acquire()
 	f.marker("slow-stop", true)
 	f.e.mustHostel("release")

@@ -16,61 +16,61 @@ import (
 // repoToolsNote is the note of GET /v1/tools about the repository's tools.
 const repoToolsNote = "The tools of the repository's mise files (mise.toml, .tool-versions) are set up for each lease on every machine; do not ask for them."
 
-// capacity counts what the candidate machines can take: free and all slots,
-// or, for a whole-machine request, rooms with all slots free and all rooms. It
-// also says whether one of the machines can create a new room now.
-func (s *Server) capacity(cands []string, rooms []store.Room, slots []store.Slot, whole bool) (free, total int, newRoom bool) {
-	perMachine := map[string]int{}
-	for _, r := range rooms {
-		key := r.Provider + "/" + r.Machine
+// capacity counts what the candidate machines can take: free and all rooms,
+// or, for a whole-machine request, machines with all rooms free and all machines. It
+// also says whether one of the machines can create a new machine now.
+func (s *Server) capacity(cands []string, machines []store.Machine, rooms []store.Room, whole bool) (free, total int, newMachine bool) {
+	perTemplate := map[string]int{}
+	for _, r := range machines {
+		key := r.Provider + "/" + r.Template
 		if !slices.Contains(cands, key) {
 			continue
 		}
-		perMachine[key]++
-		usable := r.State == protocol.RoomRunning && !r.Drained
-		roomSlots, roomFree := 0, 0
-		for _, sl := range slots {
-			if sl.RoomID != r.ID {
+		perTemplate[key]++
+		usable := r.State == protocol.MachineRunning && !r.Drained
+		machineRooms, machineFree := 0, 0
+		for _, sl := range rooms {
+			if sl.MachineID != r.ID {
 				continue
 			}
-			roomSlots++
-			if sl.State == protocol.SlotFree && usable {
-				roomFree++
+			machineRooms++
+			if sl.State == protocol.RoomFree && usable {
+				machineFree++
 			}
 		}
 		switch {
 		case !whole:
-			total, free = total+roomSlots, free+roomFree
-		case roomSlots > 0:
+			total, free = total+machineRooms, free+machineFree
+		case machineRooms > 0:
 			total++
-			if roomFree == roomSlots {
+			if machineFree == machineRooms {
 				free++
 			}
 		}
 	}
 	for _, key := range cands {
-		m := s.config().Machine(key)
-		if m != nil && m.OnDemand() && perMachine[key] < *m.MaxRooms {
-			newRoom = true
+		m := s.config().Template(key)
+		if m != nil && m.OnDemand() && perTemplate[key] < *m.MaxMachines {
+			newMachine = true
 			if whole {
 				total++
 			} else {
-				total += len(m.Slots)
+				total += len(m.Rooms)
 			}
 		}
 	}
-	return free, total, newRoom
+	return free, total, newMachine
 }
 
 // online reports whether a machine can take a lease: an on-demand machine
-// always, a static machine when its room is not offline or retired.
-func online(m *config.Machine, rooms []store.Room) bool {
+// always, a static machine when its machine is not offline or retired.
+func online(m *config.Template, machines []store.Machine) bool {
 	if m.OnDemand() {
 		return true
 	}
-	for _, r := range rooms {
-		if r.Provider+"/"+r.Machine == m.Key() {
-			return r.State != protocol.RoomRetired && !(r.State == protocol.RoomBroken && r.BrokenReason == reasonUnreachable)
+	for _, r := range machines {
+		if r.Provider+"/"+r.Template == m.Key() {
+			return r.State != protocol.MachineRetired && !(r.State == protocol.MachineBroken && r.BrokenReason == reasonUnreachable)
 		}
 	}
 	return false
@@ -90,12 +90,12 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	view, err := s.loadToolView(ctx)
 	if err != nil {
-		s.internalError(w, "read rooms", err)
+		s.internalError(w, "read machines", err)
 		return
 	}
-	slots, err := s.store.Slots(ctx)
+	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
-		s.internalError(w, "read slots", err)
+		s.internalError(w, "read rooms", err)
 		return
 	}
 	leases, err := s.store.ActiveLeases(ctx)
@@ -105,13 +105,13 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 	measured, err := s.store.LastHardware(ctx)
 	if err != nil {
-		s.internalError(w, "read room hardware", err)
+		s.internalError(w, "read machine hardware", err)
 		return
 	}
 	cfg := view.lc.cfg
-	machines := view.schedMachines()
+	templates := view.schedTemplates()
 	var names []string
-	for _, m := range cfg.Machines() {
+	for _, m := range cfg.Templates() {
 		for _, mt := range m.ToolList {
 			if !slices.Contains(names, mt.Name) {
 				names = append(names, mt.Name)
@@ -120,20 +120,20 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 	out := protocol.Tools{Tools: []protocol.Tool{}, Note: repoToolsNote}
 	for _, name := range names {
-		entry := protocol.Tool{Name: name, Mise: true, Needs: []string{}, Options: []string{}, Env: []string{}, Machines: []protocol.ToolMachine{}}
+		entry := protocol.Tool{Name: name, Mise: true, Needs: []string{}, Options: []string{}, Env: []string{}, Templates: []protocol.ToolTemplate{}}
 		if t := cfg.Tools[name]; t != nil {
 			entry.Mise, entry.Description, entry.Screen, entry.Needs = false, t.Description, t.Screen, nonNil(t.Needs)
 			entry.MaxOptions, entry.WholeMachine, entry.Env, entry.Guide = t.MaxOptions, t.WholeMachine, envNames(t), t.Guide
 		}
 		var cands []string
-		for i, m := range cfg.Machines() {
-			h, ok := machines[i].Tools[name]
+		for i, m := range cfg.Templates() {
+			h, ok := templates[i].Tools[name]
 			if !ok {
 				continue
 			}
 			cands = append(cands, m.Key())
-			entry.Machines = append(entry.Machines, protocol.ToolMachine{Key: m.Key(), OS: m.OS, Options: nonNil(h.Options),
-				OnDemand: m.OnDemand(), Online: online(m, view.rooms), Hardware: machineHardware(m, measured)})
+			entry.Templates = append(entry.Templates, protocol.ToolTemplate{Key: m.Key(), OS: m.OS, Options: nonNil(h.Options),
+				OnDemand: m.OnDemand(), Online: online(m, view.machines), Hardware: templateHardware(m, measured)})
 			for _, o := range h.Options {
 				if !slices.Contains(entry.Options, o) {
 					entry.Options = append(entry.Options, o)
@@ -150,7 +150,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 			}
 			entry.Options = nonNil(ordered)
 		}
-		free, total, newRoom := s.capacity(cands, view.rooms, slots, leaseRequest(view.lc.cfg, store.Lease{Tools: []string{name}}).Exclusive)
+		free, total, newMachine := s.capacity(cands, view.machines, rooms, leaseRequest(view.lc.cfg, store.Lease{Tools: []string{name}}).Exclusive)
 		for _, l := range leases {
 			if l.State == protocol.LeaseQueued && slices.Contains(toolNamesOf(l.Tools), name) {
 				entry.Waiting++
@@ -158,9 +158,9 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 		}
 		wait := time.Duration(0)
 		if free == 0 || entry.Waiting > 0 {
-			wait = s.estimatedWait(ctx, cands, entry.Waiting, total, newRoom && free == 0)
+			wait = s.estimatedWait(ctx, cands, entry.Waiting, total, newMachine && free == 0)
 		}
-		entry.FreeSlots, entry.NewRoom, entry.EstimatedWaitSeconds = free, newRoom, int(wait.Seconds())
+		entry.FreeRooms, entry.NewMachine, entry.EstimatedWaitSeconds = free, newMachine, int(wait.Seconds())
 		entry.TypicalLeaseSeconds = int(s.medianDuration(ctx, nil, name, 0).Seconds())
 		out.Tools = append(out.Tools, entry)
 	}
@@ -189,13 +189,13 @@ func (s *Server) leaseWait(ctx context.Context, l store.Lease) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	slots, err := s.store.Slots(ctx)
+	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return 0, 0
 	}
 	req := leaseRequest(view.lc.cfg, l)
-	cands := scheduler.Candidates(view.schedMachines(), req)
-	free, total, newRoom := s.capacity(cands, view.rooms, slots, req.Exclusive)
+	cands := scheduler.Candidates(view.schedTemplates(), req)
+	free, total, newMachine := s.capacity(cands, view.machines, rooms, req.Exclusive)
 	behind := s.waitingOf(l.ID).Behind
-	return int(s.estimatedWait(ctx, cands, behind, total, newRoom && free == 0).Seconds()), behind
+	return int(s.estimatedWait(ctx, cands, behind, total, newMachine && free == 0).Seconds()), behind
 }

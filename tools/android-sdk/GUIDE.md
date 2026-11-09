@@ -6,8 +6,8 @@ get such a machine. Ask for android-emulator only when you must see the app.
 
 The SDK has the platforms that the version of this tool lists. A Gradle build
 downloads the other platforms and build tools that it needs (the licenses are
-accepted). They stay in the cache of the room, like ~/.gradle, so the first
-build on a room is slow and the next ones are fast.
+accepted). They stay in the cache of the machine, like ~/.gradle, so the first
+build on a machine is slow and the next ones are fast.
 
   hostel acquire android-sdk jdk --task "build"
   hostel run -- ./gradlew assembleDebug
