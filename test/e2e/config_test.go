@@ -5,6 +5,8 @@ package e2e
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -203,5 +205,17 @@ tools = ["ios-simulator", "android-emulator", "macos-desktop", "jdk:21"]
 	r := e.hostel("admin", "config", "check")
 	if r.code != 0 || !strings.Contains(r.stdout, "iphone-17-pro") || !strings.Contains(r.stdout, "# home/macbook: the needs of its tools add xcode, android-sdk") {
 		t.Fatalf("config check of the default tools: %s", r)
+	}
+	if !strings.Contains(r.stdout, "[providers.home.machines.macbook]") || strings.Contains(r.stdout, "[providers.home.templates") {
+		t.Fatalf("the effective configuration of a static provider: %s", r)
+	}
+	effective := filepath.Join(t.TempDir(), "effective.toml")
+	// After the configuration, the output lists the default of each tool.
+	document, _, _ := strings.Cut(r.stdout, "\n# tool ")
+	if err := os.WriteFile(effective, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if again := e.hostel("admin", "config", "check", "--config", effective); again.code != 0 {
+		t.Fatalf("config check of the effective configuration: %s", again)
 	}
 }

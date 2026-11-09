@@ -210,7 +210,7 @@ func adminConfigCheck(args []string, stdout, stderr io.Writer) int {
 	if cfg.PlatformsDir != "" {
 		fmt.Fprintln(stderr, "hostel: warning:", config.PlatformsDirWarning)
 	}
-	out, err := toml.Marshal(cfg)
+	out, err := cfg.Effective()
 	if err != nil {
 		fmt.Fprintln(stderr, "hostel: print the configuration:", err)
 		return 1

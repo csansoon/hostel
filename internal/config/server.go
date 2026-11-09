@@ -231,6 +231,26 @@ func (m *Template) DeclaredSize() (cores, memoryGB int) {
 	return cores, memoryGB
 }
 
+// Effective is the resolved configuration as TOML, with the keys of the file:
+// a static provider has its machines again, without the limit that resolve set.
+func (s *Server) Effective() ([]byte, error) {
+	out := *s
+	out.Providers = make(map[string]*Provider, len(s.Providers))
+	for name, p := range s.Providers {
+		c := *p
+		if p.Kind == ProviderStatic {
+			c.Machines, c.Templates = make(map[string]*Template, len(p.Templates)), nil
+			for mn, m := range p.Templates {
+				e := *m
+				e.MaxMachines = nil
+				c.Machines[mn] = &e
+			}
+		}
+		out.Providers[name] = &c
+	}
+	return toml.Marshal(&out)
+}
+
 // Templates returns all machines in file order (providers in file order, then
 // machines in file order).
 func (s *Server) Templates() []*Template {
