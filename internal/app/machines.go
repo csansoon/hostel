@@ -37,6 +37,7 @@ type templatePage struct {
 type detailsMsg struct {
 	gen     int
 	key     string
+	machine string
 	details map[string]protocol.MachineDetails
 	errs    []string
 }
@@ -46,6 +47,14 @@ func (p *templatePage) title() string {
 		return p.machine
 	}
 	return p.templateKey
+}
+
+// state is the state of the page's machines: one machine of a template, or
+// all of them.
+func (p *templatePage) state(m *model, ms protocol.TemplateStatus, now time.Time) state {
+	st := m.st
+	st.Machines = p.machines(m)
+	return templateState(st, ms, now)
 }
 
 func (p *templatePage) machines(m *model) []protocol.MachineStatus {
@@ -69,13 +78,13 @@ func (p *templatePage) load(m *model) tea.Cmd {
 		return nil
 	}
 	p.loading = true
-	c, gen, key := m.c, m.gen, p.templateKey
+	c, gen, key, selected := m.c, m.gen, p.templateKey, p.machine
 	var names []string
 	for _, r := range p.machines(m) {
 		names = append(names, r.Name)
 	}
 	return func() tea.Msg {
-		out := detailsMsg{gen: gen, key: key, details: map[string]protocol.MachineDetails{}}
+		out := detailsMsg{gen: gen, key: key, machine: selected, details: map[string]protocol.MachineDetails{}}
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		// The machines in parallel, each with its own deadline: each read can
@@ -103,7 +112,7 @@ func (p *templatePage) load(m *model) tea.Cmd {
 }
 
 func (p *templatePage) other(m *model, msg tea.Msg) tea.Cmd {
-	if d, ok := msg.(detailsMsg); ok && d.gen == m.gen && d.key == p.templateKey {
+	if d, ok := msg.(detailsMsg); ok && d.gen == m.gen && d.key == p.templateKey && d.machine == p.machine {
 		p.details, p.errs, p.loaded, p.loading = d.details, d.errs, time.Now(), false
 	}
 	return nil
@@ -132,7 +141,7 @@ func (p *templatePage) body(m *model) string {
 	}
 	now := time.Now()
 	w := contentWidth(m)
-	st := templateState(m.st, ms, now)
+	st := p.state(m, ms, now)
 	kind := "On demand, up to " + plural(ms.MaxMachines, "machine")
 	if ms.Kind == "static" {
 		kind = "A fixed machine"
@@ -297,7 +306,7 @@ func (p *templatePage) hint(m *model) string {
 	leases, i := p.leases(m)
 	if i < 0 {
 		ms, _ := p.template(m)
-		s := templateState(m.st, ms, time.Now())
+		s := p.state(m, ms, time.Now())
 		return p.templateKey + ": " + strings.TrimPrefix(s.word+" · "+s.detail, " · ")
 	}
 	l := leases[i]
@@ -340,7 +349,7 @@ func (p *templatePage) key(m *model, k tea.KeyMsg) tea.Cmd {
 	case "a":
 		if ms, ok := p.template(m); ok && m.admin() {
 			if opts := machineActions(m, ms); len(opts) > 0 {
-				m.menu(clean(ms.Key), templateState(m.st, ms, time.Now()).word, opts)
+				m.menu(clean(ms.Key), p.state(m, ms, time.Now()).word, opts)
 			}
 		}
 	case "up", "k":

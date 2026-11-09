@@ -339,3 +339,32 @@ func TestOldHelperCleanup(t *testing.T) {
 		t.Fatalf("after the cleanup (jobs, directory entries): %q, %v", out, err)
 	}
 }
+
+// TestOldHelperCleanupRoomUser (M10g): a room with its own OS user has its own
+// helper in its own home, so the server replaces that one.
+func TestOldHelperCleanupRoomUser(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{roomUsers: []string{"hostel-a"}, templateTools: []string{"fake-screen", "fake-sdk"},
+		templateKeys: "rooms = [{ name = \"a\", user = \"hostel-a\" }]\n"})
+	lease := f.acquire()
+	f.s.stop()
+	script := `printf '%s\n' '#!/bin/sh' 'echo hostel: unknown command \"helper\" >&2' 'exit 2' > /home/hostel-a/hostel/bin/.old && chmod 755 /home/hostel-a/hostel/bin/.old && mv /home/hostel-a/hostel/bin/.old /home/hostel-a/hostel/bin/hostel`
+	if out, err := docker("exec", f.c.name, "sh", "-c", script); err != nil {
+		t.Fatalf("install the old binary: %v: %s", err, out)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(f.e.dataDir(), "hostel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`UPDATE leases SET state = 'cleaning', end_state = 'failed', end_reason = 'the server was updated; acquire again', revision = revision + 1 WHERE id = ?`, lease)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s = f.s.restart()
+	f.e.waitFor("the end of the migrated lease", 2*time.Minute, func() bool { return f.lease(lease).State == "failed" })
+	f.waitRoomFree()
+	if r := f.s.machine("home/box"); r.State == protocol.MachineBroken {
+		t.Fatalf("the machine is broken: %s", r.Reason)
+	}
+}

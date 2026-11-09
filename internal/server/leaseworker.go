@@ -546,7 +546,7 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
 	if errors.Is(err, machineops.ErrNoHelper) {
 		// A lease of a server before M10g: its machine still has the old binary.
-		if err = s.syncMachineHelper(ctx, machineID); err == nil {
+		if err = s.syncMachineHelper(ctx, machineID, machine); err == nil {
 			err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
 		}
 	}
@@ -578,8 +578,9 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	return nil
 }
 
-// syncMachineHelper installs the server's helper on a machine.
-func (s *Server) syncMachineHelper(ctx context.Context, machineID int64) error {
+// syncMachineHelper installs the server's helper through machine: a room with
+// its own OS user has its own helper in its own home.
+func (s *Server) syncMachineHelper(ctx context.Context, machineID int64, machine *machineops.Machine) error {
 	r, err := s.store.Machine(ctx, machineID)
 	if err != nil {
 		return err
@@ -589,11 +590,6 @@ func (s *Server) syncMachineHelper(ctx context.Context, machineID int64) error {
 	if m == nil {
 		return fmt.Errorf("install the helper: the machine %s has no entry in the configuration", r.Name)
 	}
-	machine, _, err := s.openMachine(ctx, machineID)
-	if err != nil {
-		return err
-	}
-	defer machine.Conn.Close()
 	upload, err := s.machineUpload(lc, machine, m)
 	if err != nil {
 		return err
