@@ -121,7 +121,8 @@ func TestSmokeWindowsDesktop(t *testing.T) {
 	}
 	// A program that the shell starts has no HOSTEL_LEASE: the stop script of
 	// windows-desktop ends it (M10h).
-	e.mustHostel("run", "--", `desktop explorer.exe "$PWD\out\HostelSmoke.exe"`)
+	// explorer.exe exits with 1 also when it starts the program.
+	e.hostel("run", "--", `desktop explorer.exe "$PWD\out\HostelSmoke.exe"`)
 	e.waitFor("the app started by explorer", time.Minute, func() bool {
 		r := e.hostel("run", "--", "@(Get-Process HostelSmoke -ErrorAction SilentlyContinue).Count")
 		return r.code == 0 && strings.TrimSpace(r.stdout) == "2"
