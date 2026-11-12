@@ -173,6 +173,21 @@ func stopGroup(_ int, group string, _ bool) {
 	windows.TerminateJobObject(windows.Handle(r), 1)
 }
 
+// processName returns the image path of a process, or "unknown".
+func processName(pid int) string {
+	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return "unknown"
+	}
+	defer windows.CloseHandle(p)
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(p, 0, &buf[0], &n); err != nil {
+		return "unknown"
+	}
+	return windows.UTF16ToString(buf[:n])
+}
+
 func signalProcess(pid int, _ bool) {
 	p, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
 	if err != nil {
