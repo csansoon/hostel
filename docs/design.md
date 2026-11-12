@@ -1225,13 +1225,25 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   watchdog; a retry a few seconds later works.
 - **Desktop cleanup (M7).** Apps that a guest starts with `open` are children of
   launchd, without `HOSTEL_LEASE` and outside the lease's sessions, so the process
-  cleanup (section 17) does not find them. For a desktop lease
-  (`macos-desktop`), its `start.macos.sh` records the foreground apps
-  (`lsappinfo`; PID, start time, bundle ID) and the entries of
-  `~/Applications`, and its `stop.macos.sh` ends each foreground app that was not
-  running then (SIGKILL: a quit can wait at a save dialog; not Finder or the
-  Dock), deletes its saved window state, ends the `agent-device` runner, and
-  deletes the new entries of `~/Applications`. A lease without `macos-desktop`
+  cleanup (section 17) does not find them. Agents that an app registers
+  (`SMAppService`, `launchctl bootstrap`) are jobs of the user's launchd domain.
+  A desktop lease holds the whole machine, so all of these belong to it. For a
+  desktop lease (`macos-desktop`), its `start.macos.sh` records the apps of all
+  types (`lsappinfo`; PID, start time, type, bundle ID, executable), the jobs of
+  `gui/<uid>`, and the entries of `~/Applications` and `~/Library/LaunchAgents`.
+  Its `stop.macos.sh` (M10h) first runs `launchctl bootout` on each new job that
+  is not `com.apple.*` and deletes the new plists in `~/Library/LaunchAgents`.
+  Then it ends each app that was not running at the start (SIGKILL: a quit can
+  wait at a save dialog): a foreground app, except Finder and the Dock, or a
+  background app (UI element or background only) that is not `com.apple.*` and
+  not under `/System`, `/usr`, `/Library/Apple`, `/bin`, or `/sbin` (macOS starts
+  its own agents at any time). It deletes their saved window state, ends the
+  `agent-device` runner, and deletes the new entries of `~/Applications`. Jobs
+  and apps from before the lease stay. Tested on `home/macbook` (2026-11-12): a
+  test launch agent, a background app, and a new foreground app ended; Google's
+  agents from before stayed. A lease without `macos-desktop` does not get this
+  cleanup: apps that it opens stay (found on `home/macbook`: a Safari window
+  from 2026-11-10 and TextEdit from 2026-11-02 still ran). A lease without `macos-desktop`
   does not touch the desktop. The machine needs an unlocked desktop session: a locked screen
   gives the lock screen to `screencapture` and blocks the runner (found on the
   static MacBook, 2026-10-29).
