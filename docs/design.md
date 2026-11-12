@@ -1287,10 +1287,18 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   whole desktop through `desktop`.
 - **Limits.** The apps of a lease run as the machine user, but they share the
   desktop with the desktop user's windows: real input can reach a window of
-  the desktop user that is not elevated. An app that is started through the
-  shell (for example a packaged app through its activation) is not a child of
-  the program and has no `HOSTEL_LEASE`, so cleanup does not end it. A
-  disconnected or locked desktop stops real input and screenshots.
+  the desktop user that is not elevated. A packaged app (MSIX) does not start
+  when the desktop user is another user: activation fails with `0x80070520`
+  ("A specified logon session does not exist"; M10h test flight, 2026-11-12),
+  also through `explorer.exe shell:AppsFolder`, and an unpackaged build of a
+  Windows App SDK app needs its package. `explorer.exe` that a lease starts
+  hands the request to the desktop user's shell, which makes `explorer.exe`
+  processes of the desktop user (the program to open did not start in the
+  test). A disconnected or locked desktop stops real input and screenshots.
+- **Packages (M10h).** `start.windows.ps1` records the packages of the machine
+  user (`Get-AppxPackage`), and `stop.windows.ps1` removes the packages that the
+  lease installed, with their app data. Install packages in a job, not through
+  `desktop`.
 
 ### mise on machines
 
