@@ -28,6 +28,7 @@ if [ -d "$HOME/Library/LaunchAgents" ] && [ -f "$HOSTEL_ROOM_DIR/desktop-launcha
 fi
 
 lsappinfo list | awk '
+	/^ *[0-9]+\) / { b = ""; x = "" }
 	/bundleID=/ { b = $0; sub(/.*bundleID=/, "", b); gsub(/"/, "", b); gsub(/ /, "", b) }
 	/executable path=/ { x = $0; sub(/.*executable path="/, "", x); sub(/"$/, "", x) }
 	/ pid = [0-9]+ .*type="/ {
@@ -35,7 +36,9 @@ lsappinfo list | awk '
 		for (i = 1; i <= NF; i++) if ($i == "pid") print $(i+2), t, b, x
 	}' > "$HOSTEL_ROOM_DIR/desktop-apps.now"
 while read -r pid type bundle exe; do
-	start=$(ps -o lstart= -p "$pid" | tr -s ' ' '_') || continue
+	# An app that ended since the list is not killed (its PID can be reused).
+	start=$(ps -o lstart= -p "$pid") || continue
+	start=$(echo "$start" | tr -s ' ' '_')
 	grep -q "^$pid $start " "$HOSTEL_ROOM_DIR/desktop-apps" && continue
 	case "$bundle" in com.apple.finder | com.apple.dock) continue ;; esac
 	if [ "$type" != Foreground ]; then

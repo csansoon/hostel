@@ -6,6 +6,7 @@
 set -eu
 # "<pid> <start time> <type> <bundle id> <executable path>" of each app.
 lsappinfo list | awk '
+	/^ *[0-9]+\) / { b = ""; x = "" }
 	/bundleID=/ { b = $0; sub(/.*bundleID=/, "", b); gsub(/"/, "", b); gsub(/ /, "", b) }
 	/executable path=/ { x = $0; sub(/.*executable path="/, "", x); sub(/"$/, "", x) }
 	/ pid = [0-9]+ .*type="/ {

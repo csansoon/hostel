@@ -2068,7 +2068,9 @@ failed; the result lists each step.
    reverse order of `start`. If `rooms/<room>/` does not exist (a repeated cleanup
    after step 5), the helper creates it empty first; `stop` must then do nothing.
 3. Restore `authorized_keys` from `authorized_keys.base`.
-4. Check that no process of the lease (step 1) remains, and that the room
+4. Check that no process of the lease (step 1) remains: for up to 10 seconds,
+   end the ones that still run (a process can need time to end, or it started
+   during step 2), then fail with their PIDs and names (M10h). Check that the room
    ports and the lease's fixed machine ports (`ports` in the input) are free: try to
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the machine has no IPv6
    loopback address), and retry for up to 10 seconds, because

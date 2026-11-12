@@ -168,6 +168,7 @@ func (g *Gateway) unregister(leaseID string, c *ssh.ServerConn) {
 	delete(g.conns[leaseID], c)
 	if len(g.conns[leaseID]) == 0 {
 		delete(g.conns, leaseID)
+		delete(g.traffic, leaseID)
 	}
 }
 

@@ -9,6 +9,7 @@ $record = Join-Path $env:HOSTEL_ROOM_DIR 'desktop-processes'
 if (Test-Path $record) {
 	$lines = @(Get-Content $record)
 	$session = [int]($lines[0] -replace '^session ', '')
+	if ($session -eq 0) { throw 'the record of start has no desktop session' }
 	foreach ($p in Get-Process | Where-Object SessionId -eq $session) {
 		# Path is empty for the processes of other users (Windows).
 		if (-not $p.Path -or $p.Name -in 'hostel', 'explorer') { continue }
@@ -23,11 +24,11 @@ $record = Join-Path $env:HOSTEL_ROOM_DIR 'desktop-packages'
 if (-not (Test-Path $record)) { exit 0 }
 $before = @(Get-Content $record)
 $failed = @()
-# Not frameworks (for example the Windows App Runtime that a package brought):
-# Windows refuses to remove one, and removes it with the last package that
-# needs it.
+# By family: an app that updated itself during the lease stays. Not frameworks
+# (for example the Windows App Runtime that a package brought): Windows refuses
+# to remove one, and removes it with the last package that needs it.
 foreach ($p in Get-AppxPackage | Where-Object { -not $_.IsFramework }) {
-	if ($before -contains $p.PackageFullName) { continue }
+	if ($before -contains $p.PackageFamilyName) { continue }
 	try {
 		Remove-AppxPackage -Package $p.PackageFullName
 	} catch {

@@ -473,7 +473,8 @@ Status: planned (`m10h-implementation.md`). Owner decisions of 2026-11-12
 - Tunnel and forward traffic counts as lease activity.
 - Desktop cleanup ends what a desktop lease started: launch agents and background
   apps on macOS; processes in the desktop session and new packages on Windows.
-  Windows cleanup waits for ended processes before its check.
+  Cleanup waits up to 10 s for ended processes, ends the rest again, and names
+  the ones that still run.
 - Agent guides: system dialogs on macOS (a screenshot and a click at coordinates),
   a Chrome profile in the room, packaged Windows apps.
 - One machine setup guide (`machine-setup.md`) for Macs, Windows, Linux, and

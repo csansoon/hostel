@@ -253,7 +253,7 @@ signing), Linux (KVM), on-demand providers, and a check after each part.
 | W7 | The guide's `acquire dotnet windows-desktop` fails: `unknown tool "dotnet"`. | Guide fixed |
 | W8 | A failed cleanup: a process of the lease still ran and held the room directory. Not reproduced. | Cleanup waits up to 10 s, kills again, names the process, and retries the deletion |
 | W9 | A runtime tunnel (`hostel tunnel add`) came back in the next lease, also on another machine. | Fixed, with an E2E test |
-| W10 | `desktop --detach <relative path>` failed (exit 127). | The path is now relative to the command's directory, with an E2E check |
+| W10 | `desktop --detach <relative path>` failed (exit 127). | The path is now relative to the command's directory; checked by the Windows smoke test (`desktop --detach out\HostelSmoke.exe`) |
 | W11 | Event times have no date (an event of two days earlier looked like today). | `hostel status` shows the date for an event of another day |
 | W12 | Small free disk on the machine (8.5 GB). | Machine guide: disk space |
 | W13 | A sync that lost its connection made a lease expire. | Open: not reproduced |

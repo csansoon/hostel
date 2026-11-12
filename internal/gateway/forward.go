@@ -229,7 +229,8 @@ func (g *Gateway) dataSeen(leaseID string) func() {
 	return func() {
 		now := time.Now()
 		g.mu.Lock()
-		if now.Sub(g.traffic[leaseID]) < g.be.TrafficInterval() {
+		// After CloseLease (no connections), a late relay records nothing.
+		if g.conns[leaseID] == nil || now.Sub(g.traffic[leaseID]) < g.be.TrafficInterval() {
 			g.mu.Unlock()
 			return
 		}
