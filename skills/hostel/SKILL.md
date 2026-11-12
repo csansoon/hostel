@@ -28,7 +28,7 @@ Use these plain words. Only Hostel, Guest, and Room come from the hostel theme.
 | tool | What a machine gives to a lease, and what a guest asks for. Software (`android-sdk`, `xcode`, `jdk`, `node`) is usable in every lease on the machine. A screen tool (`android-emulator`, `ios-simulator`, `macos-desktop`, `windows-desktop`) starts only for a lease that asks for it. |
 | option | A version of a software tool (`node:22`) or a phone or tablet of a screen tool (`android-emulator:pixel-9`). |
 | room | A place for one lease on a machine. A machine has one room by default. |
-| lease | One guest's exclusive use of a room, for one task. It ends at release, or after 10 minutes without a `hostel` command. |
+| lease | One guest's exclusive use of a room, for one task. It ends at release, or after 10 minutes without a `hostel` command or tunnel data. |
 | waiting line | The leases that wait for a room: one line for all tools, in three lanes (`high`, `normal`, `low`). |
 | user | A person on the server, with the role `admin` or `member`. |
 

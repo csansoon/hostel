@@ -1979,9 +1979,13 @@ handles all tunnels and forwards of the lease.
 ## 16. Activity and expiry
 
 - `last_activity_at` changes when a guest calls `touch`, when a `cmd` connection
-  opens, and when a `cmd` connection closes.
+  opens, when a `cmd` connection closes, and when data goes through a tunnel or a
+  forward of the lease, in either direction (M10h). The gateway records data at
+  most once per 30 s, or per a quarter of `idle_timeout` when that is shorter. So a
+  test on the guest that only uses a tunnel keeps its lease. Hostel's own checks
+  send no data on these channels: a tunnel is confirmed by its remote listen.
 - A lease is active while the gateway has an open `cmd` connection for it.
-  `ports` connections do not count.
+  An open `ports` connection, tunnel, or forward without data does not count.
 - A `ready` lease expires when it has no open `cmd` connection and
   `last_activity_at` is older than `idle_timeout` (default 10 minutes).
 - At server start, `last_activity_at` of each `ready` lease and `last_poll_at` of

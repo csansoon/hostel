@@ -100,7 +100,9 @@ until it is ready or ends, then stops. Run the same `acquire` command again
 at least every `idle_timeout` (acquire prints it; default 10 minutes): it
 continues the lease and takes the machine when it is ready.
 A ready lease lives for `idle_timeout` (default 10 minutes) without a `hostel`
-command, and it holds the machine meanwhile. `hostel release` ends the lease and
+command or data through its tunnels and forwards, and it holds the machine
+meanwhile. A test that runs on your computer and uses the app on the machine
+through a tunnel keeps the lease while data goes through. `hostel release` ends the lease and
 the process.
 
 On Windows, an agent tool can run each command in a job object that kills all
@@ -125,7 +127,7 @@ Exit codes of `acquire`:
 on. For a long build, keep each command shorter than the time limit of your own
 shell tool: start it with `hostel run --detach`, then run
 `hostel attach <job> --wait 9m` until the job ends. A running job alone does not
-keep the lease; a running `attach` does. Between two commands, `idle_timeout`
+keep the lease; a running `attach` does, and so does data through a tunnel. Between two commands, `idle_timeout`
 applies.
 
 ```sh
@@ -235,7 +237,7 @@ leases that asked for a tool.
 hostel release
 ```
 
-A lease also ends after 10 minutes without a `hostel` command (`idle_timeout`),
+A lease also ends after 10 minutes without a `hostel` command or tunnel data (`idle_timeout`),
 and at `max_lease` (default 2 hours). Changes on the machine are temporary: make
 durable changes in local files. Cleanup does not delete the caches: mise tools,
 `$HOSTEL_CACHE_DIR`, `~/.gradle`, and other files in the home directory of the

@@ -86,7 +86,7 @@ provisions it again and it becomes Vacant. Check:
 | `acquire` exits 1 after the lease is ready | The setup job (`mise install` or `setup`) failed. The lease stays. | Fix the code; `hostel sync --setup`. |
 | A tunnel fails with `no local port` or `nothing listens on local port` (`hostel tunnel list`, `hostel info`) | The machine side works, but the guest side does not: the variable is unset, or the local server is not running. | Set the port in `.env`, or start the server. No restart of the lease is necessary. |
 | `job <id> is still running` (exit 75) | The command is longer than `--wait`. | `hostel attach <id>`. Never start the job again. |
-| The lease ended | Release, `idle_timeout` (10 min without a `hostel` command), `max_lease` (2 h), an admin, or a machine failure. | The guest prints the end reason. Acquire again. |
+| The lease ended | Release, `idle_timeout` (10 min without a `hostel` command or tunnel data), `max_lease` (2 h), an admin, or a machine failure. | The guest prints the end reason. Acquire again. |
 | A lease fails after 3 attempts | Provisioning or a tool's `start` failed 3 times. | Read the events of the machine; fix the tool or machine. |
 
 ## Connection and TLS errors

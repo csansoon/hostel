@@ -144,7 +144,7 @@ func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request,
 			fs.set(fr, lns)
 			req.Reply(true, nil)
 			for _, ln := range lns {
-				go g.acceptForwarded(conn, ln, fr)
+				go g.acceptForwarded(conn, ln, fr, leaseID)
 			}
 		case "cancel-tcpip-forward":
 			var fr forwardRequest
@@ -161,7 +161,7 @@ func (g *Gateway) globalRequests(conn *ssh.ServerConn, reqs <-chan *ssh.Request,
 	}
 }
 
-func (g *Gateway) acceptForwarded(conn *ssh.ServerConn, ln net.Listener, fr forwardRequest) {
+func (g *Gateway) acceptForwarded(conn *ssh.ServerConn, ln net.Listener, fr forwardRequest, leaseID string) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -181,7 +181,7 @@ func (g *Gateway) acceptForwarded(conn *ssh.ServerConn, ln net.Listener, fr forw
 				return
 			}
 			go ssh.DiscardRequests(reqs)
-			relay(ch, c)
+			relay(ch, c, g.dataSeen(leaseID))
 		}()
 	}
 }
@@ -216,17 +216,50 @@ func (g *Gateway) directTCPIP(nch ssh.NewChannel, upstream *ssh.Client, leaseID 
 		return
 	}
 	go ssh.DiscardRequests(reqs)
-	relay(ch, up)
+	relay(ch, up, g.dataSeen(leaseID))
 }
 
 type closeWriter interface{ CloseWrite() error }
 
-// relay copies both ways. When one side ends, the other side gets EOF; the
-// relay ends when both sides ended or after a short delay.
-func relay(a io.ReadWriteCloser, b io.ReadWriteCloser) {
+// dataSeen returns the function that relays call when data goes through a
+// tunnel or a forward of the lease. Data is guest activity (an open connection
+// alone is not), so a test that only uses a tunnel keeps its lease. It records
+// the activity at most once per TrafficInterval, outside the copy.
+func (g *Gateway) dataSeen(leaseID string) func() {
+	return func() {
+		now := time.Now()
+		g.mu.Lock()
+		if now.Sub(g.traffic[leaseID]) < g.be.TrafficInterval() {
+			g.mu.Unlock()
+			return
+		}
+		g.traffic[leaseID] = now
+		g.mu.Unlock()
+		go g.be.Activity(leaseID)
+	}
+}
+
+// countingReader calls seen for each read that returns data.
+type countingReader struct {
+	r    io.Reader
+	seen func()
+}
+
+func (c countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.seen()
+	}
+	return n, err
+}
+
+// relay copies both ways and calls seen when data goes either way. When one
+// side ends, the other side gets EOF; the relay ends when both sides ended or
+// after a short delay.
+func relay(a io.ReadWriteCloser, b io.ReadWriteCloser, seen func()) {
 	done := make(chan struct{}, 2)
 	cp := func(dst io.ReadWriteCloser, src io.Reader) {
-		io.Copy(dst, src)
+		io.Copy(dst, countingReader{src, seen})
 		if cw, ok := dst.(closeWriter); ok {
 			cw.CloseWrite()
 		} else {

@@ -42,8 +42,12 @@ type Backend interface {
 	Dial(ctx context.Context, leaseID string) (*ssh.Client, error)
 	// Ready reports whether the lease is still ready.
 	Ready(ctx context.Context, leaseID string) bool
-	// Activity records guest activity (a cmd connection opened or closed).
+	// Activity records guest activity: a cmd connection opened or closed, or
+	// data went through a tunnel or a forward.
 	Activity(leaseID string)
+	// TrafficInterval is the shortest time between two activity records for the
+	// data of one lease's tunnels and forwards.
+	TrafficInterval() time.Duration
 	// AllowForward reports whether the lease registered a machine port as a tunnel.
 	AllowForward(ctx context.Context, leaseID string, port int) bool
 	// AllowDirect reports whether a guest may forward to a machine port: on a machine
@@ -67,13 +71,14 @@ type Gateway struct {
 	mu       sync.Mutex
 	conns    map[string]map[*ssh.ServerConn]string // lease → connection → purpose
 	forwards map[string]map[*forwardSet]bool       // lease → remote forwards of its ports connections
+	traffic  map[string]time.Time                  // lease → last activity record for tunnel or forward data
 }
 
 // handshakeTimeout bounds the guest handshake and the upstream dial.
 const handshakeTimeout = 30 * time.Second
 
 func New(hostKey ssh.Signer, be Backend, machines *MachineConns, log *slog.Logger) *Gateway {
-	g := &Gateway{be: be, log: log, machines: machines, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}}
+	g := &Gateway{be: be, log: log, machines: machines, conns: map[string]map[*ssh.ServerConn]string{}, forwards: map[string]map[*forwardSet]bool{}, traffic: map[string]time.Time{}}
 	g.config = &ssh.ServerConfig{
 		PublicKeyCallback: func(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			leaseID, purpose, ok := strings.Cut(meta.User(), ".")
@@ -128,6 +133,7 @@ func (g *Gateway) CloseLease(leaseID string) {
 	g.mu.Lock()
 	conns := g.conns[leaseID]
 	delete(g.conns, leaseID)
+	delete(g.traffic, leaseID)
 	g.mu.Unlock()
 	for c := range conns {
 		c.Close()
