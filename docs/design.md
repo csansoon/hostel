@@ -1252,13 +1252,15 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
 
 - The guest asks for it with `hostel acquire windows-desktop` (with `dotnet` or
   other tools to build; `whole_machine = true`, as on the Mac). The owner lists
-  `windows-desktop` only for a machine with a signed-in desktop user and the
-  "Hostel desktop" task (`machine-setup.md`, section 4.4).
+  `windows-desktop` only for a machine whose desktop user is the machine user
+  (automatic sign-in) and that has the "Hostel desktop" task (`machine-setup.md`,
+  section 4.4).
 - **The desktop program.** SSH sessions (Windows session 0) cannot show
-  windows, take screenshots, or use UI Automation. The task of the desktop user
-  starts `hostel helper desktop serve` as the machine user in the desktop session
-  (`Start-Process -Credential`; the Secondary Logon service gives it access to
-  that desktop). It listens on `127.0.0.1` with a random port; `hostel/desktop.json`
+  windows, take screenshots, or use UI Automation. The task of the machine user
+  starts `hostel helper desktop serve` at its sign-in, in its desktop session.
+  (Until M10h, the desktop user was another user, and its task started the
+  program with `Start-Process -Credential`; packaged apps cannot start that way.)
+  It listens on `127.0.0.1` with a random port; `hostel/desktop.json`
   (only the machine user can read it) has the address and a random token. It ends
   when the helper file changes, and the task starts the new helper.
 - **`desktop [--detach] <command>`** (`hostel/bin/desktop`, `hostel helper
@@ -1285,20 +1287,21 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   window.
 - **Screenshot.** `tools/windows-desktop/screenshot.windows.ps1` captures the
   whole desktop through `desktop`.
-- **Limits.** The apps of a lease run as the machine user, but they share the
-  desktop with the desktop user's windows: real input can reach a window of
-  the desktop user that is not elevated. A packaged app (MSIX) does not start
-  when the desktop user is another user: activation fails with `0x80070520`
-  ("A specified logon session does not exist"; M10h test flight, 2026-11-12),
-  also through `explorer.exe shell:AppsFolder`, and an unpackaged build of a
-  Windows App SDK app needs its package. `explorer.exe` that a lease starts
-  hands the request to the desktop user's shell, which makes `explorer.exe`
-  processes of the desktop user (the program to open did not start in the
-  test). A disconnected or locked desktop stops real input and screenshots.
-- **Packages (M10h).** `start.windows.ps1` records the packages of the machine
-  user (`Get-AppxPackage`), and `stop.windows.ps1` removes the packages that the
-  lease installed, with their app data. Install packages in a job, not through
-  `desktop`.
+- **Limits.** The desktop user must be the machine user: a packaged app (MSIX)
+  starts only for the user of the desktop session (with another user, activation
+  fails with `0x80070520`, "A specified logon session does not exist"; M10h test
+  flight, 2026-11-12). Windows 11 has one desktop session: a Remote Desktop
+  connection of another user disconnects it, and a disconnected or locked
+  desktop stops real input and screenshots.
+- **Desktop cleanup (M10h).** Programs that the shell starts for a lease
+  (`explorer.exe <file>`, packaged apps) are not children of the lease and do
+  not have `HOSTEL_LEASE`. `start.windows.ps1` records the processes of the
+  desktop session and the packages of the machine user (`Get-AppxPackage`).
+  `stop.windows.ps1` ends the new processes of the session (not `hostel.exe`
+  and `explorer.exe`, and not programs in the Windows folder, which Windows
+  starts at any time), and removes the packages that the lease installed, with
+  their app data. Install packages in a job, not through `desktop`. Other files
+  and settings of the machine user stay for the next lease, as on macOS.
 
 ### mise on machines
 

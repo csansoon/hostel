@@ -30,9 +30,12 @@ job (not through "desktop"):
 signtool works only if the machine has the certificate for Hostel
 (docs/machine-setup.md, section 4.5). If another user of the machine has a
 package with the same name and version, Add-AppxPackage fails with 0x80073D19:
-give the package another name or version. A packaged app starts only on a
-machine whose desktop user is the machine user; on a shared desktop, the start
-fails with 0x80070520 ("A specified logon session does not exist").
+give the package another name or version. Start the installed app on the
+desktop:
 
-At the release, Hostel ends the apps that "desktop" started and removes the
-packages that the lease installed, with their app data.
+  hostel run -- 'desktop --detach explorer.exe shell:AppsFolder\<package family name>!App'
+
+At the release, Hostel ends the apps that the lease started on the desktop and
+removes the packages that the lease installed, with their app data. Other files
+and settings of the machine user stay for the next lease: do not sign in to real
+accounts.

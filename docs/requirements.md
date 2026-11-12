@@ -91,6 +91,7 @@ All other terms are plain technical words.
 | 2026-11-06 | The app has two screens and Front desk: Lobby (the one waiting line first, then the tools) and Rooms (one list: provider, machine, room). There is no Machines screen. A provider shows text only when it does something special; rooms are small squares beside their machine. Front desk › Rooms goes; its actions move to the pages of the Rooms screen. |
 | 2026-11-06 | A provider can have a display name (`label`). Every machine belongs to a provider; a static provider is a named group, which also says whether its machines are physical or VMs. |
 | 2026-11-12 | Desktop app follow-ups (M10h, `m10h-implementation.md`): no secret store now (planned for later); signing material for app builds is part of the machine setup, installed once by an administrator and usable by every lease on that machine. Tunnel and forward traffic counts as lease activity, beside the other signals. A Windows test flight of a real app through Hostel comes before the fixes. One machine setup guide covers all machine kinds. |
+| 2026-11-12 | The Windows desktop user is `hostel` (M10h, option A): Windows starts a packaged app only for the user of the desktop session. `idem-win` signs in `hostel` automatically; the person's session there ends, and the app's agents use Hostel leases for Windows GUI QA. There is no second Windows computer for Hostel. |
 
 ## 4. Functional requirements
 

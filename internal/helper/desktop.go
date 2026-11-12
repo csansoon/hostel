@@ -23,7 +23,7 @@ import (
 
 // The desktop program ("machine desktop serve") runs as the machine user in the
 // desktop session, which SSH sessions cannot reach (Windows: a scheduled task
-// of the desktop user starts it; m7-implementation.md). "helper desktop run"
+// starts it when the machine user signs in; machine-setup.md, section 4.4). "helper desktop run"
 // sends it a command of a lease, and it runs the command there.
 
 const (

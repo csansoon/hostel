@@ -409,8 +409,8 @@ but the machine was `unreachable` once, 2 minutes later, and then recovered.
 
 | ID | Finding | Action |
 |---|---|---|
-| W1 | **A packaged app cannot start for `hostel` on a desktop of another user** (`0x80070520`). This blocks Windows app QA on `idem-win`. | **Owner decision** (section 15) |
-| W2 | `explorer.exe` from a lease makes `explorer.exe` processes of the desktop user (COM launch). The target program did not start; `Shell.Application.ShellExecute` ran as `hostel`. No escalation was found, but the desktop user's shell takes requests from leases. | Documented (design); goes away with W1 option A or B |
+| W1 | **A packaged app cannot start for `hostel` on a desktop of another user** (`0x80070520`). This blocks Windows app QA on `idem-win`. | Owner decision A (section 15): `hostel` becomes the desktop user |
+| W2 | `explorer.exe` from a lease makes `explorer.exe` processes of the desktop user (COM launch). The target program did not start; `Shell.Application.ShellExecute` ran as `hostel`. No escalation was found, but the desktop user's shell takes requests from leases. | Goes away with option A; stop ends the programs that the shell started for the lease |
 | W3 | Signing needs read access to the certificate key. | Fixed on `idem-win`; machine guide 4.5 |
 | W4 | A package with the same identity for another user blocks the install. | Guide |
 | W5 | Packages stay after the lease (app data too). | `stop.windows.ps1` removes them (not yet run on Windows) |
@@ -428,20 +428,44 @@ but the machine was `unreachable` once, 2 minutes later, and then recovered.
 | M3 | macOS: `osascript` that controls another app opens a permission dialog for `sshd-keygen-wrapper`. | Guide; I answered "Don't Allow" with the dialog workaround |
 | M4 | macOS: a new launch agent shows the notification "App Background Activity". | None (it goes away) |
 
-## 15. Owner decision needed: the Windows desktop user
+## 15. The Windows desktop user (owner decision A, 2026-11-12)
 
-Windows starts a packaged app only for the user of the desktop session. Today the
-desktop user of `idem-win` is a person's account, and leases run as `hostel`.
-Options:
+Windows starts a packaged app only for the user of the desktop session. The
+desktop user of `idem-win` was a person's account, and leases run as `hostel`.
+The options were: A, `hostel` becomes the desktop user of `idem-win`; B, a
+second Windows computer for Hostel; C, no change (only unpackaged apps). There
+is no second Windows computer, so the owner chose **A**.
 
-- **A. `hostel` becomes the desktop user of `idem-win`.** The desktop task then
-  runs the desktop program directly in the session of `hostel` (no stored
-  password). The person's session on `idem-win` ends (Windows 11 has one desktop
-  session), and the app's agents must use Hostel for Windows GUI work from then
-  on. Not tested: whether a Cloud PC accepts a sign-in of a local account.
-- **B. A second Windows computer for Hostel** with automatic sign-in of `hostel`
-  (a physical PC or a VM with a desktop). `idem-win` stays as it is.
-- **C. No change.** Hostel supports only unpackaged apps on a shared desktop.
+Consequences:
 
-For A and B, Hostel changes the desktop task setup (machine guide 4.4) so that
-the desktop user can be `hostel`.
+- The person's session on `idem-win` ends. A Windows App or Remote Desktop
+  connection of another user disconnects the session of `hostel` and stops
+  Hostel's desktop until an administrator restarts the computer.
+- The app's agents can no longer use the desktop of `idem-win` directly
+  (`idem-win gui`, devlock `windows`). Their SSH builds as `idem-agent` still
+  work. Their Windows GUI QA must use Hostel leases (answer 3 of section 13
+  comes earlier than planned).
+
+What changes:
+
+- Machine guide 4.4: Windows signs in `hostel` at start (automatic sign-in,
+  password in an LSA secret), and the "Hostel desktop" task of `hostel` starts
+  the desktop program directly in that session. The `cred` file and
+  `Start-Process -Credential` go away.
+- `tools/windows-desktop`: the desktop session is the lease's. `start` records
+  its processes, and `stop` ends the new ones that are not in the Windows
+  folder (programs that the shell started for the lease, which have no
+  `HOSTEL_LEASE`), before it removes the lease's packages.
+- The smoke test `TestSmokeWindowsDesktop` also starts the app through
+  `explorer.exe` and checks that cleanup ends it.
+
+The switch on `idem-win` (phase 6), with the devlock `windows` lock and
+`home/win` drained in production:
+
+1. Read the open programs of the person's session. If an app agent works in it,
+   wait for the lock.
+2. Run guide 4.4 as `idem-agent` over SSH, and restart the computer.
+3. Check: `hostel` is `Active` in the `console` session, the desktop program
+   runs, and a screenshot shows the desktop of `hostel`.
+4. If the automatic sign-in or the screenshot fails, undo: remove the automatic
+   sign-in, restart, and report.

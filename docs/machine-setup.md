@@ -27,7 +27,7 @@ What each tool needs on the machine:
 | `ios-simulator` | macOS | Xcode and the iOS runtime (3.3), a desktop session (3.4) |
 | `macos-desktop` | macOS | A desktop session (3.4), Screen Recording and Automation Mode (3.5); for app QA, 3.6 |
 | `android-sdk`, `android-emulator` | macOS, Linux | Nothing on macOS; KVM on Linux (5) |
-| `windows-desktop` | Windows | A signed-in desktop and the desktop task (4.4) |
+| `windows-desktop` | Windows | `hostel` as the desktop user, and the desktop task (4.4) |
 | mise tools (`jdk:21`, `node:22`, `dotnet:10`) | all | Nothing |
 
 Hostel uses one OS user for all leases. Files outside the room directory (caches,
@@ -262,51 +262,94 @@ for `C:\Users\hostel\hostel`.
 
 ### 4.4 Desktop (`windows-desktop`)
 
-SSH sessions cannot show windows. A scheduled task of the desktop user starts
-`hostel helper desktop serve` as `hostel` in the desktop session, and lease
-commands (`desktop`, `winapp`, screenshots) go to it. The desktop must stay
-signed in, connected, and unlocked.
+SSH sessions cannot show windows. `hostel` is the desktop user: Windows signs
+it in at start, and a scheduled task starts `hostel helper desktop serve` in
+its desktop session. Lease commands (`desktop`, `winapp`, screenshots) go to
+that program. Windows starts a packaged app (MSIX) only for the user of the
+desktop session, so the desktop user must be `hostel` (M10h test flight,
+2026-11-12).
 
-Run this as an administrator while the desktop user is signed in:
+Windows 11 has one desktop session. A Remote Desktop or Windows App
+connection of another user disconnects the session of `hostel`, and a
+disconnected or locked desktop stops screenshots and real input. Use the
+computer only for Hostel, and do the administrator work over SSH.
+
+Run this as an administrator. It replaces an earlier "Hostel desktop" task and
+its `cred` file.
 
 ```powershell
 $dir = 'C:\ProgramData\hostel\desktop'
-$user = (Get-Process explorer -IncludeUserName | Select-Object -First 1).UserName
-New-Item -ItemType Directory -Force $dir | Out-Null
-# A new random password for hostel, readable only by the desktop user's task.
+# A new random password for hostel, in an LSA secret (not in the registry).
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class HostelLsa {
+  [StructLayout(LayoutKind.Sequential)] struct Str { public ushort Length, MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)] struct Attrs { public int Length; public IntPtr Root, Name; public uint Attributes; public IntPtr Security, Qos; }
+  [DllImport("advapi32")] static extern uint LsaOpenPolicy(IntPtr system, ref Attrs a, uint access, out IntPtr policy);
+  [DllImport("advapi32")] static extern uint LsaStorePrivateData(IntPtr policy, ref Str key, ref Str data);
+  [DllImport("advapi32")] static extern uint LsaClose(IntPtr policy);
+  [DllImport("advapi32")] static extern int LsaNtStatusToWinError(uint status);
+  static Str Make(string s) { return new Str { Length = (ushort)(s.Length * 2), MaximumLength = (ushort)(s.Length * 2 + 2), Buffer = Marshal.StringToHGlobalUni(s) }; }
+  public static void Store(string key, string value) {
+    var a = new Attrs(); IntPtr policy;
+    uint r = LsaOpenPolicy(IntPtr.Zero, ref a, 0x000F0FFF, out policy);
+    if (r != 0) throw new System.ComponentModel.Win32Exception(LsaNtStatusToWinError(r));
+    Str k = Make(key), d = Make(value);
+    r = LsaStorePrivateData(policy, ref k, ref d);
+    LsaClose(policy); Marshal.FreeHGlobal(k.Buffer); Marshal.FreeHGlobal(d.Buffer);
+    if (r != 0) throw new System.ComponentModel.Win32Exception(LsaNtStatusToWinError(r));
+  }
+}
+'@
 $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
 $pw = [Convert]::ToBase64String($b) + 'aA1!'
 Set-LocalUser -Name hostel -Password (ConvertTo-SecureString $pw -AsPlainText -Force)
-Set-Content "$dir\cred" $pw -NoNewline
-icacls "$dir\cred" /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' "${user}:R" | Out-Null
-icacls $dir /grant "${user}:(OI)(CI)RX" | Out-Null
+[HostelLsa]::Store('DefaultPassword', $pw)
+Remove-Variable pw
+$w = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+Set-ItemProperty $w AutoAdminLogon '1'
+Set-ItemProperty $w DefaultUserName 'hostel'
+Set-ItemProperty $w DefaultDomainName $env:COMPUTERNAME
+Remove-ItemProperty $w DefaultPassword -ErrorAction SilentlyContinue
+# No privacy questions and no animation at the first sign-in; no sleep.
+New-Item -Force 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE' | Out-Null
+Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE' DisablePrivacyExperience 1 -Type DWord
+Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' EnableFirstLogonAnimation 0 -Type DWord
+powercfg /change monitor-timeout-ac 0; powercfg /change standby-timeout-ac 0
+
+# The task. Only administrators can change its script.
+New-Item -ItemType Directory -Force $dir | Out-Null
+Remove-Item "$dir\cred" -ErrorAction SilentlyContinue
+icacls $dir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' 'hostel:(OI)(CI)RX' | Out-Null
 Set-Content "$dir\start.ps1" @'
-# Keeps "hostel helper desktop serve" running as hostel on this desktop. It
+# Keeps "hostel helper desktop serve" running in this desktop session. It
 # ends when the helper changes; then this starts the new one.
-$dir = 'C:\ProgramData\hostel\desktop'
 while ($true) {
-  try {
-    $pw = ConvertTo-SecureString (Get-Content "$dir\cred" -Raw).Trim() -AsPlainText -Force
-    $cred = New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\hostel", $pw)
-    $p = Start-Process C:\Users\hostel\hostel\bin\hostel.exe -ArgumentList 'helper','desktop','serve' -Credential $cred -LoadUserProfile -WorkingDirectory C:\Users\hostel -WindowStyle Hidden -PassThru
-    $p.WaitForExit()
-  } catch {}
+  try { & C:\Users\hostel\hostel\bin\hostel.exe helper desktop serve } catch {}
   Start-Sleep 10
 }
 '@
 $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File $dir\start.ps1"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:COMPUTERNAME\hostel"
+$principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\hostel" -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName 'Hostel desktop' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName 'Hostel desktop'
+Restart-Computer
 ```
 
-Then add `windows-desktop` to the machine's `tools`. A lease can send keys and
-clicks to every window on this desktop that is not elevated, also to the desktop
-user's windows: use a desktop user that has nothing else open.
+Then add `windows-desktop` to the machine's `tools`.
 
-Check: a lease with `windows-desktop` gives a screenshot (`hostel screenshot`).
+Check: `query user` lists `hostel` as `Active` in the `console` session, and a
+lease with `windows-desktop` gives a screenshot (`hostel screenshot`).
+
+If another user connected and the session of `hostel` is disconnected, restart
+the computer (as an administrator, over SSH: `Restart-Computer`). Windows then
+signs in `hostel` again.
+
+The session of `hostel` stays from one lease to the next. Cleanup ends the
+programs that a lease started in it and removes the packages that a lease
+installed (`tools/windows-desktop`), but other files and settings of `hostel`
+stay, as on a Mac.
 
 ### 4.5 Signing (optional)
 

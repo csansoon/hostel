@@ -1,8 +1,24 @@
-# Removes the packages that the lease installed for the machine user, with
-# their app data, so that no app session stays for the next lease. The desktop
-# program has already ended the lease's desktop commands. A repeated stop (no
-# record of start) does nothing.
+# Ends the programs that the lease started in the desktop session, and removes
+# the packages that it installed for the machine user, with their app data. The
+# desktop program has already ended the lease's desktop commands; this finds
+# the programs that the shell started for the lease (explorer, packaged apps),
+# which do not have the lease in their environment. A repeated stop (no record
+# of start) does nothing.
 $ErrorActionPreference = 'Stop'
+$record = Join-Path $env:HOSTEL_ROOM_DIR 'desktop-processes'
+if (Test-Path $record) {
+	$lines = @(Get-Content $record)
+	$session = [int]($lines[0] -replace '^session ', '')
+	foreach ($p in Get-Process | Where-Object SessionId -eq $session) {
+		# Path is empty for the processes of other users (Windows).
+		if (-not $p.Path -or $p.Name -in 'hostel', 'explorer') { continue }
+		if ($lines -contains "$($p.Id) $($p.StartTime.Ticks)") { continue }
+		# Windows starts its own per-user programs at any time. (An SSH session
+		# cannot see the windows of the desktop session.)
+		if ($p.Path.StartsWith("$env:SystemRoot\", 'OrdinalIgnoreCase')) { continue }
+		Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+	}
+}
 $record = Join-Path $env:HOSTEL_ROOM_DIR 'desktop-packages'
 if (-not (Test-Path $record)) { exit 0 }
 $before = @(Get-Content $record)
