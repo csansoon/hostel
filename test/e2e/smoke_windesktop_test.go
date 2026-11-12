@@ -100,9 +100,11 @@ func TestSmokeWindowsDesktop(t *testing.T) {
 		}
 		time.Sleep(time.Second)
 	}
-	if r := ui("inspect", "--interactive"); !strings.Contains(r.stdout, "add") || !strings.Contains(r.stdout, "name") {
-		t.Fatalf("inspect: %s", r)
-	}
+	// The window can show before its controls are in the UI Automation tree.
+	e.waitFor("the app's controls", time.Minute, func() bool {
+		r := ui("inspect", "--interactive")
+		return strings.Contains(r.stdout, "add") && strings.Contains(r.stdout, "name")
+	})
 	// UI Automation patterns, then real input.
 	ui("invoke", "add")
 	ui("invoke", "add")
