@@ -340,10 +340,47 @@ Register-ScheduledTask -TaskName 'Hostel desktop' -Action $action -Trigger $trig
 Restart-Computer
 ```
 
+At the first sign-in of `hostel`, Windows opens the Start menu, and it keeps the
+focus: real clicks of a lease then fail. Restart the computer one more time
+(`Restart-Computer`); later sign-ins do not open it.
+
+A virtual machine's console often starts at 1024 × 768. To set another size (for
+example 1920 × 1080, if the display supports it:
+`Get-CimInstance CIM_VideoControllerResolution`), run this as an administrator
+while `hostel` is signed in. Windows keeps the size after a restart.
+
+```powershell
+Set-Content "$dir\screen.ps1" @'
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class Screen {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+    public short SpecVersion, DriverVersion, Size, DriverExtra; public int Fields, X, Y, Orientation, FixedOutput;
+    public short Color, Duplex, YResolution, TTOption, Collate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string FormName;
+    public short LogPixels; public int BitsPerPel, Width, Height, DisplayFlags, Frequency;
+    public int ICMMethod, ICMIntent, MediaType, DitherType, Reserved1, Reserved2, PanningWidth, PanningHeight; }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string d, int m, ref DEVMODE dm);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
+  public static int Set(int w, int h) {
+    var dm = new DEVMODE(); dm.Size = (short)Marshal.SizeOf(typeof(DEVMODE)); EnumDisplaySettings(null, -1, ref dm);
+    dm.Width = w; dm.Height = h; dm.Fields = 0x180000; return ChangeDisplaySettings(ref dm, 1); } }
+"@
+[Screen]::Set(1920, 1080)
+'@
+$a = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File $dir\screen.ps1"
+Register-ScheduledTask -TaskName 'Hostel screen' -Action $a -Principal (New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\hostel" -LogonType Interactive) -Force | Out-Null
+Start-ScheduledTask 'Hostel screen'; Start-Sleep 20
+Unregister-ScheduledTask 'Hostel screen' -Confirm:$false; Remove-Item "$dir\screen.ps1"
+(Get-CimInstance Win32_VideoController).CurrentHorizontalResolution   # 1920
+```
+
 Then add `windows-desktop` to the machine's `tools`.
 
 Check: `query user` lists `hostel` as `Active` in the `console` session, and a
-lease with `windows-desktop` gives a screenshot (`hostel screenshot`).
+lease with `windows-desktop` gives a screenshot (`hostel screenshot`) without
+an open Start menu.
 
 If another user connected and the session of `hostel` is disconnected, restart
 the computer (as an administrator, over SSH: `Restart-Computer`). Windows then
