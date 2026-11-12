@@ -352,9 +352,19 @@ func printMachineDetails(w io.Writer, d protocol.MachineDetails, now time.Time) 
 			if msg == "" {
 				msg = e.Kind
 			}
-			fmt.Fprintf(w, "%-8s %s %s\n", label, e.Time.Local().Format("15:04"), msg)
+			fmt.Fprintf(w, "%-8s %s %s\n", label, eventTime(e.Time, now), msg)
 		}
 	}
+}
+
+// eventTime is the local time of an event, with the date when it is not from
+// today (an event of another day looked like one of today).
+func eventTime(t, now time.Time) string {
+	t, now = t.Local(), now.Local()
+	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
+		return t.Format("15:04")
+	}
+	return t.Format("Jan 2 15:04")
 }
 
 // waitingLine returns the waiting leases (that asked for tool, if not "")

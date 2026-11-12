@@ -419,7 +419,7 @@ but the machine was `unreachable` once, 2 minutes later, and then recovered.
 | W8 | Cleanup failed on 2026-11-10: a process of the lease still ran and held the room directory. Not reproduced. | Cleanup waits up to 10 s, kills again, names the process, and retries the deletion |
 | W9 | A runtime tunnel (`hostel tunnel add`) came back in the next lease, also on another machine. | Fixed, with an E2E test |
 | W10 | `desktop --detach <relative path>` failed (exit 127) for the app agent. | The path is now relative to the command's directory, with an E2E check |
-| W11 | Event times have no date (`15:17` was 2026-11-10 but looked like today). | Open: small fix in M10h |
+| W11 | Event times have no date (`15:17` was 2026-11-10 but looked like today). | `hostel status` shows the date for an event of another day |
 | W12 | `home/win` has 8.5 GB free disk. | Owner: more disk, or the machine stays for small builds |
 | W13 | The shared Windows desktop is a queue: I waited about 75 minutes for the devlock `windows` lock, and devlock's wait is not first come, first served. | Goes away when the app's agents use Hostel leases |
 | W14 | A sync that lost its connection made the app agent's lease expire (lease `8a67ed08`). | Open: not reproduced |
