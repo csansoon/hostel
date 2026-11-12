@@ -1,6 +1,6 @@
 # M10h implementation plan: desktop app follow-ups
 
-Status: draft (2026-11-12). The owner adds more feedback before the work starts.
+Status: approved (2026-11-12), phase 1.
 Milestone M10h in `plan.md`. Owner decisions: `requirements.md`, section 3,
 2026-11-12.
 
@@ -23,10 +23,12 @@ Two inputs:
      `/Applications`.
   6. A long test run that uses only a tunnel goes idle after 10 minutes. The agent
      ran `hostel info` every 4 minutes to keep the lease.
-- **Windows was never tested with a real app.** M6 and M7 tested a small WPF app
-  only. On 2026-11-12 at 15:17, a `windows-desktop` lease on `home/win` ended with a
-  failed cleanup ("processes of the lease still run: [31100]"; the room directory
-  was in use), and the machine became `broken`.
+- **Windows was never tested on purpose with a real app.** M6 and M7 tested a small
+  WPF app only. An agent of the owner's Windows app used seven `windows-desktop`
+  leases on `home/win` on 2026-11-09 and 2026-11-10. The last one (2026-11-10,
+  15:17 CET) ended with a failed cleanup ("processes of the lease still run:
+  [31100]"; the room directory was in use), and the machine stayed `broken` until
+  M10h.
 
 ## 2. Owner decisions (2026-11-12)
 
@@ -49,7 +51,7 @@ Two inputs:
 |---|---|---|
 | 1 | Windows test flight (find problems, no code changes) | Its findings change phases 3 to 5 |
 | 2 | Tunnel traffic as activity | Independent; it has an E2E test |
-| 3 | Desktop cleanup on macOS and Windows | Fixes report point 2 and the 15:17 failure |
+| 3 | Desktop cleanup on macOS and Windows | Fixes report point 2 and the failure of 2026-11-10 |
 | 4 | Agent guides for both desktops | Uses the results of phases 1 and 3 |
 | 5 | The machine setup guide | Uses phases 1 to 4 |
 | 6 | Windows fixes from the test flight, then a second test flight | Must show a full run with no manual step |
@@ -66,9 +68,10 @@ finding.
 
 ### Before the flight
 
-1. Find the cause of the 15:17 failure. Read the server log and the events for lease
-   `5440afb6…`: who held it, which jobs and `desktop` commands it ran, and which
-   program PID 31100 was. That process no longer runs.
+1. Find the cause of the failure of 2026-11-10. Read the server log, the events for
+   lease `5440afb6…`, and the transcript of the agent that held it: which jobs and
+   `desktop` commands it ran, and which program PID 31100 was. That process no
+   longer runs. Also read that agent's six other leases for problems.
 2. Repair `home/win` (`hostel admin machine repair home/win`). Check that the
    machine is `running` and free.
 3. Check that the desktop program runs the current helper. The "Hostel desktop"
@@ -226,7 +229,7 @@ them.
   handles (at most 10 s) before the check. Step 5 retries the room deletion for up
   to 10 s after a sharing violation. When a process still runs, the error gives its
   image name, not only its PID.
-- The cause of the 15:17 failure (phase 1) can add a change here.
+- The cause of the failure of 2026-11-10 (phase 1) can add a change here.
 
 Evidence: phase 6, the second test flight.
 
@@ -367,12 +370,12 @@ Contents:
 - One lock for the shared Windows desktop for Hostel and devlock. After the test
   flight, the owner decides if the app's agents move their Windows QA to Hostel.
 
-## 13. Questions for the owner
+## 13. Owner answers (2026-11-12)
 
-1. May the second test flight's setup give `hostel` read access to the private key
-   of `CN=idem-dev` on `idem-win`? It is a development certificate. Every Hostel
-   lease on that machine could then sign packages as `CN=idem-dev`.
-2. The signing keychain on `home/macbook` with the real certificate needs the
-   administrator of that Mac. Who does it, and when?
-3. After the test flights, do the app's agents move their Windows QA from
-   `idem-win` and devlock to Hostel leases?
+1. `hostel` may get read access to the private key of `CN=idem-dev` on `idem-win`.
+   The agent configures `idem-win` itself, as an administrator (the SSH alias
+   `idem-win`, as the app's agents do).
+2. The administrator who sets up a machine also installs its signing keychain. The
+   machine setup guide says so.
+3. Yes: the app's agents move their Windows QA from `idem-win` and devlock to Hostel,
+   but only after the test flights pass and their findings are fixed. Not in M10h.
