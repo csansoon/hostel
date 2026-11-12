@@ -321,15 +321,18 @@ powercfg /change monitor-timeout-ac 0; powercfg /change standby-timeout-ac 0
 New-Item -ItemType Directory -Force $dir | Out-Null
 Remove-Item "$dir\cred" -ErrorAction SilentlyContinue
 icacls $dir /inheritance:r /grant:r 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' 'hostel:(OI)(CI)RX' | Out-Null
-Set-Content "$dir\start.ps1" @'
-# Keeps "hostel helper desktop serve" running in this desktop session. It
-# ends when the helper changes; then this starts the new one.
-while ($true) {
-  try { & C:\Users\hostel\hostel\bin\hostel.exe helper desktop serve } catch {}
-  Start-Sleep 10
-}
+Remove-Item "$dir\start.ps1" -ErrorAction SilentlyContinue
+# Keeps "hostel helper desktop serve" running in the desktop session. It ends
+# when the helper changes; then the loop starts the new one. (cmd, because
+# Windows PowerShell did not start in this task at the first sign-in.)
+Set-Content -Encoding ascii "$dir\start.cmd" @'
+@echo off
+:loop
+C:\Users\hostel\hostel\bin\hostel.exe helper desktop serve >nul 2>&1
+ping -n 11 127.0.0.1 >nul
+goto loop
 '@
-$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File $dir\start.ps1"
+$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless cmd.exe /d /c $dir\start.cmd"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:COMPUTERNAME\hostel"
 $principal = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\hostel" -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

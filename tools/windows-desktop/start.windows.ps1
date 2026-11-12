@@ -3,6 +3,9 @@
 # Hostel desktop task, docs/machine-setup.md, section 4.4).
 $ErrorActionPreference = 'Stop'
 $file = Join-Path (Split-Path $env:HOSTEL_CACHE_DIR) 'desktop.json'
+# After a helper update, the desktop task starts the new program within 10 s.
+$deadline = (Get-Date).AddSeconds(30)
+while (-not (Test-Path $file) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 if (-not (Test-Path $file)) {
 	[Console]::Error.WriteLine("the desktop program does not run: sign in the desktop user, and check the Hostel desktop task")
 	exit 1
