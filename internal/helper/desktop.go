@@ -220,14 +220,19 @@ func (h *helper) desktopServeConn(conn net.Conn, token string, n int, track func
 	env := envMap(req.Env)
 	env["HOSTEL_LEASE"] = lease.LeaseID
 	env["HOSTEL_ROOM"] = req.Room
+	dir := req.Dir
+	if dir == "" {
+		dir = h.workDir(req.Room)
+	}
 	path, err := lookPath(req.Argv[0], envList(env))
 	if err != nil {
 		fail(fmt.Errorf("%s: command not found in the lease PATH", req.Argv[0]))
 		return
 	}
-	dir := req.Dir
-	if dir == "" {
-		dir = h.workDir(req.Room)
+	// Windows resolves a relative program path against the desktop program's
+	// directory, not against the command's directory.
+	if path == req.Argv[0] && !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
 	}
 	cmd := &exec.Cmd{Path: path, Args: req.Argv, Dir: dir, Env: envList(env), WaitDelay: desktopWaitDelay}
 	if !req.Detach {

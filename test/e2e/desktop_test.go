@@ -46,6 +46,11 @@ func TestDesktop(t *testing.T) {
 	f.e.waitFor("the desktop command ends with its caller", 30*time.Second, func() bool {
 		return f.c.sh("pgrep -fx 'sleep 3004' | wc -l") == "0"
 	})
+	// A relative program path is relative to the command's directory (on
+	// Windows the program's own directory was used; found on 2026-11-10).
+	if r := f.e.hostel("run", "--", `mkdir -p sub && printf '#!/bin/sh\necho relative\n' > sub/rel.sh && chmod +x sub/rel.sh && desktop sub/rel.sh`); r.code != 0 || r.stdout != "relative\n" {
+		t.Fatalf("desktop with a relative path: %s", r)
+	}
 	if r := f.e.hostel("run", "--", "desktop no-such-command"); r.code != 127 || !strings.Contains(r.stdout, "command not found") {
 		t.Fatalf("desktop with a missing command: %s, want exit code 127", r)
 	}
