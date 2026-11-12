@@ -379,3 +379,69 @@ Contents:
    machine setup guide says so.
 3. Yes: the app's agents move their Windows QA from `idem-win` and devlock to Hostel,
    but only after the test flights pass and their findings are fixed. Not in M10h.
+
+## 14. Test flight findings (phase 1, 2026-11-12)
+
+Sources: my flight on `home/win` (lease `24766b35…`, 11:06 to 12:24 CET), the
+transcript of the app agent's seven leases (2026-11-09 and 2026-11-10), and the
+macOS tests on `home/macbook`.
+
+### Windows flight steps
+
+| # | Step | Result | Time | Manual action |
+|---|---|---|---|---|
+| 1 | Acquire | ready; the first call returned "not finished" during the sync | 2 min 46 s (2 calls) | none |
+| 2 | Sync | 6,031 files | in step 1 | none |
+| 3 | .NET SDK | 10.0.404 from the machine (system install); `dotnet` is not a Hostel tool on `home/win` | – | none |
+| 4 | Build (Debug MSIX) | passed | 5 min 10 s (3 min 35 s again) | none |
+| 5 | Sign | failed: "No certificates were found"; passed after an admin gave `hostel` read access to the key | – | admin `icacls` (owner approved) |
+| 6 | Install | failed with `0x80073D19` (the desktop user has `so.idem.windows.dev` 0.1.0.0 with other content); passed with another package name | 5 s | package renamed in the worktree |
+| 7 | Start | **failed**: `0x80070520` "A specified logon session does not exist" (activation API); `explorer.exe shell:AppsFolder\…` started nothing; the unpackaged build needs the Windows App Runtime package | – | – |
+| 8–11 | Control, API, scenarios, logs | not possible without step 7 | – | – |
+| 12 | Release AOT build | skipped: it does not change the result and loads the 2 shared cores for a long time | – | – |
+| 13 | Release | cleanup passed; Notepad (started by a desktop command) ended; room deleted | < 1 min | none |
+| 14 | After | the installed package stayed for the `hostel` user | – | admin removed it |
+
+Before the flight, `home/win` was `broken` since 2026-11-10 15:17. Repair worked,
+but the machine was `unreachable` once, 2 minutes later, and then recovered.
+
+### Findings and what M10h does
+
+| ID | Finding | Action |
+|---|---|---|
+| W1 | **A packaged app cannot start for `hostel` on a desktop of another user** (`0x80070520`). This blocks Windows app QA on `idem-win`. | **Owner decision** (section 15) |
+| W2 | `explorer.exe` from a lease makes `explorer.exe` processes of the desktop user (COM launch). The target program did not start; `Shell.Application.ShellExecute` ran as `hostel`. No escalation was found, but the desktop user's shell takes requests from leases. | Documented (design); goes away with W1 option A or B |
+| W3 | Signing needs read access to the certificate key. | Fixed on `idem-win`; machine guide 4.5 |
+| W4 | A package with the same identity for another user blocks the install. | Guide |
+| W5 | Packages stay after the lease (app data too). | `stop.windows.ps1` removes them (not yet run on Windows) |
+| W6 | A cmdlet error does not fail a job (exit code 0). | Guide |
+| W7 | The guide's `acquire dotnet windows-desktop` fails: `unknown tool "dotnet"`. | Guide fixed |
+| W8 | Cleanup failed on 2026-11-10: a process of the lease still ran and held the room directory. Not reproduced. | Cleanup waits up to 10 s, kills again, names the process, and retries the deletion |
+| W9 | A runtime tunnel (`hostel tunnel add`) came back in the next lease, also on another machine. | Fixed, with an E2E test |
+| W10 | `desktop --detach <relative path>` failed (exit 127) for the app agent. | The path is now relative to the command's directory, with an E2E check |
+| W11 | Event times have no date (`15:17` was 2026-11-10 but looked like today). | Open: small fix in M10h |
+| W12 | `home/win` has 8.5 GB free disk. | Owner: more disk, or the machine stays for small builds |
+| W13 | The shared Windows desktop is a queue: I waited about 75 minutes for the devlock `windows` lock, and devlock's wait is not first come, first served. | Goes away when the app's agents use Hostel leases |
+| W14 | A sync that lost its connection made the app agent's lease expire (lease `8a67ed08`). | Open: not reproduced |
+| M1 | macOS: a launch agent of an earlier lease stayed registered (`so.idem.ios.localagent.dev`, through `SMAppService`). | Desktop cleanup ends new agents (tested) |
+| M2 | macOS: apps that a lease without `macos-desktop` opens stay (Safari since 2026-11-10, TextEdit since 2026-11-02). | Guide: open apps only in a desktop lease |
+| M3 | macOS: `osascript` that controls another app opens a permission dialog for `sshd-keygen-wrapper`. | Guide; I answered "Don't Allow" with the dialog workaround |
+| M4 | macOS: a new launch agent shows the notification "App Background Activity". | None (it goes away) |
+
+## 15. Owner decision needed: the Windows desktop user
+
+Windows starts a packaged app only for the user of the desktop session. Today the
+desktop user of `idem-win` is a person's account, and leases run as `hostel`.
+Options:
+
+- **A. `hostel` becomes the desktop user of `idem-win`.** The desktop task then
+  runs the desktop program directly in the session of `hostel` (no stored
+  password). The person's session on `idem-win` ends (Windows 11 has one desktop
+  session), and the app's agents must use Hostel for Windows GUI work from then
+  on. Not tested: whether a Cloud PC accepts a sign-in of a local account.
+- **B. A second Windows computer for Hostel** with automatic sign-in of `hostel`
+  (a physical PC or a VM with a desktop). `idem-win` stays as it is.
+- **C. No change.** Hostel supports only unpackaged apps on a shared desktop.
+
+For A and B, Hostel changes the desktop task setup (machine guide 4.4) so that
+the desktop user can be `hostel`.
