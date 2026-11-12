@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +23,10 @@ func startTunnels(st *State, rc *config.Repo, deadline time.Time) error {
 			FixedMachinePort: t.MachinePort, MachinePort: st.Access.TunnelPorts[name]}
 	}
 	if len(tunnels) == 0 {
+		// Tunnels that an earlier lease added at runtime must not come back.
+		if err := os.Remove(tunnelsFile(st)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove the tunnels of the last lease: %w", err)
+		}
 		return nil
 	}
 	if err := saveTunnels(st, tunnels); err != nil {

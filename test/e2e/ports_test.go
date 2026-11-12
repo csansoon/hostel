@@ -282,6 +282,29 @@ func TestTrafficActivity(t *testing.T) {
 	f.waitRoomFree()
 }
 
+// TestRuntimeTunnelEnds is scenario 14 (runtime tunnels): a tunnel that a lease
+// added with "hostel tunnel add" does not come back in the next lease of a
+// repository without tunnels.
+func TestRuntimeTunnelEnds(t *testing.T) {
+	t.Parallel()
+	port := localHTTP(t, "127.0.0.1:0", "guest")
+	f := newFixture(t, nil)
+	f.acquire()
+	f.e.mustHostel("tunnel", "add", "extra", "--local-port", fmt.Sprint(port))
+	if r := f.e.mustHostel("run", "--", "echo $HOSTEL_TUNNEL_EXTRA_PORT"); strings.TrimSpace(r.stdout) == "" {
+		t.Fatalf("the runtime tunnel has no port in the lease: %s", r)
+	}
+	f.e.mustHostel("release")
+	f.waitRoomFree()
+	f.acquire()
+	if r := f.e.mustHostel("info"); strings.Contains(r.stdout, "extra") {
+		t.Fatalf("the tunnel of the last lease came back: %s", r.stdout)
+	}
+	if r := f.e.mustHostel("run", "--", "echo \"[$HOSTEL_TUNNEL_EXTRA_PORT]\""); strings.TrimSpace(r.stdout) != "[]" {
+		t.Fatalf("the tunnel of the last lease is in the environment: %s", r)
+	}
+}
+
 // staysLeased fails if the fixture's room becomes free within d.
 func (f *fixture) staysLeased(d time.Duration) {
 	f.e.t.Helper()
