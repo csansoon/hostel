@@ -1253,7 +1253,7 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
 - The guest asks for it with `hostel acquire windows-desktop` (with `dotnet` or
   other tools to build; `whole_machine = true`, as on the Mac). The owner lists
   `windows-desktop` only for a machine with a signed-in desktop user and the
-  "Hostel desktop" task (`static-machine-setup.md`, Windows, step 6).
+  "Hostel desktop" task (`machine-setup.md`, section 4.4).
 - **The desktop program.** SSH sessions (Windows session 0) cannot show
   windows, take screenshots, or use UI Automation. The task of the desktop user
   starts `hostel helper desktop serve` as the machine user in the desktop session

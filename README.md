@@ -162,7 +162,7 @@ only for the tools that you need; ask for a screen tool only to see the app. Alw
 | [docs/design.md](docs/design.md) | Architecture and contracts |
 | [docs/requirements.md](docs/requirements.md) | Vocabulary, decisions, requirements |
 | [docs/deploy-vps.md](docs/deploy-vps.md) | A server on a VPS |
-| [docs/static-machine-setup.md](docs/static-machine-setup.md) | Your own computers as machines |
+| [docs/machine-setup.md](docs/machine-setup.md) | Your own computers as machines |
 | [docs/namespace.md](docs/namespace.md) | On-demand machines on Namespace |
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents that work on Hostel itself |

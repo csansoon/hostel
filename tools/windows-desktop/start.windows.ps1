@@ -1,6 +1,6 @@
 # The desktop program must run: SSH sessions have no screen, and "desktop",
 # winapp, and the screenshot use the program in the desktop session (the
-# Hostel desktop task, docs/static-machine-setup.md, Windows, step 6).
+# Hostel desktop task, docs/machine-setup.md, section 4.4).
 $ErrorActionPreference = 'Stop'
 $file = Join-Path (Split-Path $env:HOSTEL_CACHE_DIR) 'desktop.json'
 if (-not (Test-Path $file)) {

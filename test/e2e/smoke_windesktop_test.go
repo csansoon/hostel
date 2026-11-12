@@ -48,7 +48,7 @@ public partial class MainWindow : System.Windows.Window {
 
 // TestSmokeWindowsDesktop (M7) runs against a real Windows machine with a
 // desktop (HOSTEL_SMOKE_WINDOWS, as TestSmokeWindows; the machine needs the
-// Hostel desktop task, docs/static-machine-setup.md). The desktop must be
+// Hostel desktop task, docs/machine-setup.md). The desktop must be
 // connected, and nobody may use it during the test. HOSTEL_SMOKE_OUT
 // (optional) is a directory for the screenshot.
 //

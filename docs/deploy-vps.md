@@ -208,11 +208,11 @@ configuration (`connect = true`), and starts the service that runs `hostel
 machine connect` (a systemd unit as `hostel-connect`, a LaunchDaemon as root,
 or a scheduled task as `LOCAL SERVICE`; the token is in `/etc/hostel` or
 `C:\ProgramData\hostel`, which the machine user cannot read). Then do the steps
-that it prints (Remote Login, Xcode, the desktop: `docs/static-machine-setup.md`).
+that it prints (Remote Login, Xcode, the desktop: `docs/machine-setup.md`).
 If a step fails, fix it, and run the same command again: it continues.
 
 **By hand** (the steps that `machine join` does). Prepare the machine first with
-`docs/static-machine-setup.md`. Then:
+`docs/machine-setup.md`. Then:
 
 1. Put the server's public key (`hostel admin pubkey`) into the machine user's
    `~/.ssh/authorized_keys` and also into `~/hostel/authorized_keys.base` if that

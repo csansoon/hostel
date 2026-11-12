@@ -79,7 +79,7 @@ Windows, `winapp`. `mise.agent_device = false` (`hostel config settings set`)
 turns this off.
 
 The full Mac and Windows preparation (users, Remote Login, auto login, the
-desktop task) is in `docs/static-machine-setup.md`.
+desktop task) is in `docs/machine-setup.md`.
 
 ## Your own tool
 

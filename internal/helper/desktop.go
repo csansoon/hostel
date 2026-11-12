@@ -305,7 +305,7 @@ func (h *helper) desktopRun(args []string, stdout, stderr io.Writer) int {
 		conn, err = net.DialTimeout("tcp", addr.Addr, desktopDialTimeout)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "hostel: this machine has no desktop session (%v). The machine needs a signed-in desktop and the Hostel desktop task (docs/static-machine-setup.md).\n", err)
+		fmt.Fprintf(stderr, "hostel: this machine has no desktop session (%v). The machine needs a signed-in desktop and the Hostel desktop task (docs/machine-setup.md).\n", err)
 		return 69
 	}
 	defer conn.Close()
