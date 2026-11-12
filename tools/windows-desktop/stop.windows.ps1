@@ -23,7 +23,10 @@ $record = Join-Path $env:HOSTEL_ROOM_DIR 'desktop-packages'
 if (-not (Test-Path $record)) { exit 0 }
 $before = @(Get-Content $record)
 $failed = @()
-foreach ($p in Get-AppxPackage) {
+# Not frameworks (for example the Windows App Runtime that a package brought):
+# Windows refuses to remove one, and removes it with the last package that
+# needs it.
+foreach ($p in Get-AppxPackage | Where-Object { -not $_.IsFramework }) {
 	if ($before -contains $p.PackageFullName) { continue }
 	try {
 		Remove-AppxPackage -Package $p.PackageFullName

@@ -1300,7 +1300,9 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   `stop.windows.ps1` ends the new processes of the session (not `hostel.exe`
   and `explorer.exe`, and not programs in the Windows folder, which Windows
   starts at any time), and removes the packages that the lease installed, with
-  their app data. Install packages in a job, not through `desktop`. Other files
+  their app data. Install packages through `desktop`: in a job (a network logon),
+  `Add-AppxPackage` fails with `0x80070005` when the machine user has a desktop
+  session (M10h). Other files
   and settings of the machine user stay for the next lease, as on macOS.
 
 ### mise on machines

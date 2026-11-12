@@ -21,17 +21,23 @@ Commands run in PowerShell. A cmdlet that fails does not change the exit
 code; start a command with $ErrorActionPreference = 'Stop' when a failure must
 stop it.
 
-Packaged apps (MSIX): build and sign the package in a job, and install it in a
-job (not through "desktop"):
+Packaged apps (MSIX): build and sign the package in a job, and install it
+through "desktop" (in a job, Add-AppxPackage fails with 0x80070005):
 
   hostel run -- 'signtool sign /fd SHA256 /sm /sha1 <thumbprint> app.msix'
-  hostel run -- '$ErrorActionPreference = "Stop"; Add-AppxPackage app.msix -DependencyPath (Get-ChildItem Dependencies\x64\*.msix)'
+  hostel run -- 'desktop powershell -NoProfile -File install.ps1'
+
+install.ps1 (in the work directory):
+
+  $ErrorActionPreference = 'Stop'
+  Add-AppxPackage app.msix -DependencyPath (Get-ChildItem Dependencies\x64\*.msix)
 
 signtool works only if the machine has the certificate for Hostel
 (docs/machine-setup.md, section 4.5). If another user of the machine has a
 package with the same name and version, Add-AppxPackage fails with 0x80073D19:
-give the package another name or version. Start the installed app on the
-desktop:
+give the package another name or version; the same applies to a package of the
+same version that the lease installed before (remove it first). Start the
+installed app on the desktop:
 
   hostel run -- 'desktop --detach explorer.exe shell:AppsFolder\<package family name>!App'
 

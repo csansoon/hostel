@@ -259,7 +259,9 @@ signing), Linux (KVM), on-demand providers, and a check after each part.
 | W13 | A sync that lost its connection made a lease expire. | Open: not reproduced |
 | W14 | After a helper update, the desktop program restarts within 10 s; a lease that started in that time failed in the `windows-desktop` start script, and the machine became `broken`. | The start script waits up to 30 s for the program |
 | W15 | Windows PowerShell did not start in the desktop task at the first sign-in of the machine user (0.08 s CPU in 10 minutes). | The task runs a `cmd` loop |
-| W16 | At the first sign-in, the Start menu was open and had the focus: real clicks failed ("Target window is not in the foreground"). The console screen was 1024 × 768. | Open: phase 6 |
+| W16 | At the first sign-in, the Start menu was open and had the focus: real clicks failed ("Target window is not in the foreground"). The console screen was 1024 × 768. | Machine guide 4.4: a second restart, and the screen size |
+| W17 | With the machine user as the desktop user, `Add-AppxPackage` in a job fails with `0x80070005` ("Failed to initialize PLM"); through `desktop` it works. | Guide |
+| W18 | The stop script failed at the release: it tried to remove a framework package (the Windows App Runtime) that the lease's package had brought. Windows refuses that. The machine became `broken`. | Stop removes only packages that are not frameworks |
 | M1 | macOS: a launch agent of an earlier lease stayed registered (through `SMAppService`). | Desktop cleanup ends new agents (tested) |
 | M2 | macOS: apps that a lease without `macos-desktop` opens stay. | Guide: open apps only in a desktop lease |
 | M3 | macOS: `osascript` that controls another app opens a permission dialog for `sshd-keygen-wrapper`. | Guide |
