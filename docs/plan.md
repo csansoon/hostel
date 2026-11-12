@@ -440,7 +440,7 @@ The five follow-ups of the M10e done-when report, in one pull request:
 
 ## M10g. Providers, machines, and rooms
 
-Status: in review.
+Status: done (release v0.4.0, 2026-11-12).
 
 Owner decisions of 2026-11-06 (`requirements.md`, section 3).
 
@@ -462,6 +462,25 @@ Owner decisions of 2026-11-06 (`requirements.md`, section 3).
 
 Done when: the demo and a real server show the same structure; the E2E suite
 passes.
+
+## M10h. Desktop app follow-ups
+
+Status: planned (`m10h-implementation.md`). Owner decisions of 2026-11-12
+(`requirements.md`, section 3).
+
+- A Windows test flight of a real app through Hostel, before the fixes; its
+  findings go into this milestone.
+- Tunnel and forward traffic counts as lease activity.
+- Desktop cleanup ends what a desktop lease started: launch agents and background
+  apps on macOS; processes in the desktop session and new packages on Windows.
+  Windows cleanup waits for ended processes before its check.
+- Agent guides: system dialogs on macOS (a screenshot and a click at coordinates),
+  a Chrome profile in the room, packaged Windows apps.
+- One machine setup guide (`machine-setup.md`) for Macs, Windows, Linux, and
+  on-demand providers, with the admin steps for app QA and optional signing.
+
+Done when: the second Windows test flight runs with no manual step; the macOS
+cleanup and signing are shown on `home/macbook`; the E2E suite passes.
 
 ## M11. Hardening against backdoors (later; not required for version 1)
 

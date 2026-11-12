@@ -90,6 +90,7 @@ All other terms are plain technical words.
 | 2026-11-06 | Vocabulary (M10g, replaces the words of 2026-10-21 for machine and room): a **machine** is a real computer or VM, a **room** is a place on a machine for one lease (before: slot), and a **template** is what an on-demand provider creates machines from (before: machine). The new words apply everywhere: app, CLI, API, configuration, database, code, and docs. Implementation files of finished milestones (`m*-implementation.md`) and older decisions keep the old words. |
 | 2026-11-06 | The app has two screens and Front desk: Lobby (the one waiting line first, then the tools) and Rooms (one list: provider, machine, room). There is no Machines screen. A provider shows text only when it does something special; rooms are small squares beside their machine. Front desk › Rooms goes; its actions move to the pages of the Rooms screen. |
 | 2026-11-06 | A provider can have a display name (`label`). Every machine belongs to a provider; a static provider is a named group, which also says whether its machines are physical or VMs. |
+| 2026-11-12 | Desktop app follow-ups (M10h, `m10h-implementation.md`): no secret store now (planned for later); signing material for app builds is part of the machine setup, installed once by an administrator and usable by every lease on that machine. Tunnel and forward traffic counts as lease activity, beside the other signals. A Windows test flight of a real app through Hostel comes before the fixes. One machine setup guide covers all machine kinds. |
 
 ## 4. Functional requirements
 
@@ -278,4 +279,5 @@ experiment.
    Screen Recording on a Namespace devbox (passwordless `sudo`, image
    permissions)? How do on-demand machines get team signing for Mac Catalyst builds
    (a shared `.p12` and an App Store Connect API key, given to the machine as
-   secrets)? (not planned yet)
+   secrets)? Static machines: an administrator installs them at setup (M10h,
+   2026-11-12). On-demand machines: not planned yet (a later secret store).
