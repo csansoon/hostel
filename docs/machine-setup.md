@@ -225,7 +225,7 @@ xcodebuild ... -allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" 
 ```
 
 Check: in a lease, `security find-identity -v -p codesigning` lists the
-certificate after the unlock. Tested on `home/macbook` (2026-11-12) with a
+certificate after the unlock. Tested on a real Mac (2026-11-12) with a
 self-signed test certificate: the unlock and `codesign` worked over SSH, and the
 private key could not be exported.
 
@@ -370,7 +370,7 @@ icacls (Join-Path "$env:ProgramData\Microsoft\Crypto\Keys" $k.Key.UniqueName) /g
 
 A lease signs with `signtool sign /fd SHA256 /sm /sha1 <thumbprint> <file>`.
 Without the `icacls` step, signtool says "No certificates were found that met
-all the given criteria" (found on `home/win`, 2026-11-12).
+all the given criteria".
 
 ## 5. Linux
 

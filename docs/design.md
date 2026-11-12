@@ -1239,11 +1239,11 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   not under `/System`, `/usr`, `/Library/Apple`, `/bin`, or `/sbin` (macOS starts
   its own agents at any time). It deletes their saved window state, ends the
   `agent-device` runner, and deletes the new entries of `~/Applications`. Jobs
-  and apps from before the lease stay. Tested on `home/macbook` (2026-11-12): a
-  test launch agent, a background app, and a new foreground app ended; Google's
+  and apps from before the lease stay. Tested on a real Mac (2026-11-12): a
+  test launch agent, a background app, and a new foreground app ended; the
   agents from before stayed. A lease without `macos-desktop` does not get this
-  cleanup: apps that it opens stay (found on `home/macbook`: a Safari window
-  from 2026-11-10 and TextEdit from 2026-11-02 still ran). A lease without `macos-desktop`
+  cleanup: apps that it opens stay (found on a real Mac: windows from earlier
+  leases still ran days later). A lease without `macos-desktop`
   does not touch the desktop. The machine needs an unlocked desktop session: a locked screen
   gives the lock screen to `screencapture` and blocks the runner (found on the
   static MacBook, 2026-10-29).

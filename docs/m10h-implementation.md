@@ -1,6 +1,6 @@
 # M10h implementation plan: desktop app follow-ups
 
-Status: approved (2026-11-12), phase 1.
+Status: approved (2026-11-12), phase 6.
 Milestone M10h in `plan.md`. Owner decisions: `requirements.md`, section 3,
 2026-11-12.
 
@@ -9,9 +9,9 @@ Milestone M10h in `plan.md`. Owner decisions: `requirements.md`, section 3,
 Two inputs:
 
 - **A report from a Mac app user (2026-11-12).** An agent made signed Mac Catalyst
-  builds and did Mac app QA on `home/macbook` for a real app. It worked, with tunnels
-  that have fixed machine ports, `hostel cp`, agent-device, and `hostel screenshot`.
-  It also found six gaps:
+  builds and did Mac app QA on a static Mac machine for a real app. It worked, with
+  tunnels that have fixed machine ports, `hostel cp`, agent-device, and
+  `hostel screenshot`. It also found six gaps:
   1. Signing material went into each lease by hand (`.p12`, its password, the App
      Store Connect key).
   2. A launch agent that one lease registered still ran in the next lease, with the
@@ -24,11 +24,10 @@ Two inputs:
   6. A long test run that uses only a tunnel goes idle after 10 minutes. The agent
      ran `hostel info` every 4 minutes to keep the lease.
 - **Windows was never tested on purpose with a real app.** M6 and M7 tested a small
-  WPF app only. An agent of the owner's Windows app used seven `windows-desktop`
-  leases on `home/win` on 2026-11-09 and 2026-11-10. The last one (2026-11-10,
-  15:17 CET) ended with a failed cleanup ("processes of the lease still run:
-  [31100]"; the room directory was in use), and the machine stayed `broken` until
-  M10h.
+  WPF app only. An app agent used seven `windows-desktop` leases on a static
+  Windows machine. The last one ended with a failed cleanup ("processes of the
+  lease still run: [31100]"; the room directory was in use), and the machine
+  stayed `broken`.
 
 ## 2. Owner decisions (2026-11-12)
 
@@ -41,9 +40,10 @@ Two inputs:
 - **System dialogs:** the `macos-desktop` guide gives the workaround (a screenshot,
   then a click at coordinates).
 - **Admin steps are machine setup.** One machine setup guide covers Macs, Windows
-  computers, Linux computers, and on-demand providers. More MacBooks will join.
+  computers, Linux computers, and on-demand providers.
 - **Windows:** a test flight of a real Windows app through Hostel, before the fixes,
   so that its findings go into this milestone.
+- **The Windows desktop user is the machine user** (section 15).
 
 ## 3. Order
 
@@ -51,7 +51,7 @@ Two inputs:
 |---|---|---|
 | 1 | Windows test flight (find problems, no code changes) | Its findings change phases 3 to 5 |
 | 2 | Tunnel traffic as activity | Independent; it has an E2E test |
-| 3 | Desktop cleanup on macOS and Windows | Fixes report point 2 and the failure of 2026-11-10 |
+| 3 | Desktop cleanup on macOS and Windows | Fixes report point 2 and the failed cleanup |
 | 4 | Agent guides for both desktops | Uses the results of phases 1 and 3 |
 | 5 | The machine setup guide | Uses phases 1 to 4 |
 | 6 | Windows fixes from the test flight, then a second test flight | Must show a full run with no manual step |
@@ -61,79 +61,39 @@ Each phase ends with a local review, the tests, and a commit.
 
 ## 4. Phase 1: Windows test flight
 
-Goal: an agent does the Windows QA flow of a real app only through Hostel. The
-reference is the app's own runbook (`apps/windows/QA.md` in that repository). It
-uses the shared `idem-win` host directly today. Each failure or manual step is a
-finding.
+Goal: an agent does the Windows QA flow of a real packaged (MSIX) app only through
+Hostel. Each failure or manual step is a finding.
 
-### Before the flight
-
-1. Find the cause of the failure of 2026-11-10. Read the server log, the events for
-   lease `5440afb6…`, and the transcript of the agent that held it: which jobs and
-   `desktop` commands it ran, and which program PID 31100 was. That process no
-   longer runs. Also read that agent's six other leases for problems.
-2. Repair `home/win` (`hostel admin machine repair home/win`). Check that the
-   machine is `running` and free.
-3. Check that the desktop program runs the current helper. The "Hostel desktop"
-   task starts `C:\Users\hostel\hostel\bin\hostel.exe`, which the server updates.
-   Its start date must be after the last provisioning.
-4. Hold the devlock `windows` lock for the whole flight. The owner's desktop
-   session must show `Active` (`query session`).
-5. Make a new worktree of the app repository. Run `devlock infra up` and start its
-   API. Write a `hostel.toml` there, and do not commit it:
-   - tunnels `api` (local port from `PORT`) and `model` (the scripted model, local
-     port `PORT` + 1);
-   - `[tool.windows-desktop]` env with the API address
-     `http://localhost:{tunnels.api.port}`.
-
-### Steps
-
-Record the time, the result, and each manual action for each step.
+Before the flight: find the cause of the failed cleanup (server log, events, the
+agent's transcript), repair the machine, and check that the desktop program runs
+the current helper. The app's repository gets a `hostel.toml` (not committed) with
+tunnels to its local API and an env for `windows-desktop` with the API address.
 
 | # | Step | Through Hostel |
 |---|---|---|
 | 1 | Acquire | `hostel acquire windows-desktop --task "Windows test flight"` |
 | 2 | Sync | `hostel sync` of the worktree (size and time) |
-| 3 | .NET SDK | `dotnet --version` in the lease: the SDK of `global.json` (`10.0.402`, roll forward). Does it come from the machine or from mise? |
+| 3 | .NET SDK | `dotnet --version` in the lease: from the machine or from mise? |
 | 4 | Build | `dotnet build` of the solution |
-| 5 | Debug package | the MSIX build of the runbook, then `signtool sign` with the `CN=idem-dev` certificate |
-| 6 | Install | `desktop Add-AppxPackage <msix>` as the `hostel` user |
+| 5 | Debug package | the MSIX build, then `signtool sign` with the machine's certificate |
+| 6 | Install | `Add-AppxPackage <msix>` as the machine user |
 | 7 | Start | `desktop --detach` with `shell:AppsFolder\<family>!App`; then `hostel screenshot` |
 | 8 | Control | `winapp ui inspect` and one `invoke` on the app |
-| 9 | API | the app reaches the local API through the tunnel (sign in as a new `@dev.local` user) |
-| 10 | Scenarios | the FlaUI scenarios executable through `desktop`, with `IDEM_SCENARIO_APP` and `IDEM_SCENARIO_API_URL` |
+| 9 | API | the app reaches the local API through the tunnel |
+| 10 | UI tests | the app's UI test executable through `desktop` |
 | 11 | Logs | read the app log in `%LOCALAPPDATA%\Packages\<family>\LocalState` |
-| 12 | Release AOT | one release AOT build: time, CPU, disk (the machine has 2 cores and 19 GB free) |
+| 12 | Release build | one release AOT build: time, CPU, disk |
 | 13 | Release | `hostel release`; cleanup must pass |
 | 14 | After | no app process, the state of the installed package, the room deleted, the machine free |
 
-### Expected risks (to confirm or reject)
+Expected risks: the machine user cannot use the signing key; a packaged app does
+not start for the machine user in another user's desktop session; a packaged app
+is not a child of `desktop` and has no `HOSTEL_LEASE`, so cleanup does not find
+it; the installed package stays; disk and CPU are too small.
 
-- **Signing (step 5).** The private key of `CN=idem-dev` is in the computer's store.
-  The `hostel` user is not an administrator, so it probably cannot use it.
-- **Starting a packaged app (step 7).** This is the largest risk. The desktop
-  program runs as `hostel` inside the desktop user's session. An MSIX package is
-  registered for each user. I do not know if Windows activates a package of `hostel`
-  in the session of another user.
-- **Cleanup (steps 13 and 14).** A packaged app is not a child of `desktop` and has
-  no `HOSTEL_LEASE` (design, section 9, "The Windows desktop", "Limits"). The installed package stays after
-  the lease.
-- **Capacity (step 12).** Disk and CPU can be too small.
-
-### Rules for the flight
-
-- No administrator change on `idem-win` without the owner's approval for that
-  change.
-- Close every window that the flight opens. Release the lease and the lock at the
-  end, also when a step fails.
-- No change to the app repository is committed.
-
-### Output
-
-A "Test flight findings" section at the end of this document: a table with step,
-result, time, manual action, and the Hostel gap. Then phases 3 to 6 get their final
-scope. A finding that does not block the QA flow goes to section 12 ("Not in this
-milestone").
+Rules: no administrator change on the machine without the owner's approval for
+that change; close every window that the flight opens; release the lease at the
+end, also when a step fails; no change to the app repository is committed.
 
 ## 5. Phase 2: tunnel traffic counts as activity
 
@@ -156,9 +116,8 @@ milestone").
 - The gateway reports activity for a lease at most once per interval. The interval
   is the shorter of 30 s and `idle_timeout` / 4, so short timeouts in tests still
   work.
-- A new backend method (beside `AllowForward` and `AllowDirect`) sets
-  `last_activity_at` with the existing `store.Touch`. A lease that is not `ready`
-  is ignored.
+- The backend's `Activity` sets `last_activity_at` with the existing `store.Touch`.
+  A lease that is not `ready` is ignored.
 - The idle check in `internal/server/lifecycle.go` does not change.
 
 ### Docs
@@ -166,18 +125,12 @@ milestone").
 - `design.md`, section 16: tunnel and forward traffic sets `last_activity_at`;
   `ports` connections alone do not.
 - `skills/hostel-use/SKILL.md` and `skills/hostel/SKILL.md`: a lease stays while
-  commands run or data goes through its tunnels. The keep-alive with `hostel info`
-  is no longer necessary for a test that uses a tunnel.
+  commands run or data goes through its tunnels.
 
 ### E2E (`test/e2e/ports_test.go`)
 
-With a short `idle_timeout` (for example 3 s) and wide margins:
-
-1. A lease with a tunnel. A loop on the machine sends a request through the tunnel
-   every 500 ms for 3 × `idle_timeout`. The lease stays `ready`. After the loop
-   stops, the lease expires with the end reason "idle".
-2. A lease with a tunnel and no traffic expires after `idle_timeout`.
-3. The same as case 1 for a forward (guest → machine).
+With a short `idle_timeout` and wide margins: a lease with tunnel traffic stays
+`ready` and expires as idle after the traffic stops; the same for a forward.
 
 ## 6. Phase 3: desktop cleanup
 
@@ -187,175 +140,67 @@ that started during the lease belongs to that lease.
 
 ### macOS (`tools/macos-desktop`)
 
-- `start.macos.sh` also records:
-  - all apps that `lsappinfo` lists, of every type (foreground, UI element, and
-    background only), with PID and start time. Today it records only foreground
-    apps.
-  - the jobs of the user's launchd domain (`launchctl print gui/$(id -u)`), by
-    label;
-  - the entries of `~/Library/LaunchAgents`.
-- `stop.macos.sh`:
-  - runs `launchctl bootout gui/<uid>/<label>` for each new job whose label does not
-    start with `com.apple.`, and deletes the new plists in `~/Library/LaunchAgents`;
-  - ends each new app of any type, except Apple background processes that macOS
-    starts by itself (`com.apple.*` that is not in the foreground);
-  - keeps the steps of today: saved window state, the agent-device runner, and the
-    new entries of `~/Applications`.
-- Login items that an app registers with `SMAppService`: test on `home/macbook`
-  whether `bootout` removes them. Reading the background item database
-  (`sfltool dumpbtm`) needs an administrator. If cleanup cannot remove them, the
-  guide says so.
+- `start.macos.sh` records all apps that `lsappinfo` lists (every type, with PID and
+  start time), the jobs of the user's launchd domain, and the entries of
+  `~/Library/LaunchAgents` and `~/Applications`.
+- `stop.macos.sh` boots out new jobs whose label does not start with `com.apple.`,
+  deletes the new plists, ends new apps (not Apple background processes that macOS
+  starts by itself), and keeps the earlier steps (saved window state, the
+  agent-device runner, new entries of `~/Applications`).
 
 Evidence (the E2E machines are Linux containers, so they cannot run these scripts):
-a lease on `home/macbook` installs a test launch agent and starts a background-only
-app. After release, neither runs and the plist is gone. A second lease does not see
-them.
+a lease on a real Mac installs a test launch agent and starts a background-only
+app. After release, neither runs and the plist is gone.
 
 ### Windows (`internal/helper`, `tools/windows-desktop`)
 
-- **The desktop program ends what the lease started.** At the end of a
-  `windows-desktop` lease, the desktop program ends each process of the machine
-  user in its desktop session that started after the lease started, except itself.
-  This also ends packaged apps, which are not children of `desktop`. The helper
-  already lists the processes of the machine user (`proc_windows.go`); this adds
-  the session ID and the creation time. A process can then not escape by starting
-  through the shell.
-- **New packages go.** `start.windows.ps1` records the packages of the `hostel` user
-  (`Get-AppxPackage`; no administrator needed). A new `stop.windows.ps1` removes each
-  package that the lease added (`Remove-AppxPackage`). Removal also deletes the
-  package's app data, so no app session stays (report point 3, for Windows).
-- **Cleanup waits for processes to end.** On Windows, a process that was told to end
-  can still hold files for a short time. Step 1 of cleanup waits on the process
-  handles (at most 10 s) before the check. Step 5 retries the room deletion for up
-  to 10 s after a sharing violation. When a process still runs, the error gives its
-  image name, not only its PID.
-- The cause of the failure of 2026-11-10 (phase 1) can add a change here.
-
-Evidence: phase 6, the second test flight.
+- `start.windows.ps1` records the packages of the machine user and the processes of
+  the desktop session. `stop.windows.ps1` ends the new processes of the session
+  (programs that the shell started for the lease have no `HOSTEL_LEASE`) and removes
+  the new packages, with their app data.
+- Cleanup waits up to 10 s for the processes to end, ends the rest again, names
+  them in the error, and retries the room deletion for 10 s.
 
 ## 7. Phase 4: agent guides
 
-`tools/macos-desktop/GUIDE.md`:
+`tools/macos-desktop/GUIDE.md`: system dialogs (screenshot, then a coordinate
+click with agent-device), Chrome with a profile in the room, what stays after the
+lease, logs with `OS_ACTIVITY_DT_MODE=YES`.
 
-- System dialogs (local network, Input Monitoring, password prompts): take
-  `hostel screenshot`, find the button, and click its coordinates with
-  agent-device. The exact command comes from `agent-device help`; test it on
-  `home/macbook` with a real dialog before it goes in the guide.
-- Chrome: start it with `--user-data-dir` in the room directory, so that cleanup
-  deletes the profile and its logins.
-- What stays after the lease: app settings, keychain items, and "Always allow"
-  answers in the home directory. Do not sign in to real accounts.
-- Signing: if the machine has the signing keychain (phase 5), unlock it with the
-  command in the machine facts, then build with `-allowProvisioningUpdates`.
-- Logs: `log show` needs an administrator. Start the app executable in a job with
-  `OS_ACTIVITY_DT_MODE=YES` to get its `os_log` lines on stderr. Test this before it
-  goes in the guide.
-
-`tools/windows-desktop/GUIDE.md`:
-
-- The flow for a packaged app, from the test flight: build, sign, install, start,
-  logs, and what cleanup removes.
-- Each workaround that phase 1 found and that phase 6 does not remove.
+`tools/windows-desktop/GUIDE.md`: the flow for a packaged app (build, sign,
+install, start, cleanup), exit codes of cmdlets, package identity conflicts.
 
 ## 8. Phase 5: the machine setup guide
 
-`docs/machine-setup.md` replaces `docs/static-machine-setup.md`. The old guide is
-from M2 and gives the steps by hand. The new guide starts with `hostel machine join`.
-It is for a person who adds a new machine, step by step, with a check after each
-part. Links to the old file change in `README.md`, `docs/design.md`,
-`docs/deploy-vps.md`, `skills/hostel-tools`, `skills/hostel-machines`, the tool
-scripts, `cmd/hostel/machine.go`, `internal/helper/desktop.go`, and
-`test/e2e/smoke_windesktop_test.go`.
-
-Contents:
-
-1. **Overview.** What Hostel does by itself (the user, the server key, the
-   connection service, the helper, mise, the tools) and what only a person can do.
-   A table: for each tool, the setup steps that it needs.
-2. **All machines.** Power and sleep, a fixed address or `machine connect`, disk
-   space (with numbers for Xcode, Android, .NET), and an admin account that is not
-   the machine user.
-3. **Mac.**
-   - Join: `install.sh`, then `sudo hostel machine join <code>`.
-   - Xcode and the iOS runtime.
-   - Desktop session: automatic login of `hostel`, no lock, no sleep.
-   - Screen Recording for `sshd-keygen-wrapper`, and Automation Mode.
-   - **Mac app QA (new):**
-     - apps that leases need and cannot install: an administrator installs them in
-       `/Applications` (for example Chrome);
-     - Accessibility, Screen Recording, and Input Monitoring for the test apps. An
-       administrator grants them once for each app. macOS keeps the grant while the
-       app's signature stays the same (the same certificate and bundle ID), so later
-       builds keep it. A PPPC profile needs MDM, and no profile can grant Screen
-       Recording;
-     - optional: a sudoers rule for `/usr/bin/log` only, so that leases can read the
-       system log.
-   - **Signing (new, optional):**
-     - register the Mac's provisioning UDID in the Apple team;
-     - make a certificate only for Hostel, and import it without export rights
-       (`security import -x`) into a separate keychain of the `hostel` user,
-       `hostel-signing.keychain-db`, with Apple's WWDR intermediate certificate;
-     - its password goes in a file that only `hostel` can read. Over SSH a keychain
-       is locked, so each lease unlocks it before a build;
-     - the App Store Connect key (Developer role) goes in a file that only `hostel`
-       can read; the machine's `env` gives its path and IDs;
-     - risk: every lease on this machine can sign with this certificate and use the
-       key. Revoke them when the machine leaves.
-     - Evidence: a build signed with a self-signed test certificate on
-       `home/macbook`. A real Apple certificate needs the admin of that Mac.
-4. **Windows.**
-   - Join, OpenSSH Server, and the `LOCAL SERVICE` connect task.
-   - The desktop task (`windows-desktop`), with its security note.
-   - The tools of a lease: the .NET SDK (system install or the mise tool
-     `dotnet:<version>`, from the test flight), Windows SDK (`signtool`), sideloading.
-   - **Signing (new, optional):** the package certificate in the computer's store,
-     trusted in `TrustedPeople`, and read access to its private key for `hostel`
-     (or a copy in the `hostel` user's own store). The same risk as on the Mac.
-   - Cloud PC compared with a physical computer: a Cloud PC shares its one desktop
-     session with a person. A physical computer can sign `hostel` in automatically,
-     so that the desktop is its own. Not tested: the guide says so.
-5. **Linux.** Android: KVM, and the emulator tools.
-6. **On-demand providers.** Links to `namespace.md` and to the template
-   configuration; the provider login.
-7. **Check.** `hostel tools` lists the machine and its tools. One short lease for
-   each tool (commands given), with a screenshot for each screen tool.
+`docs/machine-setup.md` replaces `docs/static-machine-setup.md`. It starts with
+`hostel machine join` and covers all machines, Mac (desktop session, app QA,
+signing keychain), Windows (sshd, join, build tools, the desktop user and task,
+signing), Linux (KVM), on-demand providers, and a check after each part.
 
 ## 9. Phase 6: Windows fixes and the second test flight
 
-- Fix the findings of phase 1 that block the QA flow, in Hostel code, tool scripts,
-  or the setup guide. The fix for each finding is decided after phase 1. If a
-  finding needs an owner decision (for example, packaged apps cannot start for
-  `hostel` in another user's session), stop and ask.
-- Then run the test flight again. Done when the full flow (steps 1 to 14) runs with
-  no manual step, other than the owner's connected desktop.
+- The machine user becomes the desktop user (section 15), on a Windows machine
+  that only Hostel uses.
+- Run the Windows smoke tests, then the test flight again. Done when the full flow
+  (steps 1 to 14) runs with no manual step.
 
 ## 10. Tests and evidence
 
-- E2E: the new tunnel activity cases (phase 2). The whole suite passes in one local
-  run on macOS and in the 10-run CI gate (if CI can run; the GitHub billing lock
-  stopped Actions on 2026-11-09).
+- E2E: the new tunnel activity cases (phase 2), the runtime tunnel case, the
+  relative `desktop` path. The whole suite passes in one local run on macOS and in
+  the 10-run CI gate.
 - `make lint`.
-- Real machines (not in the E2E suite):
-  - `home/macbook`: the launch agent and background app cleanup (phase 3), the
-    dialog click (phase 4), and the signing keychain with a test certificate
-    (phase 5).
-  - `home/win`: the two test flights (phases 1 and 6). Screenshots of the app in a
-    lease.
-- The smoke tests `TestSmokeWindowsDesktop` and `TestSmokeDesktop` pass again with
-  the changed scripts.
+- Real machines (not in the E2E suite): a Mac (launch agent and background app
+  cleanup, the dialog click, the signing keychain with a test certificate) and a
+  Windows machine (the smoke tests and the two test flights).
 
 ## 11. Risks
 
-- A packaged app cannot start for `hostel` in another user's session. Then Windows
-  desktop QA of packaged apps needs a machine whose desktop user is `hostel`.
-  An owner decision is needed.
 - Desktop cleanup ends a process that the machine needs. Mitigation: only processes
-  of the machine user, only those that started after the lease, and not Apple
-  background processes on macOS.
-- `idem-win` has 2 cores and 19 GB of free disk. A release AOT build can be too slow
-  or too large.
-- The shared desktop on `idem-win` has two locks: Hostel leases and the devlock
-  `windows` lock of the app's own agents. They do not know each other.
+  of the machine user, only those that started after the lease, not Apple
+  background processes on macOS, and not programs in the Windows folder.
+- A Windows machine whose desktop is also used by a person cannot be a
+  `windows-desktop` machine (section 15).
 
 ## 12. Not in this milestone
 
@@ -367,24 +212,17 @@ Contents:
   M11's one OS user for each lease does not work for desktop leases as planned,
   because the desktop needs the one signed-in user.
 - System dialog support in agent-device (an upstream project).
-- One lock for the shared Windows desktop for Hostel and devlock. After the test
-  flight, the owner decides if the app's agents move their Windows QA to Hostel.
 
 ## 13. Owner answers (2026-11-12)
 
-1. `hostel` may get read access to the private key of `CN=idem-dev` on `idem-win`.
-   The agent configures `idem-win` itself, as an administrator (the SSH alias
-   `idem-win`, as the app's agents do).
-2. The administrator who sets up a machine also installs its signing keychain. The
+1. The machine user may get read access to the private key of the machine's
+   signing certificate. The agent may configure the machine as an administrator.
+2. The administrator who sets up a machine also installs its signing material. The
    machine setup guide says so.
-3. Yes: the app's agents move their Windows QA from `idem-win` and devlock to Hostel,
-   but only after the test flights pass and their findings are fixed. Not in M10h.
+3. App agents move their Windows QA to Hostel after the test flights pass and their
+   findings are fixed.
 
 ## 14. Test flight findings (phase 1, 2026-11-12)
-
-Sources: my flight on `home/win` (lease `24766b35…`, 11:06 to 12:24 CET), the
-transcript of the app agent's seven leases (2026-11-09 and 2026-11-10), and the
-macOS tests on `home/macbook`.
 
 ### Windows flight steps
 
@@ -392,80 +230,56 @@ macOS tests on `home/macbook`.
 |---|---|---|---|---|
 | 1 | Acquire | ready; the first call returned "not finished" during the sync | 2 min 46 s (2 calls) | none |
 | 2 | Sync | 6,031 files | in step 1 | none |
-| 3 | .NET SDK | 10.0.404 from the machine (system install); `dotnet` is not a Hostel tool on `home/win` | – | none |
+| 3 | .NET SDK | from the machine (system install); `dotnet` was not a Hostel tool of the machine | – | none |
 | 4 | Build (Debug MSIX) | passed | 5 min 10 s (3 min 35 s again) | none |
-| 5 | Sign | failed: "No certificates were found"; passed after an admin gave `hostel` read access to the key | – | admin `icacls` (owner approved) |
-| 6 | Install | failed with `0x80073D19` (the desktop user has `so.idem.windows.dev` 0.1.0.0 with other content); passed with another package name | 5 s | package renamed in the worktree |
+| 5 | Sign | failed: "No certificates were found"; passed after an admin gave the machine user read access to the key | – | admin `icacls` |
+| 6 | Install | failed with `0x80073D19` (the desktop user had a package with the same identity and other content); passed with another package name | 5 s | package renamed in the worktree |
 | 7 | Start | **failed**: `0x80070520` "A specified logon session does not exist" (activation API); `explorer.exe shell:AppsFolder\…` started nothing; the unpackaged build needs the Windows App Runtime package | – | – |
-| 8–11 | Control, API, scenarios, logs | not possible without step 7 | – | – |
-| 12 | Release AOT build | skipped: it does not change the result and loads the 2 shared cores for a long time | – | – |
+| 8–11 | Control, API, UI tests, logs | not possible without step 7 | – | – |
+| 12 | Release build | skipped: it does not change the result | – | – |
 | 13 | Release | cleanup passed; Notepad (started by a desktop command) ended; room deleted | < 1 min | none |
-| 14 | After | the installed package stayed for the `hostel` user | – | admin removed it |
-
-Before the flight, `home/win` was `broken` since 2026-11-10 15:17. Repair worked,
-but the machine was `unreachable` once, 2 minutes later, and then recovered.
+| 14 | After | the installed package stayed for the machine user | – | admin removed it |
 
 ### Findings and what M10h does
 
 | ID | Finding | Action |
 |---|---|---|
-| W1 | **A packaged app cannot start for `hostel` on a desktop of another user** (`0x80070520`). This blocks Windows app QA on `idem-win`. | Owner decision A (section 15): `hostel` becomes the desktop user |
-| W2 | `explorer.exe` from a lease makes `explorer.exe` processes of the desktop user (COM launch). The target program did not start; `Shell.Application.ShellExecute` ran as `hostel`. No escalation was found, but the desktop user's shell takes requests from leases. | Goes away with option A; stop ends the programs that the shell started for the lease |
-| W3 | Signing needs read access to the certificate key. | Fixed on `idem-win`; machine guide 4.5 |
+| W1 | **A packaged app cannot start for the machine user on a desktop of another user** (`0x80070520`). | The machine user is the desktop user (section 15) |
+| W2 | `explorer.exe` from a lease makes `explorer.exe` processes of the desktop user (COM launch). The target program did not start. No escalation was found, but the desktop user's shell takes requests from leases. | Goes away with section 15; stop ends the programs that the shell started for the lease |
+| W3 | Signing needs read access to the certificate key. | Machine guide 4.5 |
 | W4 | A package with the same identity for another user blocks the install. | Guide |
-| W5 | Packages stay after the lease (app data too). | `stop.windows.ps1` removes them (not yet run on Windows) |
+| W5 | Packages stay after the lease (app data too). | `stop.windows.ps1` removes them |
 | W6 | A cmdlet error does not fail a job (exit code 0). | Guide |
 | W7 | The guide's `acquire dotnet windows-desktop` fails: `unknown tool "dotnet"`. | Guide fixed |
-| W8 | Cleanup failed on 2026-11-10: a process of the lease still ran and held the room directory. Not reproduced. | Cleanup waits up to 10 s, kills again, names the process, and retries the deletion |
+| W8 | A failed cleanup: a process of the lease still ran and held the room directory. Not reproduced. | Cleanup waits up to 10 s, kills again, names the process, and retries the deletion |
 | W9 | A runtime tunnel (`hostel tunnel add`) came back in the next lease, also on another machine. | Fixed, with an E2E test |
-| W10 | `desktop --detach <relative path>` failed (exit 127) for the app agent. | The path is now relative to the command's directory, with an E2E check |
-| W11 | Event times have no date (`15:17` was 2026-11-10 but looked like today). | `hostel status` shows the date for an event of another day |
-| W12 | `home/win` has 8.5 GB free disk. | Owner: more disk, or the machine stays for small builds |
-| W13 | The shared Windows desktop is a queue: I waited about 75 minutes for the devlock `windows` lock, and devlock's wait is not first come, first served. | Goes away when the app's agents use Hostel leases |
-| W14 | A sync that lost its connection made the app agent's lease expire (lease `8a67ed08`). | Open: not reproduced |
-| M1 | macOS: a launch agent of an earlier lease stayed registered (`so.idem.ios.localagent.dev`, through `SMAppService`). | Desktop cleanup ends new agents (tested) |
-| M2 | macOS: apps that a lease without `macos-desktop` opens stay (Safari since 2026-11-10, TextEdit since 2026-11-02). | Guide: open apps only in a desktop lease |
-| M3 | macOS: `osascript` that controls another app opens a permission dialog for `sshd-keygen-wrapper`. | Guide; I answered "Don't Allow" with the dialog workaround |
+| W10 | `desktop --detach <relative path>` failed (exit 127). | The path is now relative to the command's directory, with an E2E check |
+| W11 | Event times have no date (an event of two days earlier looked like today). | `hostel status` shows the date for an event of another day |
+| W12 | Small free disk on the machine (8.5 GB). | Machine guide: disk space |
+| W13 | A sync that lost its connection made a lease expire. | Open: not reproduced |
+| W14 | After a helper update, the desktop program restarts within 10 s; a lease that started in that time failed in the `windows-desktop` start script, and the machine became `broken`. | The start script waits up to 30 s for the program |
+| W15 | Windows PowerShell did not start in the desktop task at the first sign-in of the machine user (0.08 s CPU in 10 minutes). | The task runs a `cmd` loop |
+| W16 | At the first sign-in, the Start menu was open and had the focus: real clicks failed ("Target window is not in the foreground"). The console screen was 1024 × 768. | Open: phase 6 |
+| M1 | macOS: a launch agent of an earlier lease stayed registered (through `SMAppService`). | Desktop cleanup ends new agents (tested) |
+| M2 | macOS: apps that a lease without `macos-desktop` opens stay. | Guide: open apps only in a desktop lease |
+| M3 | macOS: `osascript` that controls another app opens a permission dialog for `sshd-keygen-wrapper`. | Guide |
 | M4 | macOS: a new launch agent shows the notification "App Background Activity". | None (it goes away) |
 
-## 15. The Windows desktop user (owner decision A, 2026-11-12)
+## 15. The Windows desktop user (owner decision, 2026-11-12)
 
-Windows starts a packaged app only for the user of the desktop session. The
-desktop user of `idem-win` was a person's account, and leases run as `hostel`.
-The options were: A, `hostel` becomes the desktop user of `idem-win`; B, a
-second Windows computer for Hostel; C, no change (only unpackaged apps). There
-is no second Windows computer, so the owner chose **A**.
+Windows starts a packaged app only for the user of the desktop session. With a
+person's account as the desktop user and leases as the machine user, packaged apps
+cannot start. The machine user must be the desktop user.
 
-Consequences:
-
-- The person's session on `idem-win` ends. A Windows App or Remote Desktop
-  connection of another user disconnects the session of `hostel` and stops
-  Hostel's desktop until an administrator restarts the computer.
-- The app's agents can no longer use the desktop of `idem-win` directly
-  (`idem-win gui`, devlock `windows`). Their SSH builds as `idem-agent` still
-  work. Their Windows GUI QA must use Hostel leases (answer 3 of section 13
-  comes earlier than planned).
-
-What changes:
-
-- Machine guide 4.4: Windows signs in `hostel` at start (automatic sign-in,
-  password in an LSA secret), and the "Hostel desktop" task of `hostel` starts
-  the desktop program directly in that session. The `cred` file and
-  `Start-Process -Credential` go away.
-- `tools/windows-desktop`: the desktop session is the lease's. `start` records
-  its processes, and `stop` ends the new ones that are not in the Windows
-  folder (programs that the shell started for the lease, which have no
-  `HOSTEL_LEASE`), before it removes the lease's packages.
+- Machine guide 4.4: Windows signs in the machine user at start (automatic sign-in,
+  password in an LSA secret), and its "Hostel desktop" task starts the desktop
+  program directly in that session. The `cred` file and `Start-Process -Credential`
+  go away.
+- Windows 11 has one desktop session. A Remote Desktop connection of another user
+  disconnects the machine user's session. So a `windows-desktop` machine is used
+  only by Hostel; administrators work over SSH.
+- `tools/windows-desktop`: `start` records the processes of the desktop session,
+  and `stop` ends the new ones that are not in the Windows folder, before it
+  removes the lease's packages.
 - The smoke test `TestSmokeWindowsDesktop` also starts the app through
   `explorer.exe` and checks that cleanup ends it.
-
-The switch on `idem-win` (phase 6), with the devlock `windows` lock and
-`home/win` drained in production:
-
-1. Read the open programs of the person's session. If an app agent works in it,
-   wait for the lock.
-2. Run guide 4.4 as `idem-agent` over SSH, and restart the computer.
-3. Check: `hostel` is `Active` in the `console` session, the desktop program
-   runs, and a screenshot shows the desktop of `hostel`.
-4. If the automatic sign-in or the screenshot fails, undo: remove the automatic
-   sign-in, restart, and report.

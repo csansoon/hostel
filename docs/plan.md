@@ -480,7 +480,7 @@ Status: planned (`m10h-implementation.md`). Owner decisions of 2026-11-12
   on-demand providers, with the admin steps for app QA and optional signing.
 
 Done when: the second Windows test flight runs with no manual step; the macOS
-cleanup and signing are shown on `home/macbook`; the E2E suite passes.
+cleanup and signing are shown on a real Mac; the E2E suite passes.
 
 ## M11. Hardening against backdoors (later; not required for version 1)
 
