@@ -213,7 +213,12 @@ func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, roo
 			return nil
 		}
 		for _, sl := range rooms {
-			res, err := tx.ExecContext(ctx, `UPDATE rooms SET state = 'assigned', lease_id = ? WHERE machine_id = ? AND name = ? AND state = 'free'`,
+			// A lease user of an earlier lease that cleanup did not delete
+			// (a failed preparing) is not this lease's; a later cleanup or
+			// provisioning deletes it (M11).
+			res, err := tx.ExecContext(ctx, `UPDATE rooms SET state = 'assigned', lease_id = ?,
+				home = CASE WHEN lease_user != '' THEN '' ELSE home END, lease_user = ''
+				WHERE machine_id = ? AND name = ? AND state = 'free'`,
 				leaseID, machine.ID, sl)
 			if err != nil {
 				return err

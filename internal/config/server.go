@@ -167,10 +167,12 @@ type Timeouts struct {
 }
 
 type Template struct {
-	Address string         `toml:"address,omitempty"`
-	Connect bool           `toml:"connect,omitempty"`
-	OS      string         `toml:"os"`
-	Spec    map[string]any `toml:"spec,omitempty"`
+	Address string `toml:"address,omitempty"`
+	Connect bool   `toml:"connect,omitempty"`
+	// LeaseUsers gives each lease its own OS user (M11, macOS and Linux).
+	LeaseUsers bool           `toml:"lease_users,omitempty"`
+	OS         string         `toml:"os"`
+	Spec       map[string]any `toml:"spec,omitempty"`
 	// Tools are "name" or "name:option" entries. After LoadServer, they
 	// include the tools that the needs of the listed tools add.
 	Tools       []string          `toml:"tools,omitempty"`
@@ -631,6 +633,14 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 		m.OS = namespaceOS(el, key, m.Spec)
 	}
 
+	if m.LeaseUsers {
+		if m.OS != OSLinux && m.OS != OSMacOS {
+			el.add(key+".lease_users", "lease users are for macOS and Linux machines")
+		}
+		if slices.ContainsFunc(m.Rooms, func(r Room) bool { return r.User != "" }) {
+			el.add(key+".lease_users", "a machine with lease users has no room users")
+		}
+	}
 	if m.Tools == nil {
 		m.Tools = slices.Clone(p.Tools)
 	}

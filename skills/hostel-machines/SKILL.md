@@ -216,6 +216,7 @@ max_machines = 2
 | `max_lifetime` | provider, machine, template | none |
 | `warm_running` | provider, template: keep a free machine running this long | `5m` |
 | `warm_stopped` | provider, template: keep a stopped machine this long | `24h` |
+| `lease_users` | machine, template: `true` gives each lease its own OS user, deleted at cleanup (macOS and Linux; needs `hostel machine join --lease-users`) | `false` |
 | `reuse` | provider, template: `false` destroys an on-demand machine after its lease (no backdoor survives; each lease waits for a new machine) | `true` |
 
 ## Drain, repair, remove, destroy

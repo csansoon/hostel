@@ -104,6 +104,7 @@ type joinState struct {
 func machineJoin(args []string, stdout, stderr io.Writer) int {
 	fs := cli.NewFlagSet("hostel machine join", stderr)
 	noService := fs.Bool("no-service", false, "do not install the service; print the command that it would run")
+	leaseUsers := fs.Bool("lease-users", false, "allow the machine user to run only \"hostel lease-user\" as root, for lease_users (macOS and Linux)")
 	pos, err := cli.Parse(fs, args)
 	if err != nil || len(pos) != 1 {
 		fmt.Fprintln(stderr, templateUsage)
@@ -189,6 +190,12 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 	connectArgs := []string{"machine", "connect", "--server", st.Server, "--token-file", tokenFile}
 	if st.Key != "" {
 		connectArgs = append(connectArgs, "--server-key", st.Key)
+	}
+	if *leaseUsers {
+		fmt.Fprintln(stdout, "   Lease users: the sudo rule for \"hostel lease-user\".")
+		if err := installLeaseUserRule(osName, bin); err != nil {
+			return fail("install the sudo rule for lease users", err)
+		}
 	}
 	if *noService {
 		fmt.Fprintf(stdout, "   No service (--no-service). Run as an administrator:\n   %s %s\n", bin, strings.Join(connectArgs, " "))

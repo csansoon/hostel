@@ -57,6 +57,7 @@ var commands = []command{
 	{name: "gateway-proxy", hidden: true, run: guest.GatewayProxy},
 	{name: "machine", summary: "On a machine: join a server (hostel machine join <code>)", run: templateCmd},
 	{name: "helper", hidden: true, run: helperCmd},
+	{name: "lease-user", hidden: true, run: leaseUserCmd},
 	// A desktop task that was installed before M10g runs "room desktop serve".
 	{name: "room", hidden: true, run: helperCmd},
 }
@@ -121,7 +122,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func needsConnection(name string, args []string) bool {
 	switch name {
 	// The others report the missing connection themselves.
-	case "connect", "disconnect", "server", "helper", "room", "machine", "agent-guide", "ports", "gateway-proxy", "update":
+	case "connect", "disconnect", "server", "helper", "lease-user", "room", "machine", "agent-guide", "ports", "gateway-proxy", "update":
 		return false
 	case "admin":
 		// "admin config check|schema" is local; without a subcommand, admin

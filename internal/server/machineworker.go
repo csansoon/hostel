@@ -380,7 +380,9 @@ func (s *Server) cleanDirtyRoom(ctx context.Context, machine *machineops.Machine
 	if err != nil {
 		return err
 	}
-	if roomUser(s.config().Template(r.Provider+"/"+r.Template), room) != "" {
+	if u, err := s.roomUserOf(ctx, r, room); err != nil {
+		return err
+	} else if u != "" {
 		sr, _, err := s.openRoom(ctx, machineID, room)
 		if err != nil {
 			return err

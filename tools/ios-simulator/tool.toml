@@ -1,5 +1,7 @@
 description = "iOS Simulator: new, clean simulators for each lease"
 needs = ["xcode"]
 screen = true
+# It needs the machine user's account (desktop session, golden devices).
+machine_user = true
 options = ["iphone-17-pro", "ipad-pro-13"]
 max_options = 2

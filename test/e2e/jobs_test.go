@@ -224,3 +224,41 @@ func TestCleanupPersistence(t *testing.T) {
 		t.Fatalf("the next lease sees the persistence: %s", r.stdout)
 	}
 }
+
+// TestLeaseUsers (M11): on a machine with lease_users, a lease runs as its own
+// OS user, which cannot change the machine's shared cache or read the machine
+// user's rooms. Its backdoors (a process without HOSTEL_LEASE in a new session,
+// a crontab entry, a file in /tmp) do not survive the release: the user goes.
+func TestLeaseUsers(t *testing.T) {
+	t.Parallel()
+	// fake-screen writes into the machine's cache: a tool like that needs the
+	// machine user. fake-sdk does not.
+	f := newFixture(t, &fixtureOpts{leaseUsers: true, templateTools: []string{"fake-sdk"}})
+	f.c.sh("mkdir -p ~/hostel/cache/shared && echo original > ~/hostel/cache/shared/tool")
+	lease := f.acquire("fake-sdk")
+	user := "hostel-" + lease[:12]
+	if r := f.e.mustHostel("run", "--", "id -un; echo $HOME"); r.stdout != user+"\n/home/"+user+"\n" {
+		t.Fatalf("user and home of the lease: %q", r.stdout)
+	}
+	if r := f.e.mustHostel("run", "--", "cat ~/hostel/cache/shared/tool; (echo changed > ~/hostel/cache/shared/tool) 2>/dev/null || echo refused; "+
+		"ls /home/hostel/hostel/rooms >/dev/null 2>&1 || echo hidden"); r.stdout != "original\nrefused\nhidden\n" {
+		t.Fatalf("shared cache and machine rooms seen by the lease user: %q", r.stdout)
+	}
+	f.e.mustHostel("run", "--", "nohup env -i setsid sleep 1005 > /dev/null 2>&1 < /dev/null & "+
+		"echo '* * * * * true door' | crontab - && touch /tmp/door-$(id -un)")
+	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 1005' || true"
+	f.e.waitFor("the backdoor process runs", time.Minute, func() bool { return f.c.sh(procs) == "1" })
+	f.e.mustHostel("release")
+	f.waitRoomFree()
+	if got := f.c.rootSh("id " + user + " >/dev/null 2>&1 && echo exists; ls /home; ls /tmp; ls /var/spool/cron/crontabs; " + procs); got != "hostel\n0" {
+		t.Fatalf("after the release (user, homes, /tmp, crontabs, processes):\n%s", got)
+	}
+	if got := f.c.sh("cat ~/hostel/cache/shared/tool"); got != "original" {
+		t.Fatalf("shared cache after the lease: %q", got)
+	}
+	// The next lease gets a new user.
+	next := f.acquire("fake-sdk")
+	if r := f.e.mustHostel("run", "--", "id -un"); r.stdout != "hostel-"+next[:12]+"\n" {
+		t.Fatalf("user of the next lease: %q", r.stdout)
+	}
+}

@@ -165,3 +165,25 @@ type JobInfo struct {
 	ExitCode  *int      `json:"exit_code,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 }
+
+// LeaseUserCheck is the output of the root command "hostel lease-user check"
+// (M11): the version of the root step on the machine.
+type LeaseUserCheck struct {
+	Version int `json:"version"`
+}
+
+// LeaseUserList lists the lease users on a machine.
+type LeaseUserList struct {
+	Users []string `json:"users"`
+}
+
+// LeaseUserCreate is the input of "hostel lease-user create <name>": the key
+// that the server logs in with.
+type LeaseUserCreate struct {
+	PublicKey string `json:"public_key"`
+}
+
+// LeaseUserCreated is the output of "hostel lease-user create".
+type LeaseUserCreated struct {
+	Home string `json:"home"`
+}

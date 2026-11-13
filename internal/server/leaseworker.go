@@ -161,11 +161,19 @@ func (s *Server) openRoom(ctx context.Context, machineID int64, room string) (*m
 	if err != nil {
 		return nil, r, err
 	}
-	conn, err := s.connectAs(ctx, r, roomUser(s.config().Template(r.Provider+"/"+r.Template), room))
+	user, err := s.roomUserOf(ctx, r, room)
 	if err != nil {
 		return nil, r, err
 	}
-	return &machineops.Machine{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}, r, nil
+	conn, err := s.connectAs(ctx, r, user)
+	if err != nil {
+		return nil, r, err
+	}
+	machine := &machineops.Machine{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}
+	if user != "" && roomUser(s.config().Template(r.Provider+"/"+r.Template), room) == "" {
+		machine.SharedHome = r.Home
+	}
+	return machine, r, nil
 }
 
 // readyFor reports whether a machine has installed and checked each tool of a
@@ -300,6 +308,9 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err := s.store.SetRooms(ctx, l.ID, protocol.RoomPreparing); err != nil {
 		return err
 	}
+	if err := s.ensureLeaseUser(ctx, l); err != nil {
+		return err
+	}
 	machine, r, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
 		return err
@@ -404,6 +415,12 @@ func (s *Server) extendDeadline(ctx context.Context, r store.Machine, m *config.
 func (s *Server) stepCleaning(ctx context.Context, l store.Lease) error {
 	s.gateway.CloseLease(l.ID)
 	if l.BeganAt.IsZero() {
+		// A lease user that preparing created before begin goes now.
+		if u, err := s.store.RoomLeaseUser(ctx, l.MachineID, l.RoomName); err == nil && u != "" {
+			if err := s.deleteLeaseUsers(ctx, l.MachineID, l.RoomName); err != nil {
+				return err
+			}
+		}
 		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
 		return err
 	}
@@ -538,7 +555,12 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	}
 	// Check checks the machine, whose install ran as the machine user: a
 	// room with its own user runs it as the machine user after the cleanup.
-	ownUser := roomUser(s.config().Template(r.Provider+"/"+r.Template), room) != ""
+	user, err := s.roomUserOf(ctx, r, room)
+	if err != nil {
+		return err
+	}
+	ownUser := user != ""
+	leaseUser := ownUser && roomUser(s.config().Template(r.Provider+"/"+r.Template), room) == ""
 	if !ownUser {
 		req.Check = sortedKeys(check)
 	}
@@ -564,9 +586,14 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	}
 	var failed []string
 	for _, st := range resp.Steps {
-		if st.Error != "" {
+		// The deletion of a lease user ends all its processes and removes all
+		// its files; only the tools' stop scripts must have worked.
+		if st.Error != "" && (!leaseUser || st.Name == "stop screen tools") {
 			failed = append(failed, st.Name+": "+st.Error)
 		}
+	}
+	if err := s.deleteLeaseUsers(ctx, machineID, room); err != nil {
+		failed = append(failed, err.Error())
 	}
 	if len(failed) > 0 {
 		return errors.New(strings.Join(failed, "; "))

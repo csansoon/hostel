@@ -42,6 +42,8 @@ type Room struct {
 	LeaseID     string
 	CleanupData string
 	Home        string
+	// LeaseUser is the OS user of the room's lease (M11), or "".
+	LeaseUser string
 }
 
 // MachineTool is a row of the inventory of a machine (machine_tools).
@@ -299,6 +301,26 @@ func (s *Store) SetRoomHome(ctx context.Context, machineID int64, room, home str
 	return err
 }
 
+// SetLeaseRoomsUser records the lease user of a lease's rooms and its home
+// directory (M11).
+func (s *Store) SetLeaseRoomsUser(ctx context.Context, leaseID, user, home string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET lease_user = ?, home = ? WHERE `+leaseRooms, user, home, leaseID, leaseID)
+	return err
+}
+
+// ClearLeaseUser removes a deleted lease user from the rooms of a machine.
+func (s *Store) ClearLeaseUser(ctx context.Context, machineID int64, user string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE rooms SET lease_user = '', home = '' WHERE machine_id = ? AND lease_user = ?`, machineID, user)
+	return err
+}
+
+// RoomLeaseUser returns the lease user of a room, or "".
+func (s *Store) RoomLeaseUser(ctx context.Context, machineID int64, room string) (string, error) {
+	var u string
+	err := s.db.QueryRowContext(ctx, `SELECT lease_user FROM rooms WHERE machine_id = ? AND name = ?`, machineID, room).Scan(&u)
+	return u, err
+}
+
 // RoomHome returns the recorded home directory of a room's own user.
 func (s *Store) RoomHome(ctx context.Context, machineID int64, room string) (string, error) {
 	var home string
@@ -308,7 +330,7 @@ func (s *Store) RoomHome(ctx context.Context, machineID int64, room string) (str
 
 // Rooms returns the rooms of all machines that are not destroyed.
 func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT s.machine_id, s.name, s.state, s.lease_id, s.cleanup_data, s.home
+	rows, err := s.db.QueryContext(ctx, `SELECT s.machine_id, s.name, s.state, s.lease_id, s.cleanup_data, s.home, s.lease_user
 		FROM rooms s JOIN machines r ON r.id = s.machine_id WHERE r.state != 'destroyed' ORDER BY s.machine_id, s.name`)
 	if err != nil {
 		return nil, fmt.Errorf("list rooms: %w", err)
@@ -317,7 +339,7 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 	var out []Room
 	for rows.Next() {
 		var sl Room
-		if err := rows.Scan(&sl.MachineID, &sl.Name, &sl.State, &sl.LeaseID, &sl.CleanupData, &sl.Home); err != nil {
+		if err := rows.Scan(&sl.MachineID, &sl.Name, &sl.State, &sl.LeaseID, &sl.CleanupData, &sl.Home, &sl.LeaseUser); err != nil {
 			return nil, err
 		}
 		out = append(out, sl)

@@ -1,3 +1,5 @@
 description = "The Windows desktop, for Windows apps (the lease takes the whole machine)"
 screen = true
+# It needs the machine user's account (desktop session, golden devices).
+machine_user = true
 whole_machine = true
