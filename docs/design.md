@@ -2090,7 +2090,7 @@ failed; the result lists each step.
    (`hostel/persistence/`): the crontab, `~/.config/systemd/user`,
    `user.control`, `~/.local/share/systemd/user`, the generator directories, `~/.config/environment.d`, and `~/.config/autostart`
    (Linux), `~/Library/LaunchAgents` (macOS), the shell startup files of sh,
-   bash, zsh, and fish (with `~/.config/fish/conf.d`) (and `.bash_aliases`), the git
+   bash, zsh, and fish (with `~/.config/fish/conf.d` and `functions`) (and `.bash_aliases`), the git
    configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
    `~/.ssh/environment`.
    A new or changed entry is stopped first (`systemctl --user disable --now`;
@@ -2158,7 +2158,9 @@ Warm policy after cleanup:
   `warm_running`. The assignment also needs all other rooms of the machine
   free (`reuse` set to `false` on a busy machine). The drain is a compare-and-set: of the leases that one
   scheduler pass gives to rooms of the machine, only the first gets it, and the
-  others wait. An admin who undrains such a machine allows one more lease.
+  others wait. An admin who undrains such a machine allows one more lease. The drain
+  of `reuse = false` and an admin's drain are the same flag: after a change to
+  `reuse = true`, an admin undrains a machine that was drained this way.
 - Eviction (section 5) can destroy an idle or stopped machine earlier.
 
 ## 18. Security

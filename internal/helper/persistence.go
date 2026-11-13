@@ -32,9 +32,9 @@ func persistenceDirs() []string {
 	case "linux":
 		return []string{".config/systemd/user", ".config/systemd/user.control", ".local/share/systemd/user",
 			".config/systemd/user-generators", ".config/systemd/user-environment-generators",
-			".config/environment.d", ".config/autostart", ".config/fish/conf.d"}
+			".config/environment.d", ".config/autostart", ".config/fish/conf.d", ".config/fish/functions"}
 	case "darwin":
-		return []string{"Library/LaunchAgents", ".config/fish/conf.d"}
+		return []string{"Library/LaunchAgents", ".config/fish/conf.d", ".config/fish/functions"}
 	}
 	return nil
 }
@@ -529,7 +529,14 @@ func loadedServices() (names, present []string, err error) {
 						// Not Apple's: with the plist that it came from, so
 						// that a replaced service of the same label is new.
 						if !strings.HasPrefix(f[len(f)-1], "com.apple.") {
-							name += "\t" + servicePath(name)
+							path, gone, err := servicePath(name)
+							if err != nil {
+								return nil, nil, err
+							}
+							if gone {
+								continue
+							}
+							name += "\t" + path
 						}
 						names = append(names, name)
 					}
@@ -542,17 +549,22 @@ func loadedServices() (names, present []string, err error) {
 }
 
 // servicePath is the plist path of a loaded launchd service ("path = ...").
-func servicePath(service string) string {
+// gone is true for a service that ended after the list (exit 113).
+func servicePath(service string) (path string, gone bool, err error) {
 	out, err := outputQuiet("launchctl", "print", service)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 113 {
+		return "", true, nil
+	}
 	if err != nil {
-		return ""
+		return "", false, fmt.Errorf("launchctl print %s: %w", service, err)
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if p, ok := strings.CutPrefix(strings.TrimSpace(line), "path = "); ok {
-			return p
+			return p, false, nil
 		}
 	}
-	return ""
+	return "", false, nil
 }
 
 // unitStopped checks that a user unit does not run: is-active exits with 3
