@@ -67,14 +67,24 @@ func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	if err != nil {
 		return struct{}{}, err
 	}
+	// The base comes from a moment when the machine has no other lease: with a
+	// lease in another room, authorized_keys can have a key that that lease
+	// added, and the base must not keep it. The lock: of two rooms that begin
+	// at the same time, the first takes the copies.
+	unlock, err := h.lockMachine()
+	if err != nil {
+		return struct{}{}, err
+	}
+	defer unlock()
+	busy, err := h.otherRoomBusy(room)
+	if err != nil {
+		return struct{}{}, err
+	}
 	if err := writeFileAtomic(filepath.Join(h.roomDir(room), "lease.json"), data, 0o644); err != nil {
 		return struct{}{}, err
 	}
-	// The base comes from a moment when the machine has no other lease: with a
-	// lease in another room, authorized_keys can have a key that that lease
-	// added, and the base must not keep it.
-	if busy, err := h.otherRoomBusy(room); err != nil || busy {
-		return struct{}{}, err
+	if busy {
+		return struct{}{}, nil
 	}
 	keys, err := os.ReadFile(h.authorizedKeysPath())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

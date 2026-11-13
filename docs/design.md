@@ -2093,8 +2093,13 @@ failed; the result lists each step.
    configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
    `~/.ssh/environment`.
    A new or changed entry is stopped first (`systemctl --user disable --now`,
-   `launchctl bootout`; best effort, at most 20 for each entry), then deleted or
-   restored, also when the guest removed the write rights or set `uchg`. The home
+   `launchctl bootout`; each stop is best effort, and all of them have one
+   deadline of 2 minutes, after which the step fails), then deleted or restored,
+   also when the guest removed the write rights or set `uchg`. For a location
+   that is a link, the copy also has the content behind the link and its path,
+   and a changed target is restored too. `begin` and this step decide under a
+   lock file (`hostel/machine.lock`) whether another room has a lease, so of two
+   rooms that begin at the same time, the first makes the copy. The home
    directory comes from the helper's path and the commands from fixed system
    directories, because the startup files run before the helper and can change
    `HOME` and `PATH`. This runs only when no other room has a lease; the cleanup

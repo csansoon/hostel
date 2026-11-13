@@ -76,6 +76,25 @@ func (h *helper) snapshotPersistence() error {
 		if err := copyTree(filepath.Join(home, rel), filepath.Join(files, rel)); err != nil {
 			return fmt.Errorf("copy ~/%s: %w", rel, err)
 		}
+		// A location that is a link (dotfile managers): the copy has the link;
+		// the content behind it is copied too, with the path it had.
+		fi, err := os.Lstat(filepath.Join(home, rel))
+		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(filepath.Join(home, rel))
+		if err != nil {
+			continue // a dangling link: the link itself is compared
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(base, "links", rel)), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(base, "links", rel), []byte(real), 0o600); err != nil {
+			return err
+		}
+		if err := copyTree(real, filepath.Join(base, "targets", rel)); err != nil {
+			return fmt.Errorf("copy the target of ~/%s: %w", rel, err)
+		}
 	}
 	if tab, ok, err := readCrontab(); err != nil {
 		return err
@@ -95,11 +114,37 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 	if _, err := os.Stat(filepath.Join(base, "complete")); err != nil {
 		return nil, nil
 	}
+	unlock, err := h.lockMachine()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if busy, err := h.otherRoomBusy(room); err != nil || busy {
 		return nil, err
 	}
 	home := h.home()
 	var items, failed []string
+	// Stopping units and agents has one deadline; after it, cleanup fails.
+	deadline := time.Now().Add(2 * time.Minute)
+	repair := func(cur, copyRoot, rel, name string) {
+		changed, err := diffTree(cur, copyRoot, "")
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("%s: %v", name, err))
+			return
+		}
+		for _, c := range changed {
+			p := filepath.Join(cur, c)
+			if err := unloadAgents(p, deadline); err != nil {
+				failed = append(failed, fmt.Sprintf("%s: %v", name, err))
+				continue
+			}
+			if err := restoreEntry(p, filepath.Join(copyRoot, c)); err != nil {
+				failed = append(failed, fmt.Sprintf("%s: %v", filepath.Join(name, c), err))
+				continue
+			}
+			items = append(items, filepath.ToSlash(filepath.Join(name, c)))
+		}
+	}
 	for _, rel := range append(persistenceDirs(), persistenceFiles...) {
 		// A link to Hostel's own directory would compare the copy with itself.
 		if dir, err := filepath.EvalSymlinks(filepath.Dir(filepath.Join(home, rel))); err == nil {
@@ -108,19 +153,11 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 				continue
 			}
 		}
-		changed, err := diffTree(filepath.Join(home, rel), filepath.Join(base, "files", rel), "")
-		if err != nil {
-			failed = append(failed, fmt.Sprintf("~/%s: %v", rel, err))
-			continue
-		}
-		for _, c := range changed {
-			p := filepath.Join(home, rel, c)
-			unloadAgents(p)
-			if err := restoreEntry(p, filepath.Join(base, "files", rel, c)); err != nil {
-				failed = append(failed, fmt.Sprintf("~/%s: %v", filepath.Join(rel, c), err))
-				continue
-			}
-			items = append(items, "~/"+filepath.ToSlash(filepath.Join(rel, c)))
+		n := len(items)
+		repair(filepath.Join(home, rel), filepath.Join(base, "files", rel), rel, "~/"+rel)
+		// The link did not change: the content behind it must not either.
+		if real, err := os.ReadFile(filepath.Join(base, "links", rel)); err == nil && len(items) == n {
+			repair(string(real), filepath.Join(base, "targets", rel), rel, string(real))
 		}
 	}
 	if len(items) > 0 && runtime.GOOS == "linux" {
@@ -266,9 +303,10 @@ func copyTree(src, dst string) error {
 }
 
 // unloadAgents stops the user units or agents at path (a file, or the files
-// directly in a new directory) before they go. Best effort: a machine can have
-// no user manager. At most 20, so that many files cannot make cleanup slow.
-func unloadAgents(path string) {
+// directly in a new directory) before they go. Each stop is best effort (a
+// machine can have no user manager); after the deadline, it fails, so that
+// many files cannot leave units running.
+func unloadAgents(path string, deadline time.Time) error {
 	files := []string{path}
 	if des, err := os.ReadDir(path); err == nil {
 		files = files[:0]
@@ -277,9 +315,9 @@ func unloadAgents(path string) {
 		}
 	}
 	uid := strconv.Itoa(os.Getuid())
-	for i, f := range files {
-		if i == 20 {
-			return
+	for _, f := range files {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("too many units or agents to stop (stopped until %s)", f)
 		}
 		switch {
 		case runtime.GOOS == "linux" && strings.Contains(f, "/.config/systemd/user/"):
@@ -289,6 +327,7 @@ func unloadAgents(path string) {
 			runQuiet("launchctl", "bootout", "user/"+uid, f)
 		}
 	}
+	return nil
 }
 
 func runQuiet(name string, args ...string) {

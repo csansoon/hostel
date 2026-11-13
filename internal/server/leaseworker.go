@@ -415,13 +415,14 @@ func (s *Server) extendDeadline(ctx context.Context, r store.Machine, m *config.
 func (s *Server) stepCleaning(ctx context.Context, l store.Lease) error {
 	s.gateway.CloseLease(l.ID)
 	if l.BeganAt.IsZero() {
-		// A lease user that preparing created before begin goes now; if the
-		// machine is not reachable, a later cleanup or provisioning deletes it.
+		// A lease user that preparing created before begin goes now.
 		if u, err := s.store.RoomLeaseUser(ctx, l.MachineID, l.RoomName); err != nil {
 			return err
 		} else if u != "" {
+			// The room stays in cleaning until the user is gone: the step
+			// runs again.
 			if err := s.deleteLeaseUsers(ctx, l.MachineID, l.RoomName); err != nil {
-				s.log.Warn("delete the lease user", "lease_id", l.ID, "err", err)
+				return fmt.Errorf("delete the lease user %s: %w", u, err)
 			}
 		}
 		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
