@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/machineops"
@@ -112,8 +113,9 @@ func (s *Server) ensureLeaseUser(ctx context.Context, l store.Lease) error {
 	}
 	// One lease-user change at a time: the sweep of another cleanup must not
 	// delete a user between its record and its creation.
-	s.leaseUserMu.Lock()
-	defer s.leaseUserMu.Unlock()
+	lock := s.leaseUserLock(r.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if err := s.store.SetLeaseRoomsUser(ctx, l.ID, name, ""); err != nil {
 		return err
 	}
@@ -173,8 +175,9 @@ func (s *Server) deleteLeaseUsers(ctx context.Context, machineID int64, room str
 	if done == "" && (m == nil || !m.LeaseUsers) {
 		return nil
 	}
-	s.leaseUserMu.Lock()
-	defer s.leaseUserMu.Unlock()
+	lock := s.leaseUserLock(machineID)
+	lock.Lock()
+	defer lock.Unlock()
 	rooms, err := s.store.Rooms(ctx)
 	if err != nil {
 		return err
@@ -211,14 +214,27 @@ func (s *Server) deleteLeaseUsers(ctx context.Context, machineID int64, room str
 	return s.store.ClearLeaseUser(ctx, machineID, done)
 }
 
+func (s *Server) leaseUserLock(machineID int64) *sync.Mutex {
+	l, _ := s.leaseUserLocks.LoadOrStore(machineID, &sync.Mutex{})
+	return l.(*sync.Mutex)
+}
+
 // deleteLeaseUserInstead handles a failed login as a room's user: a lease user
 // can break its own login (its authorized_keys), and its deletion removes all
 // of it. For other users it returns err.
-func (s *Server) deleteLeaseUserInstead(ctx context.Context, machineID int64, room string, err error) error {
+// When tools started for the lease, their stop scripts did not run: the
+// cleanup fails after the deletion.
+func (s *Server) deleteLeaseUserInstead(ctx context.Context, machineID int64, room string, started int, err error) error {
 	u, uerr := s.store.RoomLeaseUser(ctx, machineID, room)
 	if uerr != nil || u == "" {
 		return err
 	}
 	s.log.Warn("no login as the lease user; the user is deleted", "machine_id", machineID, "room", room, "err", err)
-	return s.deleteLeaseUsers(ctx, machineID, room)
+	if derr := s.deleteLeaseUsers(ctx, machineID, room); derr != nil {
+		return derr
+	}
+	if started > 0 {
+		return fmt.Errorf("no login as the lease user %s, so the stop scripts of its tools did not run: %w", u, err)
+	}
+	return nil
 }

@@ -504,7 +504,7 @@ func (s *Server) cleanupData(ctx context.Context, l store.Lease) string {
 func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
 	machine, _, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
-		return s.deleteLeaseUserInstead(ctx, l.MachineID, l.RoomName, err)
+		return s.deleteLeaseUserInstead(ctx, l.MachineID, l.RoomName, len(l.Started), err)
 	}
 	defer machine.Conn.Close()
 	return s.runCleanup(ctx, machine, l.MachineID, l.RoomName, s.cleanupRequest(ctx, l))

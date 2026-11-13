@@ -53,6 +53,13 @@ func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return struct{}{}, fmt.Errorf("read the request: %w", err)
 	}
+	// rooms/ only for the user: lease users may traverse hostel/ (M11).
+	if err := os.MkdirAll(filepath.Join(h.root, "rooms"), 0o700); err != nil {
+		return struct{}{}, err
+	}
+	if err := os.Chmod(filepath.Join(h.root, "rooms"), 0o700); err != nil {
+		return struct{}{}, err
+	}
 	if err := os.MkdirAll(h.workDir(room), 0o755); err != nil {
 		return struct{}{}, err
 	}

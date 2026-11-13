@@ -113,9 +113,10 @@ func TestLeaseUserMise(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, &fixtureOpts{leaseUsers: true, templateTools: []string{"fake-sdk", "jq:1.7.1"}})
 	f.acquire("fake-sdk")
-	r := f.e.mustHostel("run", "--", "jq --version; command -v jq; ls ~/hostel/cache/mise/installs 2>/dev/null | grep -c jq || true")
+	r := f.e.mustHostel("run", "--", "jq --version; command -v jq; ls ~/hostel/cache/mise/installs 2>/dev/null | grep -c jq || true; "+
+		`(echo 'echo changed' > "$(command -v jq)") 2>/dev/null || echo refused`)
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(lines) != 3 || lines[0] != "jq-1.7.1" || !strings.HasPrefix(lines[1], "/home/hostel/hostel/cache/mise/installs/") || lines[2] != "0" {
-		t.Fatalf("jq for the lease user (version, path, own installs): %q", r.stdout)
+	if len(lines) != 4 || lines[0] != "jq-1.7.1" || !strings.HasPrefix(lines[1], "/home/hostel/hostel/cache/mise/installs/") || lines[2] != "0" || lines[3] != "refused" {
+		t.Fatalf("jq for the lease user (version, path, own installs, change): %q", r.stdout)
 	}
 }

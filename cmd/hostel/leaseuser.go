@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -267,7 +266,8 @@ func addLeaseUser(name string, uid int) error {
 	}
 	home := "/Users/" + name
 	for _, kv := range [][]string{
-		{"UniqueID", id}, {"PrimaryGroupID", grp.Gid}, {"RealName", leaseUserMarker},
+		// The marker first: a record without it cannot be deleted later.
+		{"RealName", leaseUserMarker}, {"UniqueID", id}, {"PrimaryGroupID", grp.Gid},
 		{"UserShell", "/bin/zsh"}, {"NFSHomeDirectory", home}, {"IsHidden", "1"}, {"Password", "*"},
 	} {
 		if err := runSetup("dscl", ".", "-create", "/Users/"+name, kv[0], kv[1]); err != nil {
@@ -291,8 +291,12 @@ func deleteLeaseUser(name string) error {
 		return err
 	}
 	exists, err := isLeaseUser(name)
-	if err != nil || !exists {
+	if err != nil {
 		return err
+	}
+	if !exists {
+		// A deletion that stopped after the user record went.
+		return removeLeaseHome(leaseHome(name))
 	}
 	u, err := user.Lookup(name)
 	if err != nil {
@@ -318,7 +322,12 @@ func deleteLeaseUser(name string) error {
 	for _, d := range tmp {
 		if _, err := os.Stat(d); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			cmd := exec.CommandContext(ctx, "find", d, "-xdev", "-user", name, "-delete")
+			// As the user: its own flags first (macOS uchg, uappnd), then its files.
+			script := `find "$1" -xdev -user "$2" -delete`
+			if runtime.GOOS == "darwin" {
+				script = `find "$1" -xdev -user "$2" -exec chflags -h nouchg,nouappnd {} + 2>/dev/null; ` + script
+			}
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script, "sh", d, name)
 			asUser(cmd, uid, gid)
 			// BSD find opens the current directory, which the user may not read.
 			cmd.Dir = "/"
@@ -327,6 +336,14 @@ func deleteLeaseUser(name string) error {
 		}
 	}
 	if err := killUser(name); err != nil {
+		return err
+	}
+	// The home before the user record: a repeated deletion finds the user
+	// again until both are gone.
+	if u.HomeDir != leaseHome(name) {
+		return fmt.Errorf("the home directory of %s is %s, not %s", name, u.HomeDir, leaseHome(name))
+	}
+	if err := removeLeaseHome(u.HomeDir); err != nil {
 		return err
 	}
 	if runtime.GOOS == "darwin" {
@@ -340,11 +357,27 @@ func deleteLeaseUser(name string) error {
 	} else if err := runSetup("userdel", name); err != nil {
 		return err
 	}
-	// RemoveAll does not follow links; the parent belongs to root.
-	if parent := filepath.Dir(u.HomeDir); filepath.Base(u.HomeDir) == name && (parent == "/home" || parent == "/Users") {
-		return os.RemoveAll(u.HomeDir)
-	}
 	return nil
+}
+
+func leaseHome(name string) string {
+	if runtime.GOOS == "darwin" {
+		return "/Users/" + name
+	}
+	return "/home/" + name
+}
+
+// removeLeaseHome removes a lease user's home directory (its parent belongs
+// to root; RemoveAll does not follow links). On macOS the user can set flags
+// that stop the removal: chflags -P does not follow links either.
+func removeLeaseHome(home string) error {
+	if _, err := os.Lstat(home); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if runtime.GOOS == "darwin" {
+		runQuietSetup("chflags", "-R", "-P", "nouchg,nouappnd", home)
+	}
+	return os.RemoveAll(home)
 }
 
 // macGroups are the groups of a lease user on macOS: the lease group, and
@@ -378,8 +411,10 @@ func killUser(name string) error {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		runQuietSetup("pkill", "-KILL", "-u", name)
-		if _, err := setupOutput("pgrep", "-u", name); err != nil {
-			return nil // exit code 1: no process
+		_, err := setupOutput("pgrep", "-u", name)
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return nil // no process
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("processes of %s still run after SIGKILL", name)

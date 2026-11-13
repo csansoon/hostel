@@ -20,7 +20,8 @@ import (
 // a program there runs after the lease without HOSTEL_LEASE. begin copies them
 // when the machine has no other lease; cleanup of the last lease restores them.
 var persistenceFiles = []string{
-	".profile", ".bashrc", ".bash_profile", ".bash_login", ".bash_logout",
+	".profile", ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases",
+	".gitconfig", ".config/git/config",
 	".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout",
 	".config/fish/config.fish", ".ssh/rc", ".ssh/environment",
 }

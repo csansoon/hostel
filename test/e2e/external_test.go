@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -179,6 +180,16 @@ func TestNoReuse(t *testing.T) {
 	first := f.cloudMachines()[0].Name
 	f.e.mustHostel("release")
 	f.waitNoCloudMachines()
+	db, err := sql.Open("sqlite", filepath.Join(f.e.dataDir(), "hostel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	err = db.QueryRow(`SELECT count(*) FROM events WHERE message LIKE '%reuse = false: destroyed after its lease%'`).Scan(&n)
+	db.Close()
+	if err != nil || n != 1 {
+		t.Fatalf("events of the destruction for reuse = false: %d, %v", n, err)
+	}
 	f.acquire()
 	if ms := f.cloudMachines(); len(ms) != 1 || ms[0].Name == first {
 		t.Fatalf("machines of the second lease: %+v, want one new machine (not %s)", ms, first)

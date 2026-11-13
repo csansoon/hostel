@@ -2088,7 +2088,9 @@ failed; the result lists each step.
    from the copy that `begin` made when the machine had no other lease
    (`hostel/persistence/`): the crontab, `~/.config/systemd/user` and
    `~/.config/autostart` (Linux), `~/Library/LaunchAgents` (macOS), the shell
-   startup files of sh, bash, zsh, and fish, `~/.ssh/rc`, and `~/.ssh/environment`.
+   startup files of sh, bash, zsh, and fish (and `.bash_aliases`), the git
+   configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
+   `~/.ssh/environment`.
    A new or changed entry is stopped first (`systemctl --user disable --now`,
    `launchctl bootout`; best effort, at most 20 for each entry), then deleted or
    restored, also when the guest removed the write rights or set `uchg`. The home
@@ -2212,24 +2214,34 @@ Hardening (milestone M11):
    - **Delete** (cleanup, after the helper's cleanup as the lease user): end all
      processes of the user (`launchctl bootout`, `loginctl terminate-user`,
      `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs, and
-     its files in the shared temporary directories (`find -delete` as the user),
-     then the user and its home directory. The lease user owns its helper and
+     its files in the shared temporary directories (`find -delete` as the user,
+     after it clears its own macOS flags), then its home directory (after root
+     clears the macOS flags `uchg` and `uappnd` without following links), then
+     the user record. A repeated deletion that finds no user removes a home
+     directory that is left. The lease user owns its helper and
      its login: when the helper's cleanup fails, or the server cannot log in as
      the user, the deletion runs anyway, and only a failed deletion makes the
      machine `broken`. The cleanup and each provisioning also delete lease users
      that no active room records (a failed preparing leaves one). One server
-     lock orders creation and these sweeps.
-   - **Limit.** A guest on the machine user (a lease with a `machine_user` tool)
-     can run the root command too: it can end the lease users of other rooms
-     (no more than that). Machines that need this protection between rooms use
-     one room, or no `machine_user` tools.
+     lock for each machine orders creation and these sweeps. When the server cannot
+     log in as the lease user (the user can break its own login), it deletes the
+     user without the helper's cleanup; if tools started for the lease, their stop
+     scripts did not run, and the cleanup fails.
+   - **Limit.** A guest on the machine user (a lease with a `machine_user` tool,
+     or any lease on a machine without `lease_users`) controls the machine
+     user's files and shell: it can change what later lease users copy and run
+     (the helper, tools, and the shared cache), fake the answers of the root
+     calls that run through the machine user's shell, and end the lease users of
+     other rooms. Lease users protect a machine fully only when all its leases
+     use lease users: no `machine_user` tools on it.
    - Tools with `machine_user = true` need the machine user's account
      (`macos-desktop`, `ios-simulator`, `android-emulator`, `windows-desktop`):
      a lease with one of them uses the machine user and gets the audit
      (section 17).
 2. **Read-only shared caches.** The machine user owns the caches and installs
    tools into them. `helper share-cache` (as the machine user) gives its home and
-   `hostel/` the group `hostel-leases` with traverse rights only, `hostel/bin`,
+   `hostel/` the group `hostel-leases` with traverse rights only (`begin` keeps
+   `hostel/rooms` at mode 0700), `hostel/bin`,
    `tools`, `mise`, and `cache` group read rights, and takes the rights of the
    group and of other users from all other entries there; so a lease user can
    read the cache but not write it, and cannot read the machine user's rooms or
