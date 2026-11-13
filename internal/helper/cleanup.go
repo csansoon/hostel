@@ -83,13 +83,20 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	step("stop processes", func() error { return h.stopLeaseProcesses(room, req.LeaseID) })
 	step("stop screen tools", func() error { return h.stopTools(room, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
-	step("check", func() error { return h.checkClean(room, req.LeaseID, req.Ports) })
-	// After "check": no process of the lease can add an entry again.
-	step("remove persistence", func() error {
-		var err error
-		resp.Removed, err = h.restorePersistence(room)
+	// Before "check": a new unit or agent can hold a room port. Again after
+	// it: a process of the lease that "check" ended can have added an entry.
+	removePersistence := func() error {
+		items, err := h.restorePersistence(room)
+		for _, it := range items {
+			if !slices.Contains(resp.Removed, it) {
+				resp.Removed = append(resp.Removed, it)
+			}
+		}
 		return err
-	})
+	}
+	step("remove persistence", removePersistence)
+	step("check", func() error { return h.checkClean(room, req.LeaseID, req.Ports) })
+	step("remove persistence again", removePersistence)
 	step("delete room", func() error {
 		// Markers of jobs whose supervisor was killed.
 		if marker := devboxTaskMarker(room, "*"); marker != "" {

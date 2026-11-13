@@ -2083,7 +2083,8 @@ failed; the result lists each step.
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the machine has no IPv6
    loopback address), and retry for up to 10 seconds, because
    the machine's SSH server removes its listeners after the connections close.
-   After step 4 (so that no process of the lease can add an entry again),
+   Before step 4 (a new unit or agent can hold a room port) and again after it
+   (a process of the lease that step 4 ended can have added an entry),
    restore the persistence locations of the machine user (M11, macOS and Linux)
    from the copy that `begin` made when the machine had no other lease
    (`hostel/persistence/`): the crontab, `~/.config/systemd/user` and
