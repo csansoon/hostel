@@ -95,7 +95,7 @@ func TestMachineJoin(t *testing.T) {
 	}
 	// --lease-users (M11): the machine user may run only "hostel lease-user"
 	// as root.
-	if got := rootSh(`su hostel -s /bin/sh -c 'sudo -n /etc/hostel/hostel lease-user check; sudo -n /bin/true 2>/dev/null || echo refused'`); got != `{"version":1}`+"\nrefused" {
+	if got := rootSh(`su hostel -s /bin/sh -c 'sudo -n /etc/hostel/hostel lease-user check; sudo -n /bin/true 2>/dev/null || echo refused'`); got != `{"version":2}`+"\nrefused" {
 		t.Fatalf("the sudo rule for lease users: %q", got)
 	}
 	doc := s.configDoc().Document

@@ -2187,38 +2187,52 @@ Hardening (milestone M11):
    machine). A lease whose tools have no `machine_user` key gets the user
    `hostel-<first 12 characters of the lease ID>`.
    - **Root step.** `hostel machine join --lease-users` writes
-     `/etc/sudoers.d/hostel`: the machine user may run only
-     `/etc/hostel/hostel lease-user *` as root (the root-owned binary of the
-     join). The command accepts only names of that form, changes only users
-     whose full name is "Hostel lease", and takes no path. `check` prints its
-     version; the server checks it at provisioning (a missing step makes the
-     machine `broken` with a message).
-   - **Create** (preparing, before `begin`, as the machine user through sudo):
-     the user, without administrator rights, in the group `hostel-leases`; a
-     home directory with mode 0700 and the server key in its `authorized_keys`;
-     its own `hostel/` with copies of the machine's helper, mise, tools, and
-     mise configuration, its own `cache/`, and links to the entries of the
-     machine's cache except mise's own directories. The server records the
-     name before the call and the home directory after it. Then the room steps
-     and the guest's connections use the lease user, as for room users
-     (section 7).
+     `/etc/sudoers.d/hostel` (the machine user may run only
+     `/etc/hostel/hostel lease-user *` as root, the root-owned binary of the
+     join) and `/etc/hostel/server_key.pub`. The caller can be a guest on the
+     machine user, so the command takes only a name of that form, changes only
+     users whose full name is "Hostel lease", reads the key only from the
+     root-owned file, sets its own `PATH`, and never follows a path that another
+     user controls: it writes only into a home directory that it has just made
+     (through `os.Root`). `check` prints its version; the server checks it at
+     provisioning (a missing step makes the machine `broken` with a message).
+   - **Create** (preparing, before `begin`): the server records the name, then
+     runs `create` as the machine user through sudo: an existing lease user of
+     that name goes first; the new user gets a user ID that was never used
+     before (`/etc/hostel/lease-uid`), no administrator rights, the group
+     `hostel-leases` (its primary group on macOS), a home directory with mode
+     0700, and the server key. The machine user joins the group. Then the
+     machine user runs `helper share-cache` (item 2), and the server, as the
+     lease user, fills its home: its own `hostel/` with copies of the machine's
+     helper, mise, tools, and mise configuration, its own `cache/` with links to
+     the machine's cache entries (not mise's own directories), and `rooms/`.
+     The server records the home directory. The room steps and the guest's
+     connections then use the lease user, as for room users (section 7).
    - **Delete** (cleanup, after the helper's cleanup as the lease user): end all
      processes of the user (`launchctl bootout`, `loginctl terminate-user`,
-     `pkill -KILL -u` until none is left), remove its crontab and its files in
-     the shared temporary directories, then the user and its home directory.
-     Failures of the helper's process and port checks then do not count; a
-     failed deletion makes the machine `broken`. The cleanup and each
-     provisioning also delete lease users that no room records (a failed
-     preparing leaves one).
+     `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs, and
+     its files in the shared temporary directories (`find -delete` as the user),
+     then the user and its home directory. The lease user owns its helper and
+     its login: when the helper's cleanup fails, or the server cannot log in as
+     the user, the deletion runs anyway, and only a failed deletion makes the
+     machine `broken`. The cleanup and each provisioning also delete lease users
+     that no active room records (a failed preparing leaves one). One server
+     lock orders creation and these sweeps.
+   - **Limit.** A guest on the machine user (a lease with a `machine_user` tool)
+     can run the root command too: it can end the lease users of other rooms
+     (no more than that). Machines that need this protection between rooms use
+     one room, or no `machine_user` tools.
    - Tools with `machine_user = true` need the machine user's account
      (`macos-desktop`, `ios-simulator`, `android-emulator`, `windows-desktop`):
      a lease with one of them uses the machine user and gets the audit
      (section 17).
 2. **Read-only shared caches.** The machine user owns the caches and installs
-   tools into them. `create` gives the machine user's home, `hostel/`, and
-   `hostel/cache` the group `hostel-leases` with traverse rights, and takes the
-   rights of other users from the other entries there; so a lease user can read
-   the cache but not write it, and cannot read the machine user's rooms. Its
+   tools into them. `helper share-cache` (as the machine user) gives its home and
+   `hostel/` the group `hostel-leases` with traverse rights only, `hostel/bin`,
+   `tools`, `mise`, and `cache` group read rights, and takes the rights of the
+   group and of other users from all other entries there; so a lease user can
+   read the cache but not write it, and cannot read the machine user's rooms or
+   `machine-env.json`. Its
    mise uses `MISE_SHARED_INSTALL_DIRS` for the machine's tools; a repository
    tool that the machine does not have goes into its own cache, deleted with it.
    A tool that writes into the machine's cache during a lease needs

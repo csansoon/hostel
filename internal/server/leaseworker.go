@@ -415,10 +415,13 @@ func (s *Server) extendDeadline(ctx context.Context, r store.Machine, m *config.
 func (s *Server) stepCleaning(ctx context.Context, l store.Lease) error {
 	s.gateway.CloseLease(l.ID)
 	if l.BeganAt.IsZero() {
-		// A lease user that preparing created before begin goes now.
-		if u, err := s.store.RoomLeaseUser(ctx, l.MachineID, l.RoomName); err == nil && u != "" {
+		// A lease user that preparing created before begin goes now; if the
+		// machine is not reachable, a later cleanup or provisioning deletes it.
+		if u, err := s.store.RoomLeaseUser(ctx, l.MachineID, l.RoomName); err != nil {
+			return err
+		} else if u != "" {
 			if err := s.deleteLeaseUsers(ctx, l.MachineID, l.RoomName); err != nil {
-				return err
+				s.log.Warn("delete the lease user", "lease_id", l.ID, "err", err)
 			}
 		}
 		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
@@ -501,7 +504,7 @@ func (s *Server) cleanupData(ctx context.Context, l store.Lease) string {
 func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
 	machine, _, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
-		return err
+		return s.deleteLeaseUserInstead(ctx, l.MachineID, l.RoomName, err)
 	}
 	defer machine.Conn.Close()
 	return s.runCleanup(ctx, machine, l.MachineID, l.RoomName, s.cleanupRequest(ctx, l))
@@ -571,6 +574,12 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 		if err = s.syncMachineHelper(ctx, machineID, machine); err == nil {
 			err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
 		}
+	}
+	if err != nil && leaseUser && !errors.Is(err, machineops.ErrUnreachable) {
+		// The lease user owns its helper and can break it; its deletion
+		// below ends and removes everything of it.
+		s.log.Warn("cleanup as the lease user failed; the user is deleted", "machine_id", machineID, "room", room, "err", err)
+		resp, err = protocol.CleanupResponse{}, nil
 	}
 	if err != nil {
 		return err

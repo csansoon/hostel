@@ -239,7 +239,8 @@ func (c *container) installLeaseUserRoot() {
 	if _, err := docker("cp", filepath.Join(helperDir, "hostel-linux-"+dockerArch), c.name+":/etc/hostel/hostel"); err != nil {
 		c.e.t.Fatal(err)
 	}
-	c.rootSh("chown root:root /etc/hostel/hostel && chmod 755 /etc/hostel/hostel && " +
+	pub := strings.TrimSpace(readFile(c.e.t, filepath.Join(c.e.dataDir(), "server_ed25519.pub")))
+	c.rootSh("echo '" + pub + "' > /etc/hostel/server_key.pub && chown root:root /etc/hostel/hostel && chmod 755 /etc/hostel/hostel && " +
 		"echo 'hostel ALL=(root) NOPASSWD: /etc/hostel/hostel lease-user *' > /etc/sudoers.d/hostel && chmod 440 /etc/sudoers.d/hostel")
 }
 

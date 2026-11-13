@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -15,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -24,13 +24,24 @@ import (
 
 // The root step of lease users (M11, design section 18): a root-owned copy of
 // this binary runs "hostel lease-user ..." through a sudo rule that allows
-// only this command for the machine user. It trusts nothing from the caller
-// but a user name of a fixed form and a public key.
+// only this command for the machine user. Its caller can be a guest on the
+// machine user, so it takes nothing from the caller but a user name of a fixed
+// form, and it never follows a path that a user other than root controls: it
+// creates and deletes users, and writes only into a home directory that it
+// has just created. The machine user shares its cache itself, and the lease
+// user fills its own home.
 
 const (
-	leaseUserVersion = 1
+	leaseUserVersion = 2
 	leaseUserMarker  = "Hostel lease"
 	leaseGroup       = "hostel-leases"
+	// leaseServerKey has the server key for lease users (root-owned; "machine
+	// join --lease-users" writes it).
+	leaseServerKey = "/etc/hostel/server_key.pub"
+	// leaseUIDFile has the next user ID: IDs are not used twice, so a file of
+	// an earlier lease user never belongs to a later one.
+	leaseUIDFile  = "/etc/hostel/lease-uid"
+	firstLeaseUID = 61000
 )
 
 var leaseUserName = regexp.MustCompile(`^hostel-[0-9a-z]{12}$`)
@@ -41,6 +52,8 @@ func leaseUserCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel:", usage)
 		return 2
 	}
+	// Commands only from the system directories: sudo can keep the caller's PATH.
+	os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
 	var out any
 	var err error
 	switch {
@@ -55,7 +68,7 @@ func leaseUserCmd(args []string, stdout, stderr io.Writer) int {
 		users, err = leaseUsers()
 		out = protocol.LeaseUserList{Users: users}
 	case args[0] == "create" && len(args) == 2:
-		out, err = createLeaseUser(args[1], os.Stdin)
+		out, err = createLeaseUser(args[1])
 	case args[0] == "delete" && len(args) == 2:
 		err = deleteLeaseUser(args[1])
 		out = struct{}{}
@@ -69,15 +82,6 @@ func leaseUserCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	json.NewEncoder(stdout).Encode(out)
 	return 0
-}
-
-// machineUserOf is the user that called sudo: the machine user.
-func machineUserOf() (*user.User, error) {
-	uid := os.Getenv("SUDO_UID")
-	if uid == "" || uid == "0" {
-		return nil, errors.New("run it through sudo as the machine user")
-	}
-	return user.LookupId(uid)
 }
 
 func checkLeaseUserName(name string) error {
@@ -148,240 +152,138 @@ func leaseUsers() ([]string, error) {
 	return out, nil
 }
 
-func createLeaseUser(name string, stdin io.Reader) (protocol.LeaseUserCreated, error) {
+// createLeaseUser makes a new user (an existing one of the same name goes
+// first: nothing of its lease began), with the server key from a root-owned
+// file. The machine user joins the lease group, so that it can share its cache.
+func createLeaseUser(name string) (protocol.LeaseUserCreated, error) {
 	var resp protocol.LeaseUserCreated
 	if err := checkLeaseUserName(name); err != nil {
 		return resp, err
 	}
-	var req protocol.LeaseUserCreate
-	if err := json.NewDecoder(io.LimitReader(stdin, 64<<10)).Decode(&req); err != nil {
-		return resp, fmt.Errorf("read the request: %w", err)
-	}
-	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(req.PublicKey))
+	keyData, err := os.ReadFile(leaseServerKey)
 	if err != nil {
-		return resp, fmt.Errorf("the public key: %w", err)
+		return resp, fmt.Errorf("the server key: %w (hostel machine join --lease-users writes it)", err)
 	}
-	mu, err := machineUserOf()
+	key, _, _, _, err := ssh.ParseAuthorizedKey(keyData)
 	if err != nil {
+		return resp, fmt.Errorf("the server key in %s: %w", leaseServerKey, err)
+	}
+	machineUser := os.Getenv("SUDO_USER")
+	if machineUser == "" || machineUser == "root" {
+		return resp, errors.New("run it through sudo as the machine user")
+	}
+	if err := ensureLeaseGroup(machineUser); err != nil {
 		return resp, err
 	}
-	if err := ensureLeaseGroup(); err != nil {
+	if exists, err := isLeaseUser(name); err != nil {
 		return resp, err
-	}
-	exists, err := isLeaseUser(name)
-	if err != nil {
-		return resp, err
-	}
-	if !exists {
-		if err := addLeaseUser(name); err != nil {
+	} else if exists {
+		if err := deleteLeaseUser(name); err != nil {
 			return resp, err
 		}
+	}
+	uid, err := nextLeaseUID()
+	if err != nil {
+		return resp, err
+	}
+	if err := addLeaseUser(name, uid); err != nil {
+		return resp, err
 	}
 	u, err := user.Lookup(name)
 	if err != nil {
 		return resp, err
 	}
-	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	if err := shareMachineCache(mu.HomeDir); err != nil {
-		return resp, fmt.Errorf("share the machine's cache: %w", err)
-	}
-	if err := fillLeaseHome(u.HomeDir, mu.HomeDir, ssh.MarshalAuthorizedKey(key)); err != nil {
+	// The home is new, and the user cannot log in before its key exists.
+	home, err := os.OpenRoot(u.HomeDir)
+	if err != nil {
 		return resp, err
 	}
-	if err := chownTree(u.HomeDir, uid, gid); err != nil {
+	defer home.Close()
+	if err := home.Mkdir(".ssh", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return resp, err
 	}
-	if err := os.Chmod(u.HomeDir, 0o700); err != nil {
+	if err := home.WriteFile(".ssh/authorized_keys", ssh.MarshalAuthorizedKey(key), 0o600); err != nil {
+		return resp, err
+	}
+	for _, p := range []string{".", ".ssh", ".ssh/authorized_keys"} {
+		if err := home.Lchown(p, uid, gid); err != nil {
+			return resp, err
+		}
+	}
+	if err := home.Chmod(".", 0o700); err != nil {
 		return resp, err
 	}
 	resp.Home = u.HomeDir
 	return resp, nil
 }
 
-func ensureLeaseGroup() error {
-	if _, err := user.LookupGroup(leaseGroup); err == nil {
-		return nil
+func ensureLeaseGroup(machineUser string) error {
+	if _, err := user.LookupGroup(leaseGroup); err != nil {
+		if runtime.GOOS == "darwin" {
+			err = runSetup("dseditgroup", "-o", "create", "-r", "Hostel leases", leaseGroup)
+		} else {
+			err = runSetup("groupadd", "-f", leaseGroup)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if runtime.GOOS == "darwin" {
-		return runSetup("dseditgroup", "-o", "create", "-r", "Hostel leases", leaseGroup)
+		return runSetup("dseditgroup", "-o", "edit", "-a", machineUser, "-t", "user", leaseGroup)
 	}
-	return runSetup("groupadd", "-f", leaseGroup)
+	return runSetup("usermod", "-aG", leaseGroup, machineUser)
 }
 
-func addLeaseUser(name string) error {
+func nextLeaseUID() (int, error) {
+	uid := firstLeaseUID
+	if data, err := os.ReadFile(leaseUIDFile); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && n > uid {
+			uid = n
+		}
+	}
+	for {
+		if _, err := user.LookupId(strconv.Itoa(uid)); err != nil {
+			break
+		}
+		uid++
+	}
+	return uid, os.WriteFile(leaseUIDFile, []byte(strconv.Itoa(uid+1)+"\n"), 0o644)
+}
+
+func addLeaseUser(name string, uid int) error {
+	id := strconv.Itoa(uid)
 	if runtime.GOOS != "darwin" {
-		if err := runSetup("useradd", "--create-home", "--shell", "/bin/bash", "--comment", leaseUserMarker,
+		// Its own primary group, and the lease group for the shared cache.
+		if err := runSetup("useradd", "--create-home", "--uid", id, "--shell", "/bin/bash", "--comment", leaseUserMarker,
 			"--groups", leaseGroup, name); err != nil {
 			return err
 		}
 		// "*": no password login, but key login (as for the machine user).
 		return runSetup("usermod", "--password", "*", name)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	// sysadminctl takes the password as an argument: the error must not show
-	// the arguments.
-	if out, err := exec.CommandContext(ctx, "sysadminctl", "-addUser", name, "-fullName", leaseUserMarker,
-		"-password", randomPassword(), "-home", "/Users/"+name).CombinedOutput(); err != nil {
-		return fmt.Errorf("sysadminctl -addUser %s: %v: %s", name, err, strings.TrimSpace(string(out)))
-	}
-	if err := runSetup("createhomedir", "-c", "-u", name); err != nil {
-		return err
-	}
-	if err := runSetup("dscl", ".", "-create", "/Users/"+name, "IsHidden", "1"); err != nil {
-		return err
-	}
-	return runSetup("dseditgroup", "-o", "edit", "-a", name, "-t", "user", leaseGroup)
-}
-
-// shareMachineCache lets members of the lease group read the machine user's
-// shared cache (hostel/cache: mise installs, SDKs) and nothing else there: the
-// home and hostel directories get the group with traverse rights only, and
-// their other entries lose the rights of other users.
-func shareMachineCache(home string) error {
 	grp, err := user.LookupGroup(leaseGroup)
 	if err != nil {
 		return err
 	}
-	gid, _ := strconv.Atoi(grp.Gid)
-	hostel := filepath.Join(home, "hostel")
-	for _, dir := range []string{home, hostel} {
-		des, err := os.ReadDir(dir)
-		if err != nil {
+	home := "/Users/" + name
+	for _, kv := range [][]string{
+		{"UniqueID", id}, {"PrimaryGroupID", grp.Gid}, {"RealName", leaseUserMarker},
+		{"UserShell", "/bin/zsh"}, {"NFSHomeDirectory", home}, {"IsHidden", "1"}, {"Password", "*"},
+	} {
+		if err := runSetup("dscl", ".", "-create", "/Users/"+name, kv[0], kv[1]); err != nil {
 			return err
 		}
-		for _, de := range des {
-			if dir == hostel && de.Name() == "cache" {
-				continue
-			}
-			if dir == home && de.Name() == "hostel" {
-				continue
-			}
-			p := filepath.Join(dir, de.Name())
-			fi, err := os.Lstat(p)
-			if err != nil || fi.Mode()&fs.ModeSymlink != 0 {
-				continue
-			}
-			if err := os.Chmod(p, fi.Mode().Perm()&^0o007); err != nil {
-				return err
-			}
-		}
 	}
-	cache := filepath.Join(hostel, "cache")
-	if err := os.MkdirAll(cache, 0o755); err != nil {
+	if err := runSetup("dseditgroup", "-o", "edit", "-a", name, "-t", "user", leaseGroup); err != nil {
 		return err
 	}
-	for _, dir := range []string{home, hostel, cache} {
-		fi, err := os.Lstat(dir)
-		if err != nil {
-			return err
-		}
-		if fi.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symbolic link", dir)
-		}
-		if err := os.Lchown(dir, -1, gid); err != nil {
-			return err
-		}
-		if err := os.Chmod(dir, fi.Mode().Perm()|0o010); err != nil {
-			return err
-		}
-	}
-	return nil
+	return runSetup("createhomedir", "-c", "-u", name)
 }
 
-// fillLeaseHome gives the lease user the server key and its own hostel
-// directory: copies of the machine's helper, mise, tools, and mise
-// configuration, its own cache with links to the machine's shared entries
-// (not mise's own directories), and an empty rooms directory.
-func fillLeaseHome(home, machineHome string, key []byte) error {
-	ssh := filepath.Join(home, ".ssh")
-	if err := os.MkdirAll(ssh, 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(ssh, "authorized_keys"), key, 0o600); err != nil {
-		return err
-	}
-	src := filepath.Join(machineHome, "hostel")
-	dst := filepath.Join(home, "hostel")
-	for _, d := range []string{"bin", "tools", "mise"} {
-		if err := os.RemoveAll(filepath.Join(dst, d)); err != nil {
-			return err
-		}
-		if err := copyDir(filepath.Join(src, d), filepath.Join(dst, d)); err != nil {
-			return fmt.Errorf("copy hostel/%s: %w", d, err)
-		}
-	}
-	cache := filepath.Join(dst, "cache")
-	if err := os.MkdirAll(cache, 0o755); err != nil {
-		return err
-	}
-	des, err := os.ReadDir(filepath.Join(src, "cache"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	for _, de := range des {
-		if de.Name() == "mise" || de.Name() == "mise-cache" {
-			continue
-		}
-		link := filepath.Join(cache, de.Name())
-		if _, err := os.Lstat(link); err == nil {
-			continue
-		}
-		if err := os.Symlink(filepath.Join(src, "cache", de.Name()), link); err != nil {
-			return err
-		}
-	}
-	return os.MkdirAll(filepath.Join(dst, "rooms"), 0o755)
-}
-
-// copyDir copies regular files, directories, and symbolic links. A missing src
-// copies nothing.
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, de fs.DirEntry, err error) error {
-		if err != nil {
-			if p == src && errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		target := filepath.Join(dst, rel)
-		info, err := de.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case de.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm())
-		case info.Mode()&fs.ModeSymlink != 0:
-			link, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		case info.Mode().IsRegular():
-			data, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(target, data, info.Mode().Perm())
-		}
-		return nil
-	})
-}
-
-func chownTree(root string, uid, gid int) error {
-	return filepath.WalkDir(root, func(p string, de fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		return os.Lchown(p, uid, gid)
-	})
-}
-
-// deleteLeaseUser ends all processes of the user, removes its crontab, its
-// files in the shared temporary directories, the user, and its home
+// deleteLeaseUser ends all processes of the user, removes its crontab, its at
+// jobs, and its files in the shared temporary directories (as the user, so a
+// link there cannot make root delete other files), then the user and its home
 // directory. A missing user is not an error.
 func deleteLeaseUser(name string) error {
 	if err := checkLeaseUserName(name); err != nil {
@@ -395,6 +297,8 @@ func deleteLeaseUser(name string) error {
 	if err != nil {
 		return err
 	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
 	if runtime.GOOS == "darwin" {
 		runQuietSetup("launchctl", "bootout", "user/"+u.Uid)
 		runQuietSetup("launchctl", "bootout", "gui/"+u.Uid)
@@ -405,30 +309,50 @@ func deleteLeaseUser(name string) error {
 		return err
 	}
 	runQuietSetup("crontab", "-u", name, "-r")
+	removeAtJobs(name)
 	tmp := []string{"/tmp", "/var/tmp", "/dev/shm"}
 	if runtime.GOOS == "darwin" {
 		tmp = []string{"/private/tmp", "/private/var/tmp", "/private/var/folders"}
 	}
 	for _, d := range tmp {
 		if _, err := os.Stat(d); err == nil {
-			runQuietSetup("find", d, "-xdev", "-user", name, "-prune", "-exec", "rm", "-rf", "{}", "+")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			cmd := exec.CommandContext(ctx, "find", d, "-xdev", "-user", name, "-delete")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
+			_ = cmd.Run()
+			cancel()
 		}
+	}
+	if err := killUser(name); err != nil {
+		return err
 	}
 	if runtime.GOOS == "darwin" {
-		if err := runSetup("sysadminctl", "-deleteUser", name); err != nil {
+		if err := runSetup("dscl", ".", "-delete", "/Users/"+name); err != nil {
 			return err
 		}
-	} else if err := runSetup("userdel", "--remove", name); err != nil {
-		if _, lerr := user.Lookup(name); lerr == nil {
-			return err
-		}
-		// userdel can fail after it removed the user (for example without a
-		// mail spool); the home directory goes below.
+	} else if err := runSetup("userdel", name); err != nil {
+		return err
 	}
-	if filepath.Base(u.HomeDir) == name {
+	// RemoveAll does not follow links; the parent belongs to root.
+	if parent := filepath.Dir(u.HomeDir); filepath.Base(u.HomeDir) == name && (parent == "/home" || parent == "/Users") {
 		return os.RemoveAll(u.HomeDir)
 	}
 	return nil
+}
+
+// removeAtJobs removes the at jobs of the user ("atq" lines: job, date,
+// queue, user; the format differs, the user is the last field).
+func removeAtJobs(name string) {
+	out, err := setupOutput("atq")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) > 1 && f[len(f)-1] == name {
+			runQuietSetup("atrm", f[0])
+		}
+	}
 }
 
 // killUser sends SIGKILL to all processes of the user until none is left.
@@ -459,11 +383,18 @@ func runQuietSetup(name string, args ...string) {
 	_ = exec.CommandContext(ctx, name, args...).Run()
 }
 
-// installLeaseUserRule writes the sudo rule that lets the machine user run
-// only "<bin> lease-user ..." as root, and checks it with visudo.
-func installLeaseUserRule(osName, bin string) error {
+// installLeaseUserRule writes the server key for lease users and the sudo
+// rule that lets the machine user run only "<bin> lease-user ..." as root,
+// checked with visudo.
+func installLeaseUserRule(osName, bin, serverKey string) error {
 	if osName != "linux" && osName != "macos" {
 		return errors.New("lease users are for macOS and Linux machines")
+	}
+	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(serverKey)); err != nil {
+		return fmt.Errorf("the server key: %w", err)
+	}
+	if err := os.WriteFile(leaseServerKey, []byte(strings.TrimSpace(serverKey)+"\n"), 0o644); err != nil {
+		return err
 	}
 	rule := fmt.Sprintf("%s ALL=(root) NOPASSWD: %s lease-user *\n", machineUser, bin)
 	tmp := "/etc/sudoers.d/.hostel.tmp"

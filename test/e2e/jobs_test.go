@@ -248,6 +248,12 @@ func TestLeaseUsers(t *testing.T) {
 		"echo '* * * * * true door' | crontab - && touch /tmp/door-$(id -un)")
 	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 1005' || true"
 	f.e.waitFor("the backdoor process runs", time.Minute, func() bool { return f.c.sh(procs) == "1" })
+	// The lease user breaks its helper and its login: cleanup still deletes it.
+	// (A detached job: the guest's own command could not report its end.)
+	f.e.mustHostel("run", "--detach", "--", "sleep 1; echo broken > ~/hostel/bin/hostel; rm ~/.ssh/authorized_keys")
+	f.e.waitFor("the lease user broke its login", time.Minute, func() bool {
+		return f.c.rootSh("test -e /home/"+user+"/.ssh/authorized_keys && echo yes || echo no") == "no"
+	})
 	f.e.mustHostel("release")
 	f.waitRoomFree()
 	if got := f.c.rootSh("id " + user + " >/dev/null 2>&1 && echo exists; ls /home; ls /tmp; ls /var/spool/cron/crontabs; " + procs); got != "hostel\n0" {

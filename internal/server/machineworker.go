@@ -385,7 +385,7 @@ func (s *Server) cleanDirtyRoom(ctx context.Context, machine *machineops.Machine
 	} else if u != "" {
 		sr, _, err := s.openRoom(ctx, machineID, room)
 		if err != nil {
-			return err
+			return s.deleteLeaseUserInstead(ctx, machineID, room, err)
 		}
 		defer sr.Conn.Close()
 		machine = sr

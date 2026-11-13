@@ -193,7 +193,7 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 	}
 	if *leaseUsers {
 		fmt.Fprintln(stdout, "   Lease users: the sudo rule for \"hostel lease-user\".")
-		if err := installLeaseUserRule(osName, bin); err != nil {
+		if err := installLeaseUserRule(osName, bin, st.ServerPublicKey); err != nil {
 			return fail("install the sudo rule for lease users", err)
 		}
 	}

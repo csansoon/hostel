@@ -428,8 +428,9 @@ A guest then cannot leave a backdoor on the machine. It needs a root step:
 
 - With `machine join`: add `--lease-users` to the join command.
 - By hand: install the binary as `/etc/hostel/hostel` (owned by root, mode 755,
-  in a directory that only root can write), and write this rule with
-  `sudo visudo -f /etc/sudoers.d/hostel`:
+  in a directory that only root can write), put the output of
+  `hostel admin pubkey` into `/etc/hostel/server_key.pub` (owned by root), and
+  write this rule with `sudo visudo -f /etc/sudoers.d/hostel`:
 
   ```
   hostel ALL=(root) NOPASSWD: /etc/hostel/hostel lease-user *
