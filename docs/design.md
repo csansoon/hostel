@@ -2105,8 +2105,10 @@ failed; the result lists each step.
    is restored too. `begin` and this step decide under a
    lock file (`hostel/machine.lock`) whether another room has a lease, so of two
    rooms that begin at the same time, the first makes the copy. The step runs a
-   third time after step 5: of two last rooms that clean at the same time, each
-   saw the other's lease before; the later one restores then. The home
+   third time before step 5, in one hold of the lock with the removal of the
+   lease's marker (`lease.json`): of two last rooms that clean at the same time,
+   each saw the other's lease before, and the later one restores then; a
+   `begin` cannot copy the leaving lease's persistence as the new base. The home
    directory comes from the helper's path and the commands from fixed system
    directories, because the startup files run before the helper and can change
    `HOME` and `PATH`. This runs only when no other room has a lease; the cleanup
@@ -2138,9 +2140,9 @@ Warm policy after cleanup:
 - A stopped machine is destroyed after `warm_stopped`.
 - With `reuse = false` (M11), the server drains a machine in the same transaction
   that assigns a lease to it, and destroys it when it is idle again, also before
-  `warm_running`. An admin who undrains such a machine allows one more lease. A
-  machine with several rooms can get leases in all of its rooms in the same
-  scheduler pass; they share the machine, and the machine goes after the last one.
+  `warm_running`. The drain is a compare-and-set: of the leases that one
+  scheduler pass gives to rooms of the machine, only the first gets it, and the
+  others wait. An admin who undrains such a machine allows one more lease.
 - Eviction (section 5) can destroy an idle or stopped machine earlier.
 
 ## 18. Security

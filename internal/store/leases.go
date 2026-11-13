@@ -233,8 +233,14 @@ func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, roo
 			}
 		}
 		if drain {
-			if _, err := tx.ExecContext(ctx, `UPDATE machines SET drained = 1 WHERE id = ?`, machine.ID); err != nil {
+			// Compare-and-set: one scheduler pass can give several rooms of
+			// the machine to several leases; only the first gets it.
+			res, err := tx.ExecContext(ctx, `UPDATE machines SET drained = 1 WHERE id = ? AND drained = 0`, machine.ID)
+			if err != nil {
 				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return errRoomTaken
 			}
 		}
 		ok = true

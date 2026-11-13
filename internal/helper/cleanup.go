@@ -97,6 +97,27 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	step("remove persistence", removePersistence)
 	step("check", func() error { return h.checkClean(room, req.LeaseID, req.Ports) })
 	step("remove persistence again", removePersistence)
+	// The lease's marker goes, and the last restore runs, in one hold of the
+	// machine lock: of two last rooms that clean at the same time, each saw
+	// the other's lease before, and a begin in between must not copy this
+	// lease's persistence as the new base.
+	step("remove persistence after the room", func() error {
+		unlock, err := h.lockMachine()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		if err := os.Remove(filepath.Join(h.roomDir(room), "lease.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		items, err := h.restorePersistenceLocked(room)
+		for _, it := range items {
+			if !slices.Contains(resp.Removed, it) {
+				resp.Removed = append(resp.Removed, it)
+			}
+		}
+		return err
+	})
 	step("delete room", func() error {
 		// Markers of jobs whose supervisor was killed.
 		if marker := devboxTaskMarker(room, "*"); marker != "" {
@@ -117,7 +138,6 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	})
 	// After the room is gone: of two last rooms that clean at the same time,
 	// each saw the other's lease before; the later one restores now.
-	step("remove persistence after the room", removePersistence)
 	step("check tools", func() error {
 		var err error
 		resp.Checks, err = h.check(req.Check)

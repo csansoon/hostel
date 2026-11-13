@@ -138,15 +138,21 @@ func copyLinkTargets(home, rel, base string, depth int) error {
 // begin, when no other room has a lease (that lease's begin made no copy). It
 // returns the items that it removed or restored.
 func (h *helper) restorePersistence(room string) ([]string, error) {
-	base := h.persistenceBase()
-	if _, err := os.Stat(filepath.Join(base, "complete")); err != nil {
-		return nil, nil
-	}
 	unlock, err := h.lockMachine()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	return h.restorePersistenceLocked(room)
+}
+
+// restorePersistenceLocked is restorePersistence for a caller that holds the
+// machine lock.
+func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
+	base := h.persistenceBase()
+	if _, err := os.Stat(filepath.Join(base, "complete")); err != nil {
+		return nil, nil
+	}
 	if busy, err := h.otherRoomBusy(room); err != nil || busy {
 		return nil, err
 	}
