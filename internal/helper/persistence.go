@@ -189,7 +189,7 @@ func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
 			p := filepath.Join(cur, c)
 			at := p
 			if unloadAt != "" {
-				at = unloadAt
+				at = filepath.Join(unloadAt, c)
 			}
 			if err := unloadAgents(at, deadline); err != nil {
 				failed = append(failed, fmt.Sprintf("%s: %v", name, err))
@@ -414,8 +414,8 @@ func unloadAgents(path string, deadline time.Time) error {
 			}
 			unit := filepath.Base(f)
 			runQuiet("systemctl", "--user", "disable", "--now", "--", unit)
-			if runQuiet("systemctl", "--user", "is-active", "--quiet", "--", unit) == nil {
-				return fmt.Errorf("the user unit %s still runs", unit)
+			if err := unitStopped(unit); err != nil {
+				return err
 			}
 		case runtime.GOOS == "darwin" && strings.HasSuffix(f, ".plist"):
 			label, err := plistLabel(f)
@@ -516,6 +516,20 @@ func servicePath(service string) string {
 	return ""
 }
 
+// unitStopped checks that a user unit does not run: is-active exits with 3
+// (inactive, failed) or 4 (no such unit); another failure is no answer.
+func unitStopped(unit string) error {
+	err := runQuiet("systemctl", "--user", "is-active", "--quiet", "--", unit)
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return fmt.Errorf("the user unit %s still runs", unit)
+	case errors.As(err, &exit) && (exit.ExitCode() == 3 || exit.ExitCode() == 4):
+		return nil
+	}
+	return fmt.Errorf("the state of the user unit %s: %w", unit, err)
+}
+
 // userManager reports whether the systemd user manager of this user runs: it
 // has its private socket. Then a failed systemctl call is a failure, not a
 // machine without units.
@@ -559,8 +573,8 @@ func stopNewServices(before []string) ([]string, error) {
 		switch runtime.GOOS {
 		case "linux":
 			runQuiet("systemctl", "--user", "stop", "--", n)
-			if runQuiet("systemctl", "--user", "is-active", "--quiet", "--", n) == nil {
-				failed = append(failed, "the user unit "+n+" still runs")
+			if err := unitStopped(n); err != nil {
+				failed = append(failed, err.Error())
 				continue
 			}
 		case "darwin":

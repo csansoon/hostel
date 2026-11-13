@@ -369,8 +369,8 @@ func deleteLeaseUser(name string) error {
 			_ = cmd.Run() // fails for directories of other users that it cannot read
 			cancel()
 			// Root only looks: is a file of the user left?
-			if left, _ := setupOutput("find", d, "-xdev", "-user", name, "-print", "-quit"); strings.TrimSpace(left) != "" {
-				return fmt.Errorf("a file of %s is left in %s: %s", name, d, strings.TrimSpace(left))
+			if err := checkNoFilesOf(name, d); err != nil {
+				return err
 			}
 		}
 	}
@@ -428,6 +428,33 @@ func macGroups() []string {
 		groups = append(groups, "com.apple.access_ssh")
 	}
 	return groups
+}
+
+// checkNoFilesOf fails when a file of the user is left in dir, or when the
+// scan did not end. Directories that macOS protects also from root give
+// "Operation not permitted"; the user could not write there either.
+func checkNoFilesOf(name, dir string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print", "-quit")
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if left := strings.TrimSpace(string(out)); left != "" {
+		return fmt.Errorf("a file of %s is left in %s: %s", name, dir, left)
+	}
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("the scan of %s for files of %s did not end: %w", dir, name, ctx.Err())
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
+		if !strings.Contains(line, "Operation not permitted") && !strings.Contains(line, "Permission denied") {
+			return fmt.Errorf("the scan of %s for files of %s: %v: %s", dir, name, err, strings.TrimSpace(stderr.String()))
+		}
+	}
+	return nil
 }
 
 // removeScheduledJobs removes the crontab and the at jobs of the user ("atq"
