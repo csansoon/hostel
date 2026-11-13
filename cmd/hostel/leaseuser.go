@@ -322,7 +322,8 @@ func deleteLeaseUser(name string) error {
 	}
 	tmp := []string{"/tmp", "/var/tmp", "/dev/shm"}
 	if runtime.GOOS == "darwin" {
-		tmp = []string{"/private/tmp", "/private/var/tmp", "/private/var/folders"}
+		// /Users/Shared: all local users can write it.
+		tmp = []string{"/private/tmp", "/private/var/tmp", "/private/var/folders", "/Users/Shared"}
 	}
 	for _, d := range tmp {
 		if _, err := os.Stat(d); err == nil {

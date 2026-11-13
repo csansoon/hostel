@@ -82,7 +82,11 @@ func (h *helper) snapshotPersistence() error {
 			return err
 		}
 	}
-	if names, ok := loadedServices(); ok {
+	names, ok, err := loadedServices()
+	if err != nil {
+		return err
+	}
+	if ok {
 		if err := os.WriteFile(filepath.Join(base, "services"), []byte(strings.Join(names, "\n")), 0o600); err != nil {
 			return err
 		}
@@ -395,8 +399,8 @@ func unloadAgents(path string, deadline time.Time) error {
 		}
 		switch {
 		case runtime.GOOS == "linux" && strings.Contains(f, "/.config/systemd/user/"):
-			if runQuiet("systemctl", "--user", "show-environment") != nil {
-				continue // no user manager
+			if !userManager() {
+				continue // no user manager: no unit runs
 			}
 			unit := filepath.Base(f)
 			runQuiet("systemctl", "--user", "disable", "--now", "--", unit)
@@ -434,20 +438,23 @@ func plistLabel(file string) (string, error) {
 // loadedServices lists the loaded user services: systemd units of the user
 // manager, or launchd services of the user's gui and user domains
 // ("<domain>/<label>"). ok is false when the machine has none to list.
-func loadedServices() (names []string, ok bool) {
+func loadedServices() (names []string, ok bool, err error) {
 	switch runtime.GOOS {
 	case "linux":
+		if !userManager() {
+			return nil, false, nil
+		}
 		out, err := outputQuiet("systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "--no-pager",
 			"--type=service,timer,socket,path")
 		if err != nil {
-			return nil, false
+			return nil, false, fmt.Errorf("list the user units: %w", err)
 		}
 		for _, line := range strings.Split(out, "\n") {
 			if f := strings.Fields(line); len(f) > 0 {
 				names = append(names, f[0])
 			}
 		}
-		return names, true
+		return names, true, nil
 	case "darwin":
 		uid := strconv.Itoa(os.Getuid())
 		for _, domain := range []string{"gui/" + uid, "user/" + uid} {
@@ -470,18 +477,26 @@ func loadedServices() (names []string, ok bool) {
 				}
 			}
 		}
-		return names, ok
+		return names, ok, nil
 	}
-	return nil, false
+	return nil, false, nil
+}
+
+// userManager reports whether the systemd user manager of this user runs: it
+// has its private socket. Then a failed systemctl call is a failure, not a
+// machine without units.
+func userManager() bool {
+	_, err := os.Stat(filepath.Join("/run/user", strconv.Itoa(os.Getuid()), "systemd", "private"))
+	return err == nil
 }
 
 // stopNewServices stops the loaded services that are not in before (not
 // Apple's on macOS: macOS starts them at any time), and fails for one that
 // still runs.
 func stopNewServices(before []string) ([]string, error) {
-	now, ok := loadedServices()
-	if !ok {
-		return nil, nil
+	now, ok, err := loadedServices()
+	if err != nil || !ok {
+		return nil, err
 	}
 	had := map[string]bool{}
 	for _, n := range before {
@@ -524,8 +539,20 @@ func outputQuiet(name string, args ...string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, cmd, args...).Output()
+	c := exec.CommandContext(ctx, cmd, args...)
+	c.Env = systemEnv()
+	out, err := c.Output()
 	return string(out), err
+}
+
+// systemEnv is the environment of system commands: systemctl --user finds
+// the user manager through XDG_RUNTIME_DIR, which an SSH session can lack.
+func systemEnv() []string {
+	env := os.Environ()
+	if os.Getenv("XDG_RUNTIME_DIR") == "" && runtime.GOOS == "linux" {
+		env = append(env, "XDG_RUNTIME_DIR=/run/user/"+strconv.Itoa(os.Getuid()))
+	}
+	return env
 }
 
 // runQuiet runs a system command with a deadline, without its output.
@@ -536,7 +563,9 @@ func runQuiet(name string, args ...string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, cmd, args...).Run()
+	c := exec.CommandContext(ctx, cmd, args...)
+	c.Env = systemEnv()
+	return c.Run()
 }
 
 // forceRemove removes path also when the guest took away the write rights or

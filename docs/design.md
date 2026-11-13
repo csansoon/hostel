@@ -2096,7 +2096,9 @@ failed; the result lists each step.
    `launchctl bootout` of the plist's label, by the name in the audited
    location also when the file is a link; the step fails when the unit or
    agent still runs afterwards, and all stops have one deadline of 2 minutes;
-   a machine without a systemd user instance has no running unit), then
+   a machine without a systemd user manager, whose private socket
+   `/run/user/<uid>/systemd/private` does not exist, has no running unit; with
+   it, a failed `systemctl` call fails the step), then
    deleted or restored,
    also when the guest removed the write rights or set `uchg`; a plist whose
    label cannot be read fails the step. For each link in these locations (also
@@ -2234,7 +2236,8 @@ Hardening (milestone M11):
      processes of the user (`launchctl bootout`, `loginctl terminate-user`,
      `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs (a
      failure stops the deletion, so the room stays blocked), and
-     its files in the shared temporary directories (`find -delete` as the user,
+     its files in the shared directories (`/tmp`, `/var/tmp`, `/dev/shm`; on
+     macOS also `/private/var/folders` and `/Users/Shared`; `find -delete` as the user,
      after it gives its own directories back their rights and clears its own
      macOS flags; then root only looks with `find -print`, and a file that is
      left stops the deletion), then its home directory (after root
