@@ -11,14 +11,14 @@ if (Test-Path $record) {
 	$session = [int]($lines[0] -replace '^session ', '')
 	if ($session -eq 0) { throw 'the record of start has no desktop session' }
 	foreach ($p in Get-Process | Where-Object SessionId -eq $session) {
+		# A process can end during the loop; then Path and StartTime throw.
+		try { $path = $p.Path; $start = $p.StartTime.Ticks } catch { continue }
 		# Path is empty for the processes of other users (Windows).
-		if (-not $p.Path -or $p.Name -in 'hostel', 'explorer') { continue }
-		# A process can end during the loop; then StartTime throws.
-		try { $start = $p.StartTime.Ticks } catch { continue }
+		if (-not $path -or $p.Name -in 'hostel', 'explorer') { continue }
 		if ($lines -contains "$($p.Id) $start") { continue }
 		# Windows starts its own per-user programs at any time. (An SSH session
 		# cannot see the windows of the desktop session.)
-		if ($p.Path.StartsWith("$env:SystemRoot\", 'OrdinalIgnoreCase')) { continue }
+		if ($path.StartsWith("$env:SystemRoot\", 'OrdinalIgnoreCase')) { continue }
 		Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 	}
 }

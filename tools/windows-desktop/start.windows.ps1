@@ -32,7 +32,8 @@ $packages = @(Get-AppxPackage | ForEach-Object { $_.PackageFamilyName })
 Set-Content -Encoding utf8 -Path (Join-Path $env:HOSTEL_ROOM_DIR 'desktop-packages') -Value $packages
 # The desktop program: a hostel process of the machine user (Path is empty for
 # the processes of other users) in a desktop session.
-$program = @(Get-Process hostel | Where-Object { $_.SessionId -ne 0 -and $_.Path })
+# A process can end during the loop; then Path throws.
+$program = @(Get-Process hostel | Where-Object { try { $_.SessionId -ne 0 -and $_.Path } catch { $false } })
 if (-not $program) {
 	[Console]::Error.WriteLine("the desktop program does not run: sign in the desktop user, and check the Hostel desktop task")
 	exit 1
