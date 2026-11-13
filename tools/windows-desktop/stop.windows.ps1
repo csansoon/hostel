@@ -13,7 +13,9 @@ if (Test-Path $record) {
 	foreach ($p in Get-Process | Where-Object SessionId -eq $session) {
 		# Path is empty for the processes of other users (Windows).
 		if (-not $p.Path -or $p.Name -in 'hostel', 'explorer') { continue }
-		if ($lines -contains "$($p.Id) $($p.StartTime.Ticks)") { continue }
+		# A process can end during the loop; then StartTime throws.
+		try { $start = $p.StartTime.Ticks } catch { continue }
+		if ($lines -contains "$($p.Id) $start") { continue }
 		# Windows starts its own per-user programs at any time. (An SSH session
 		# cannot see the windows of the desktop session.)
 		if ($p.Path.StartsWith("$env:SystemRoot\", 'OrdinalIgnoreCase')) { continue }

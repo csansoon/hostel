@@ -38,5 +38,8 @@ if (-not $program) {
 	exit 1
 }
 $session = $program[0].SessionId
-$procs = @(Get-Process | Where-Object SessionId -eq $session | ForEach-Object { "$($_.Id) $($_.StartTime.Ticks)" })
+# A process can end during the loop; then StartTime throws.
+$procs = @(Get-Process | Where-Object SessionId -eq $session | ForEach-Object {
+	try { "$($_.Id) $($_.StartTime.Ticks)" } catch {}
+})
 Set-Content -Encoding utf8 -Path (Join-Path $env:HOSTEL_ROOM_DIR 'desktop-processes') -Value (@("session $session") + $procs)
