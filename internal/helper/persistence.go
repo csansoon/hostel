@@ -30,9 +30,10 @@ var persistenceFiles = []string{
 func persistenceDirs() []string {
 	switch runtime.GOOS {
 	case "linux":
-		return []string{".config/systemd/user", ".config/autostart"}
+		return []string{".config/systemd/user", ".config/systemd/user-generators", ".config/systemd/user-environment-generators",
+			".config/environment.d", ".config/autostart", ".config/fish/conf.d"}
 	case "darwin":
-		return []string{"Library/LaunchAgents"}
+		return []string{"Library/LaunchAgents", ".config/fish/conf.d"}
 	}
 	return nil
 }
@@ -425,8 +426,8 @@ func unloadAgents(path string, deadline time.Time) error {
 			}
 			for _, domain := range []string{"gui/" + uid, "user/" + uid} {
 				runQuiet("launchctl", "bootout", domain+"/"+label)
-				if runQuiet("launchctl", "print", domain+"/"+label) == nil {
-					return fmt.Errorf("the agent %s still is loaded in %s", label, domain)
+				if err := agentGone(domain + "/" + label); err != nil {
+					return err
 				}
 			}
 		}
@@ -530,6 +531,21 @@ func unitStopped(unit string) error {
 	return fmt.Errorf("the state of the user unit %s: %w", unit, err)
 }
 
+// agentGone checks that a launchd service is not loaded: print exits with 113
+// ("Could not find service") or 112 (no such domain); another failure is no
+// answer.
+func agentGone(target string) error {
+	err := runQuiet("launchctl", "print", target)
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return fmt.Errorf("the agent %s still is loaded", target)
+	case errors.As(err, &exit) && (exit.ExitCode() == 113 || exit.ExitCode() == 112):
+		return nil
+	}
+	return fmt.Errorf("the state of the agent %s: %w", target, err)
+}
+
 // userManager reports whether the systemd user manager of this user runs: it
 // has its private socket. Then a failed systemctl call is a failure, not a
 // machine without units.
@@ -584,8 +600,8 @@ func stopNewServices(before []string) ([]string, error) {
 				continue
 			}
 			runQuiet("launchctl", "bootout", n)
-			if runQuiet("launchctl", "print", n) == nil {
-				failed = append(failed, "the agent "+n+" still is loaded")
+			if err := agentGone(n); err != nil {
+				failed = append(failed, err.Error())
 				continue
 			}
 		}

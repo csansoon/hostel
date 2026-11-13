@@ -462,10 +462,20 @@ func checkNoFilesOf(name, dir string) error {
 // field). A machine without at has no at jobs.
 func removeScheduledJobs(name string) error {
 	if _, err := exec.LookPath("crontab"); err == nil {
-		if _, err := setupOutput("crontab", "-u", name, "-l"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		var stderr strings.Builder
+		cmd := exec.CommandContext(ctx, "crontab", "-u", name, "-l")
+		cmd.Stderr = &stderr
+		_, err := cmd.Output()
+		cancel()
+		switch {
+		case err == nil:
 			if err := runSetup("crontab", "-u", name, "-r"); err != nil {
 				return err
 			}
+		case strings.Contains(stderr.String(), "no crontab"):
+		default:
+			return fmt.Errorf("crontab -u %s -l: %v: %s", name, err, strings.TrimSpace(stderr.String()))
 		}
 	}
 	if _, err := exec.LookPath("atq"); err != nil {
