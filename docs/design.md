@@ -2087,13 +2087,14 @@ failed; the result lists each step.
    (a process of the lease that step 4 ended can have added an entry),
    restore the persistence locations of the machine user (M11, macOS and Linux)
    from the copy that `begin` made when the machine had no other lease
-   (`hostel/persistence/`): the crontab, `~/.config/systemd/user`, its
-   generator directories, `~/.config/environment.d`, and `~/.config/autostart`
+   (`hostel/persistence/`): the crontab, `~/.config/systemd/user`,
+   `user.control`, `~/.local/share/systemd/user`, the generator directories, `~/.config/environment.d`, and `~/.config/autostart`
    (Linux), `~/Library/LaunchAgents` (macOS), the shell startup files of sh,
    bash, zsh, and fish (with `~/.config/fish/conf.d`) (and `.bash_aliases`), the git
    configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
    `~/.ssh/environment`.
-   A new or changed entry is stopped first (`systemctl --user disable --now`,
+   A new or changed entry is stopped first (`systemctl --user disable --now`;
+   for a drop-in, its parent unit;
    `launchctl bootout` of the plist's label, by the name in the audited
    location also when the file is a link; the step fails when the unit or
    agent still runs afterwards, and all stops have one deadline of 2 minutes;

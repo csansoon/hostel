@@ -30,7 +30,8 @@ var persistenceFiles = []string{
 func persistenceDirs() []string {
 	switch runtime.GOOS {
 	case "linux":
-		return []string{".config/systemd/user", ".config/systemd/user-generators", ".config/systemd/user-environment-generators",
+		return []string{".config/systemd/user", ".config/systemd/user.control", ".local/share/systemd/user",
+			".config/systemd/user-generators", ".config/systemd/user-environment-generators",
 			".config/environment.d", ".config/autostart", ".config/fish/conf.d"}
 	case "darwin":
 		return []string{"Library/LaunchAgents", ".config/fish/conf.d"}
@@ -409,11 +410,17 @@ func unloadAgents(path string, deadline time.Time) error {
 			return fmt.Errorf("too many units or agents to stop (stopped until %s)", f)
 		}
 		switch {
-		case runtime.GOOS == "linux" && strings.Contains(f, "/.config/systemd/user/"):
+		case runtime.GOOS == "linux" && unitFile(f):
 			if !userManager() {
 				continue // no user manager: no unit runs
 			}
+			// A drop-in (foo.service.d/x.conf) changes its parent unit.
 			unit := filepath.Base(f)
+			if d := filepath.Base(filepath.Dir(f)); strings.HasSuffix(d, ".d") {
+				unit = strings.TrimSuffix(d, ".d")
+			} else if strings.HasSuffix(unit, ".d") {
+				unit = strings.TrimSuffix(unit, ".d")
+			}
 			runQuiet("systemctl", "--user", "disable", "--now", "--", unit)
 			if err := unitStopped(unit); err != nil {
 				return err
@@ -529,6 +536,16 @@ func unitStopped(unit string) error {
 		return nil
 	}
 	return fmt.Errorf("the state of the user unit %s: %w", unit, err)
+}
+
+// unitFile reports whether f is in a directory of systemd user units.
+func unitFile(f string) bool {
+	for _, d := range []string{"/.config/systemd/user/", "/.config/systemd/user.control/", "/.local/share/systemd/user/"} {
+		if strings.Contains(f, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // agentGone checks that a launchd service is not loaded: print exits with 113
