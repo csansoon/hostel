@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -318,7 +317,7 @@ func deleteLeaseUser(name string) error {
 		if _, err := os.Stat(d); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			cmd := exec.CommandContext(ctx, "find", d, "-xdev", "-user", name, "-delete")
-			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
+			asUser(cmd, uid, gid)
 			_ = cmd.Run()
 			cancel()
 		}
