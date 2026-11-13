@@ -105,7 +105,7 @@ func isLeaseUser(name string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		gecos = out
+		gecos = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), "RealName:"))
 	} else {
 		out, err := setupOutput("getent", "passwd", name)
 		if err != nil {
@@ -115,7 +115,7 @@ func isLeaseUser(name string) (bool, error) {
 			gecos = f[4]
 		}
 	}
-	if !strings.Contains(gecos, leaseUserMarker) {
+	if gecos != leaseUserMarker {
 		return false, fmt.Errorf("the user %s exists and is not a Hostel lease user", name)
 	}
 	return true, nil

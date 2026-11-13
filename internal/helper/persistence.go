@@ -226,8 +226,10 @@ func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
 		repair(string(real), filepath.Join(base, "targets", rp), filepath.Join(home, rp), string(real))
 		return nil
 	})
-	if len(items) > 0 && runtime.GOOS == "linux" {
-		runQuiet("systemctl", "--user", "daemon-reload")
+	if len(items) > 0 && runtime.GOOS == "linux" && userManager() {
+		if err := runQuiet("systemctl", "--user", "daemon-reload"); err != nil {
+			failed = append(failed, "systemctl --user daemon-reload: "+err.Error())
+		}
 	}
 	// Services loaded since the copy, also from a changed file or with no
 	// file (systemd-run --user).
