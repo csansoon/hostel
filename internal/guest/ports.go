@@ -195,21 +195,24 @@ func stopPorts(st *State) {
 
 // stopOtherPorts stops the port process of an earlier lease of the same
 // directory, which uses the same socket path; it stops by itself only at its
-// next lease check. It returns when the socket no longer answers.
+// next lease check. It returns when the socket no longer answers, or answers
+// for this lease (another command of this lease started the process).
 func stopOtherPorts(st *State) error {
 	resp, err := callPorts(st, portRequest{Op: "ping"})
 	if err != nil || resp.LeaseID == st.LeaseID {
 		return nil
 	}
+	other := resp.LeaseID
 	callPorts(st, portRequest{Op: "stop"})
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := callPorts(st, portRequest{Op: "ping"}); err != nil {
+		resp, err := callPorts(st, portRequest{Op: "ping"})
+		if err != nil || resp.LeaseID == st.LeaseID {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("the port process of the earlier lease %s did not stop", resp.LeaseID)
+	return fmt.Errorf("the port process of the earlier lease %s did not stop", other)
 }
 
 // portProc is the port process: one gateway connection with purpose "ports"
