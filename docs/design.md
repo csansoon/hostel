@@ -2098,9 +2098,11 @@ failed; the result lists each step.
    agent still runs afterwards, and all stops have one deadline of 2 minutes;
    a machine without a systemd user instance has no running unit), then
    deleted or restored,
-   also when the guest removed the write rights or set `uchg`. For each link in
-   these locations (also inside the directories), the copy also has the content
-   behind the link and its path, and a changed target is restored too. `begin` and this step decide under a
+   also when the guest removed the write rights or set `uchg`; a plist whose
+   label cannot be read fails the step. For each link in these locations (also
+   inside the directories, and inside linked directories, at most 8 deep), the
+   copy also has the content behind the link and its path, and a changed target
+   is restored too. `begin` and this step decide under a
    lock file (`hostel/machine.lock`) whether another room has a lease, so of two
    rooms that begin at the same time, the first makes the copy. The step runs a
    third time after step 5: of two last rooms that clean at the same time, each
@@ -2224,7 +2226,8 @@ Hardening (milestone M11):
      connections then use the lease user, as for room users (section 7).
    - **Delete** (cleanup, after the helper's cleanup as the lease user): end all
      processes of the user (`launchctl bootout`, `loginctl terminate-user`,
-     `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs, and
+     `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs (a
+     failure stops the deletion, so the room stays blocked), and
      its files in the shared temporary directories (`find -delete` as the user,
      after it clears its own macOS flags), then its home directory (after root
      clears the macOS flags `uchg` and `uappnd` without following links), then

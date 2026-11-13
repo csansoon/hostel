@@ -78,27 +78,7 @@ func (h *helper) snapshotPersistence() error {
 		}
 		// Links (dotfile managers, units linked from elsewhere): the copy has
 		// the link; the content behind it is copied too, with its path.
-		err := filepath.WalkDir(filepath.Join(home, rel), func(p string, de fs.DirEntry, err error) error {
-			if err != nil || de.Type()&fs.ModeSymlink == 0 {
-				return nil
-			}
-			real, err := filepath.EvalSymlinks(p)
-			if err != nil {
-				return nil // a dangling link: the link itself is compared
-			}
-			rp, _ := filepath.Rel(home, p)
-			if err := os.MkdirAll(filepath.Dir(filepath.Join(base, "links", rp)), 0o700); err != nil {
-				return err
-			}
-			if err := os.WriteFile(filepath.Join(base, "links", rp), []byte(real), 0o600); err != nil {
-				return err
-			}
-			if err := copyTree(real, filepath.Join(base, "targets", rp)); err != nil {
-				return fmt.Errorf("copy the target of ~/%s: %w", rp, err)
-			}
-			return nil
-		})
-		if err != nil {
+		if err := copyLinkTargets(home, rel, base, 0); err != nil {
 			return err
 		}
 	}
@@ -110,6 +90,48 @@ func (h *helper) snapshotPersistence() error {
 		}
 	}
 	return os.WriteFile(filepath.Join(base, "complete"), nil, 0o600)
+}
+
+// copyLinkTargets records each link under ~/rel (rel is relative to home)
+// with the path and a copy of its target, and follows links to directories
+// (at most 8 deep: a cycle ends there) for the links inside them.
+func copyLinkTargets(home, rel, base string, depth int) error {
+	if depth > 8 {
+		return nil // a cycle of links, or a deep chain: its links are compared
+	}
+	return filepath.WalkDir(filepath.Join(home, rel), func(p string, de fs.DirEntry, err error) error {
+		if err != nil || de.Type()&fs.ModeSymlink == 0 {
+			return nil
+		}
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return nil // a dangling link: the link itself is compared
+		}
+		rp, _ := filepath.Rel(home, p)
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(base, "links", rp)), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(base, "links", rp), []byte(real), 0o600); err != nil {
+			return err
+		}
+		if err := copyTree(real, filepath.Join(base, "targets", rp)); err != nil {
+			return fmt.Errorf("copy the target of ~/%s: %w", rp, err)
+		}
+		if fi, err := os.Stat(real); err == nil && fi.IsDir() {
+			// WalkDir does not enter a linked directory: the links inside it
+			// are reached through this link's path.
+			des, err := os.ReadDir(real)
+			if err != nil {
+				return err
+			}
+			for _, d := range des {
+				if err := copyLinkTargets(home, filepath.Join(rp, d.Name()), base, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 // restorePersistence brings the persistence locations back to the copy of
@@ -353,8 +375,9 @@ func unloadAgents(path string, deadline time.Time) error {
 			}
 		case runtime.GOOS == "darwin" && strings.HasSuffix(f, ".plist"):
 			label, err := plistLabel(f)
-			if err != nil || label == "" {
-				continue // no label: launchd cannot have loaded it
+			if err != nil {
+				// A guest can change the file of a loaded agent.
+				return fmt.Errorf("read the label of %s: %w", f, err)
 			}
 			for _, domain := range []string{"gui/" + uid, "user/" + uid} {
 				runQuiet("launchctl", "bootout", domain+"/"+label)

@@ -317,8 +317,9 @@ func deleteLeaseUser(name string) error {
 	if err := killUser(name); err != nil {
 		return err
 	}
-	runQuietSetup("crontab", "-u", name, "-r")
-	removeAtJobs(name)
+	if err := removeScheduledJobs(name); err != nil {
+		return err
+	}
 	tmp := []string{"/tmp", "/var/tmp", "/dev/shm"}
 	if runtime.GOOS == "darwin" {
 		tmp = []string{"/private/tmp", "/private/var/tmp", "/private/var/folders"}
@@ -395,19 +396,33 @@ func macGroups() []string {
 	return groups
 }
 
-// removeAtJobs removes the at jobs of the user ("atq" lines: job, date,
-// queue, user; the format differs, the user is the last field).
-func removeAtJobs(name string) {
+// removeScheduledJobs removes the crontab and the at jobs of the user ("atq"
+// lines: job, date, queue, user; the format differs, the user is the last
+// field). A machine without at has no at jobs.
+func removeScheduledJobs(name string) error {
+	if _, err := exec.LookPath("crontab"); err == nil {
+		if _, err := setupOutput("crontab", "-u", name, "-l"); err == nil {
+			if err := runSetup("crontab", "-u", name, "-r"); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := exec.LookPath("atq"); err != nil {
+		return nil
+	}
 	out, err := setupOutput("atq")
 	if err != nil {
-		return
+		return fmt.Errorf("atq: %w", err)
 	}
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) > 1 && f[len(f)-1] == name {
-			runQuietSetup("atrm", f[0])
+			if err := runSetup("atrm", f[0]); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // killUser sends SIGKILL to all processes of the user until none is left.
