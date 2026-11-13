@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -257,15 +258,27 @@ func nextLeaseUID() (int, error) {
 		}
 		uid++
 	}
+	// Durable before the ID is used: a crash must not give it out again.
 	tmp := leaseUIDFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.Itoa(uid+1)+"\n"), 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
 		return 0, err
 	}
-	if f, err := os.Open(tmp); err == nil {
-		f.Sync()
-		f.Close()
+	_, werr := f.WriteString(strconv.Itoa(uid+1) + "\n")
+	serr := f.Sync()
+	cerr := f.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		return 0, fmt.Errorf("write %s: %w", tmp, err)
 	}
-	return uid, os.Rename(tmp, leaseUIDFile)
+	if err := os.Rename(tmp, leaseUIDFile); err != nil {
+		return 0, err
+	}
+	dir, err := os.Open(filepath.Dir(leaseUIDFile))
+	if err != nil {
+		return 0, err
+	}
+	defer dir.Close()
+	return uid, dir.Sync()
 }
 
 func addLeaseUser(name string, uid int) error {

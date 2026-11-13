@@ -469,8 +469,12 @@ func loadedServices() (names, present []string, err error) {
 		uid := strconv.Itoa(os.Getuid())
 		for _, domain := range []string{"gui/" + uid, "user/" + uid} {
 			out, err := outputQuiet("launchctl", "print", domain)
+			var exit *exec.ExitError
+			if errors.As(err, &exit) && (exit.ExitCode() == 112 || strings.Contains(string(exit.Stderr), "Could not find domain")) {
+				continue // no such domain (no gui session)
+			}
 			if err != nil {
-				continue // no gui session
+				return nil, nil, fmt.Errorf("launchctl print %s: %w", domain, err)
 			}
 			present = append(present, domain)
 			in := false
