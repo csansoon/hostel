@@ -190,6 +190,11 @@ signing), Linux (KVM), on-demand providers, and a check after each part.
   relative `desktop` path. The whole suite passes in one local run on macOS and in
   the 10-run CI gate.
 - `make lint`.
+- A full local run (2026-11-13) failed in `TestTrafficActivity`: the next lease in
+  the same repository used the port process of the expired one, which then
+  stopped and removed the socket. Fix: the ping answer has the lease ID, and a
+  lease command stops the process of another lease first (design, section 14).
+  `TestPortsNextLease` shows it (it failed on the old code).
 - Real machines (not in the E2E suite): a Mac (launch agent and background app
   cleanup, the dialog click, the signing keychain with a test certificate) and a
   Windows machine (the smoke tests and the two test flights).

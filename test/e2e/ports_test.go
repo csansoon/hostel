@@ -240,6 +240,27 @@ func TestForwards(t *testing.T) {
 	})
 }
 
+// TestPortsNextLease: the port process of an expired lease stops only at its
+// next lease check (tunnel_check). The next lease in the same repository stops
+// it and starts its own, so the next lease's tunnel works.
+func TestPortsNextLease(t *testing.T) {
+	t.Parallel()
+	port := localHTTP(t, "127.0.0.1:0", "guest")
+	f := newFixture(t, &fixtureOpts{serverKeys: "idle_timeout = \"3s\"\n", tunnelCheck: "5m", files: map[string]string{
+		"hostel.toml": "[tunnels.api]\nlocal_port = " + fmt.Sprint(port) + "\n",
+	}})
+	f.acquire()
+	f.waitRoomFree()
+	if r := f.e.hostel("run", "--", "true"); r.code != 1 || !strings.Contains(r.stderr, "ended (expired: idle") {
+		t.Fatalf("run after the first lease: %s", r)
+	}
+	f.acquire()
+	r := f.e.mustHostel("run", "--", `printf 'GET / HTTP/1.0\r\n\r\n' | nc -N -w 5 127.0.0.1 "$HOSTEL_TUNNEL_API_PORT"`)
+	if !strings.Contains(r.stdout, "guest") {
+		t.Fatalf("tunnel of the next lease: %s", r)
+	}
+}
+
 // TestTrafficActivity is scenario 14 (activity): data through a tunnel or a
 // forward keeps a lease active without hostel commands; when the data stops,
 // the lease expires after idle_timeout.

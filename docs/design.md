@@ -1944,6 +1944,11 @@ handles all tunnels and forwards of the lease.
   and have mode 0700, because `/tmp` is shared. On Windows the socket is a Unix
   socket in `%LOCALAPPDATA%\hostel\` (Go supports Unix sockets on Windows 10 and
   later), so no named pipe is necessary.
+- **Next lease.** All leases of a repository use the same socket. The process of
+  an ended lease stops only at its next lease check (`tunnel_check`). Its ping
+  answer has its lease ID; when the ID is not the current lease, a lease command
+  stops that process, waits until the socket no longer answers, and starts its
+  own. Only the listener's close removes the socket file.
 - **Files.** The tunnels of a lease (local port source, requested and given machine
   port) are in `tunnels.json` in the local state directory; only `acquire` (before
   the process starts) and the process write it. The process writes its log to

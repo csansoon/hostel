@@ -129,6 +129,8 @@ type portResponse struct {
 	Forwards []forwardStatus `json:"forwards,omitempty"`
 	// LocalPort is the local port of a new forward.
 	LocalPort int `json:"local_port,omitempty"`
+	// LeaseID is the lease of the port process (ping).
+	LeaseID string `json:"lease_id,omitempty"`
 }
 
 // callPorts sends one request to the port process.
@@ -158,7 +160,10 @@ func callPorts(st *State, req portRequest) (portResponse, error) {
 
 // ensurePorts starts the port process of the lease if it does not run.
 func ensurePorts(st *State) error {
-	if _, err := callPorts(st, portRequest{Op: "ping"}); err == nil {
+	if err := stopOtherPorts(st); err != nil {
+		return err
+	}
+	if resp, err := callPorts(st, portRequest{Op: "ping"}); err == nil && resp.LeaseID == st.LeaseID {
 		return nil
 	}
 	exe, err := os.Executable()
@@ -186,6 +191,25 @@ func ensurePorts(st *State) error {
 // stopPorts stops the port process of the lease, if it runs.
 func stopPorts(st *State) {
 	callPorts(st, portRequest{Op: "stop"})
+}
+
+// stopOtherPorts stops the port process of an earlier lease of the same
+// directory, which uses the same socket path; it stops by itself only at its
+// next lease check. It returns when the socket no longer answers.
+func stopOtherPorts(st *State) error {
+	resp, err := callPorts(st, portRequest{Op: "ping"})
+	if err != nil || resp.LeaseID == st.LeaseID {
+		return nil
+	}
+	callPorts(st, portRequest{Op: "stop"})
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := callPorts(st, portRequest{Op: "ping"}); err != nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("the port process of the earlier lease %s did not stop", resp.LeaseID)
 }
 
 // portProc is the port process: one gateway connection with purpose "ports"
@@ -235,16 +259,21 @@ func Ports(args []string, stdout, stderr io.Writer) int {
 		logger.Printf("ports: %v", err)
 		return ExitError
 	}
-	if _, err := callPorts(st, portRequest{Op: "ping"}); err == nil {
+	if err := stopOtherPorts(st); err != nil {
+		logger.Printf("ports: %v", err)
+		return ExitError
+	}
+	if resp, err := callPorts(st, portRequest{Op: "ping"}); err == nil && resp.LeaseID == st.LeaseID {
 		return 0 // another port process runs for this lease
 	}
 	os.Remove(path)
+	// Close removes the socket file; no later removal, which could remove the
+	// socket of the next port process.
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		logger.Printf("ports: listen on %s: %v", path, err)
 		return ExitError
 	}
-	defer os.Remove(path)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	p := &portProc{st: st, api: api, log: logger, stop: cancel, tunnels: tunnels, state: map[string]*tunnelStatus{},
@@ -260,6 +289,7 @@ func Ports(args []string, stdout, stderr io.Writer) int {
 		}
 		go p.control(ctx, c)
 	}
+	ln.Close()
 	p.closeAll()
 	logger.Printf("ports: lease %s: stopped", st.LeaseID)
 	return 0
@@ -593,7 +623,7 @@ func (p *portProc) control(ctx context.Context, c net.Conn) {
 func (p *portProc) handle(ctx context.Context, req portRequest) (portResponse, error) {
 	switch req.Op {
 	case "ping":
-		return portResponse{}, nil
+		return portResponse{LeaseID: p.st.LeaseID}, nil
 	case "status":
 		return p.status(), nil
 	case "check":
