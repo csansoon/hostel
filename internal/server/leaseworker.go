@@ -556,6 +556,12 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	if err := s.recordChecks(ctx, machineID, resp.Checks, check); err != nil {
 		return err
 	}
+	if len(resp.Removed) > 0 {
+		if err := s.store.AddEvent(ctx, time.Now(), req.LeaseID, machineID, "cleanup",
+			"removed persistence of the lease: "+strings.Join(resp.Removed, ", ")); err != nil {
+			s.log.Error("record removed persistence", "lease_id", req.LeaseID, "err", err)
+		}
+	}
 	var failed []string
 	for _, st := range resp.Steps {
 		if st.Error != "" {

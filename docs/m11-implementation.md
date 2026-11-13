@@ -45,11 +45,15 @@ At cleanup, when no other room has a lease, it compares and repairs:
 | `crontab -l` | install the snapshot again (or `crontab -r` when there was none) |
 | `~/.config/systemd/user/` (Linux) | stop and disable new units, delete new files |
 | `~/Library/LaunchAgents/` (macOS) | boot out new agents, delete new files (`macos-desktop` already does this for its leases) |
-| Shell startup files (`.profile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.config/fish/config.fish`) and `~/.ssh/rc`, `~/.ssh/environment` | restore the snapshot copy, or delete a new file |
+| Shell startup files (`.profile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.zlogout`, `.config/fish/config.fish`) and `~/.ssh/rc`, `~/.ssh/environment` | restore the snapshot copy, or delete a new file |
 
 The cleanup result names each repaired item; the server writes them to the event
 log (names only, no file contents). A failed repair fails the cleanup, so the
 machine becomes `broken` (R24).
+
+Limit (found in the phase review): the guest is the machine user, so it can change
+the helper or the copy and defeat the audit. The audit is for mistakes and simple
+attacks; lease users (phase 4) are the protection against a deliberate one.
 
 E2E: a lease adds a crontab entry, a systemd user unit file, a line in `.bashrc`,
 and `~/.ssh/rc`. After release, the next lease finds none of them, and the event log

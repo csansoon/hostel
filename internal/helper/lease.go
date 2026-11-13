@@ -41,8 +41,9 @@ func roomFlag(name string, args []string) (string, []string, error) {
 	return *room, pos, nil
 }
 
-// begin writes the lease data of a room and saves authorized_keys as the base
-// that cleanup restores (a guest must not keep a key it added).
+// begin writes the lease data of a room and saves authorized_keys and the
+// persistence locations as the base that cleanup restores (a guest must not
+// keep a key or a program that starts later).
 func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	room, _, err := roomFlag("begin", args)
 	if err != nil {
@@ -72,7 +73,13 @@ func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return struct{}{}, err
 	}
-	return struct{}{}, writeFileAtomic(h.authorizedKeysBase(), keys, 0o600)
+	if err := writeFileAtomic(h.authorizedKeysBase(), keys, 0o600); err != nil {
+		return struct{}{}, err
+	}
+	if err := h.snapshotPersistence(); err != nil {
+		return struct{}{}, fmt.Errorf("copy the persistence locations: %w", err)
+	}
+	return struct{}{}, nil
 }
 
 // otherRoomBusy reports whether another room of the machine has a lease.

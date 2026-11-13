@@ -3,7 +3,7 @@
 # them, so the tests cover the upload path (design, section 20).
 FROM debian:13-slim
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends openssh-server git ca-certificates curl netcat-openbsd sudo \
+	&& apt-get install -y --no-install-recommends openssh-server git ca-certificates curl netcat-openbsd sudo cron \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& rm -f /etc/ssh/ssh_host_* \
 	&& useradd --create-home --shell /bin/bash hostel \

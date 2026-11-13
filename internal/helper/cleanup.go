@@ -84,6 +84,12 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	step("stop screen tools", func() error { return h.stopTools(room, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
 	step("check", func() error { return h.checkClean(room, req.LeaseID, req.Ports) })
+	// After "check": no process of the lease can add an entry again.
+	step("remove persistence", func() error {
+		var err error
+		resp.Removed, err = h.restorePersistence(room)
+		return err
+	})
 	step("delete room", func() error {
 		// Markers of jobs whose supervisor was killed.
 		if marker := devboxTaskMarker(room, "*"); marker != "" {

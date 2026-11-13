@@ -123,6 +123,9 @@ type CleanupResponse struct {
 	Steps []CleanupStep `json:"steps"`
 	// Checks has the result of each check script (the inventory).
 	Checks []ToolCheck `json:"checks,omitempty"`
+	// Removed names the persistence items that cleanup removed or restored
+	// (design, section 18).
+	Removed []string `json:"removed,omitempty"`
 }
 
 // ToolCheck is the result of a tool's check script: the option that its last

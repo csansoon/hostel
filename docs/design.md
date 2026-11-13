@@ -2080,6 +2080,26 @@ failed; the result lists each step.
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the machine has no IPv6
    loopback address), and retry for up to 10 seconds, because
    the machine's SSH server removes its listeners after the connections close.
+   After step 4 (so that no process of the lease can add an entry again),
+   restore the persistence locations of the machine user (M11, macOS and Linux)
+   from the copy that `begin` made when the machine had no other lease
+   (`hostel/persistence/`): the crontab, `~/.config/systemd/user` and
+   `~/.config/autostart` (Linux), `~/Library/LaunchAgents` (macOS), the shell
+   startup files of sh, bash, zsh, and fish, `~/.ssh/rc`, and `~/.ssh/environment`.
+   A new or changed entry is stopped first (`systemctl --user disable --now`,
+   `launchctl bootout`; best effort, at most 20 for each entry), then deleted or
+   restored, also when the guest removed the write rights or set `uchg`. The home
+   directory comes from the helper's path and the commands from fixed system
+   directories, because the startup files run before the helper and can change
+   `HOME` and `PATH`. This runs only when no other room has a lease; the cleanup
+   of the last lease does it. The result names the items, and the server records
+   them in the event log ("removed persistence of the lease: ..."). A failed
+   repair fails the step.
+
+   Limit: the guest of a lease on the machine user is that user, so it can
+   change Hostel's own files (the helper, the copy) and defeat this audit. The
+   audit removes what a guest leaves by mistake or with a simple attack; against
+   a deliberate attack, use lease users (section 18).
 5. Delete the devbox task markers of the room's jobs whose supervisor was killed
    (if any), and the directory `rooms/<room>/`. This
    deletes `work/`, `.env`, job output, `tool.env`, and the manifest. The shared
@@ -2139,13 +2159,17 @@ What version 1 already blocks:
 - SSH keys: the machine trusts only the server key, `authorized_keys` is restored at
   cleanup, and the network rule (section 13) blocks direct SSH.
 - Processes that keep `HOSTEL_LEASE`, and changed helper or scripts (hash checks).
+- New or changed entries in the persistence locations of the machine user (M11,
+  section 17, after step 4), when the guest does not change Hostel's own files.
 
 What a guest can still do in version 1:
 
 - Start a process without `HOSTEL_LEASE` (for example with `env -i`) that connects
   out from the machine (a reverse shell). Cleanup does not find it.
-- Add persistence for the machine user: `crontab`, `~/Library/LaunchAgents`, systemd
-  user units, shell startup files, or `~/.ssh/rc`.
+- Add persistence for the machine user in a place that the M11 audit does not
+  check, or a transient unit (`systemd-run --user`) that has no file. Before M11:
+  `crontab`, `~/Library/LaunchAgents`, systemd user units, shell startup files, or
+  `~/.ssh/rc`.
 - Put a changed binary in a shared cache (`hostel/cache`, mise tools, package
   stores). The next lease runs it.
 
