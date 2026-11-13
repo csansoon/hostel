@@ -103,3 +103,19 @@ func TestMise(t *testing.T) {
 		return f.c.sh("test -e /home/hostel/hostel/bin/agent-device && echo found || echo removed") == "removed"
 	})
 }
+
+// TestLeaseUserMise (M11): a lease user runs the machine's mise tools from the
+// machine's installs (MISE_SHARED_INSTALL_DIRS), without its own install.
+func TestLeaseUserMise(t *testing.T) {
+	if os.Getenv("HOSTEL_E2E_OFFLINE") == "1" {
+		t.Skip("downloads jq")
+	}
+	t.Parallel()
+	f := newFixture(t, &fixtureOpts{leaseUsers: true, templateTools: []string{"fake-sdk", "jq:1.7.1"}})
+	f.acquire("fake-sdk")
+	r := f.e.mustHostel("run", "--", "jq --version; command -v jq; ls ~/hostel/cache/mise/installs 2>/dev/null | grep -c jq || true")
+	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(lines) != 3 || lines[0] != "jq-1.7.1" || !strings.HasPrefix(lines[1], "/home/hostel/hostel/cache/mise/installs/") || lines[2] != "0" {
+		t.Fatalf("jq for the lease user (version, path, own installs): %q", r.stdout)
+	}
+}
