@@ -81,6 +81,9 @@ type Server struct {
 	waiting   map[string]scheduler.Waiting
 	// lastReconcile and lastPresence are used only by the loop goroutine.
 	lastReconcile, lastPresence time.Time
+	// leaseUserLocks has a *sync.Mutex for each machine: it orders lease-user
+	// creation and the sweep of lease users on the machine (M11).
+	leaseUserLocks sync.Map
 }
 
 func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer, dialMachine provider.MachineDialer, log *slog.Logger) (map[string]provider.Provider, error) {

@@ -220,6 +220,30 @@ func (c *container) stop() {
 	}
 }
 
+// rootSh runs a shell command in the container as root.
+func (c *container) rootSh(cmd string) string {
+	c.e.t.Helper()
+	out, err := docker("exec", c.name, "sh", "-c", cmd)
+	if err != nil {
+		c.e.t.Fatal(err)
+	}
+	return out
+}
+
+// installLeaseUserRoot installs the root step of lease users as "hostel
+// machine join" does (M11): the binary in /etc/hostel, owned by root, and a
+// sudo rule for only that command.
+func (c *container) installLeaseUserRoot() {
+	c.e.t.Helper()
+	c.rootSh("mkdir -p /etc/hostel && chmod 755 /etc/hostel")
+	if _, err := docker("cp", filepath.Join(helperDir, "hostel-linux-"+dockerArch), c.name+":/etc/hostel/hostel"); err != nil {
+		c.e.t.Fatal(err)
+	}
+	pub := strings.TrimSpace(readFile(c.e.t, filepath.Join(c.e.dataDir(), "server_ed25519.pub")))
+	c.rootSh("echo '" + pub + "' > /etc/hostel/server_key.pub && chown root:root /etc/hostel/hostel && chmod 755 /etc/hostel/hostel && " +
+		"echo 'hostel ALL=(root) NOPASSWD: /etc/hostel/hostel lease-user *' > /etc/sudoers.d/hostel && chmod 440 /etc/sudoers.d/hostel")
+}
+
 // address is the static machine address for server.toml.
 func (c *container) address() string { return fmt.Sprintf("hostel@127.0.0.1:%d", c.port) }
 

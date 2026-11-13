@@ -830,6 +830,7 @@ screen = true                              # a screen tool: start, screenshot, a
 options = ["pixel-9", "pixel-tablet"]      # screen tools: the phones and tablets; the first is the default
 max_options = 2                            # options in one lease (default 1)
 whole_machine = false                      # true: the lease takes all rooms of the machine
+machine_user = false                       # true: needs the machine user's account; no lease user (M11)
 env = { ANDROID_HOME = "{cache}/android-sdk" }        # in every lease on a machine with this tool
 path = ["{cache}/android-sdk/platform-tools", "{cache}/android-sdk/emulator"]
 script_timeouts = { install = "30m", start = "5m" }   # defaults: install 20m, others 3m
@@ -1093,7 +1094,7 @@ Server-level keys and defaults:
 | `[mise]` | `idiomatic_tools = ["node", "python"]` (also when `[mise]` sets only other keys; `[]` turns idiomatic files off); `github_token` unset; `agent_device = true` |
 
 Provider, machine, and template keys. A machine or template inherits only these provider keys: `tools`,
-`env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`. `max_machines` is
+`env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`, `reuse`. `max_machines` is
 not inherited: on a provider it is a limit for all machines together.
 
 | Key | Where | Default |
@@ -1111,6 +1112,8 @@ not inherited: on a provider it is a limit for all machines together.
 | `env` | provider, machine, template, room | `{}` |
 | `max_lease` | provider, machine, template | `2h` |
 | `warm_running`, `warm_stopped` | provider, template | `5m`, `24h` (on-demand only) |
+| `reuse` | provider, template | `true` (on-demand only); `false`: one lease for each machine (M11) |
+| `lease_users` | machine, template | `false`; `true`: an OS user for each lease (macOS and Linux, M11, section 18) |
 | `command`, `command_env`, `timeouts` | external provider | `command` required; `timeouts = { provision = "5m", default = "1m" }` |
 
 Explicit rooms: `rooms = [{ name = "a", ports = [7500, 7501], env = { ANDROID_SERIAL = "emulator-5554" } }]`.
@@ -2080,6 +2083,58 @@ failed; the result lists each step.
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the machine has no IPv6
    loopback address), and retry for up to 10 seconds, because
    the machine's SSH server removes its listeners after the connections close.
+   Before step 4 (a new unit or agent can hold a room port) and again after it
+   (a process of the lease that step 4 ended can have added an entry),
+   restore the persistence locations of the machine user (M11, macOS and Linux)
+   from the copy that `begin` made when the machine had no other lease
+   (`hostel/persistence/`): the crontab, `~/.config/systemd/user`,
+   `user.control`, `~/.local/share/systemd/user`, the generator directories, `~/.config/environment.d`, and `~/.config/autostart`
+   (Linux), `~/Library/LaunchAgents` (macOS), the shell startup files of sh,
+   bash, zsh, and fish (with `~/.config/fish/conf.d` and `functions`) (and `.bash_aliases`), the git
+   configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
+   `~/.ssh/environment`.
+   A new or changed entry is stopped first (`systemctl --user disable --now`;
+   for a drop-in, its parent unit;
+   `launchctl bootout` of the plist's label, by the name in the audited
+   location also when the file is a link; the step fails when the unit or
+   agent still runs afterwards, and all stops have one deadline of 2 minutes;
+   a machine without a systemd user manager, whose private socket
+   `/run/user/<uid>/systemd/private` does not exist, has no running unit; with
+   it, a failed `systemctl` call fails the step), then
+   deleted or restored,
+   also when the guest removed the write rights or set `uchg`; a plist whose
+   label cannot be read fails the step. For each link in these locations (also
+   inside the directories, and inside linked directories, at most 8 deep), the
+   copy also has the content behind the link and its path, and a changed target
+   is restored too. The copy also lists the loaded user services (systemd
+   services, timers, sockets, paths, and scopes of the user manager; launchd
+   services of the gui and user domains, those not of Apple with the plist that
+   they came from, so that a replaced service of the same label is new) and
+   which managers and domains existed;
+   a service that was not loaded then is stopped (on macOS not Apple's own,
+   which macOS starts at any time, and none of a domain that did not exist then),
+   also one that changed its file or has none (`systemd-run --user`), and the
+   step fails when it still runs. A systemd user manager that started during the
+   lease is stopped as a whole (`systemctl --user exit`), and so is one whose
+   environment (`set-environment`) changed or whose generator directories the
+   step restored: what these change is not in the files. `begin` and this step decide under a
+   lock file (`hostel/machine.lock`) whether another room has a lease, so of two
+   rooms that begin at the same time, the first makes the copy. The step runs a
+   third time before step 5, in one hold of the lock, and only when it works the
+   lease's marker (`lease.json`) goes: of two last rooms that clean at the same time,
+   each saw the other's lease before, and the later one restores then; a
+   `begin` cannot copy the leaving lease's persistence as the new base. The home
+   directory comes from the helper's path and the commands from fixed system
+   directories, because the startup files run before the helper and can change
+   `HOME` and `PATH`. This runs only when no other room has a lease; the cleanup
+   of the last lease does it. The result names the items, and the server records
+   them in the event log ("removed persistence of the lease: ..."). A failed
+   repair fails the step.
+
+   Limit: the guest of a lease on the machine user is that user, so it can
+   change Hostel's own files (the helper, the copy) and defeat this audit. The
+   audit removes what a guest leaves by mistake or with a simple attack; against
+   a deliberate attack, use lease users (section 18).
 5. Delete the devbox task markers of the room's jobs whose supervisor was killed
    (if any), and the directory `rooms/<room>/`. This
    deletes `work/`, `.env`, job output, `tool.env`, and the manifest. The shared
@@ -2098,6 +2153,14 @@ Warm policy after cleanup:
   stop) or destroys it (an on-demand machine that cannot stop). Static machines stay
   running.
 - A stopped machine is destroyed after `warm_stopped`.
+- With `reuse = false` (M11), the server drains a machine in the same transaction
+  that assigns a lease to it, and destroys it when it is idle again, also before
+  `warm_running`. The assignment also needs all other rooms of the machine
+  free (`reuse` set to `false` on a busy machine). The drain is a compare-and-set: of the leases that one
+  scheduler pass gives to rooms of the machine, only the first gets it, and the
+  others wait. An admin who undrains such a machine allows one more lease. The drain
+  of `reuse = false` and an admin's drain are the same flag: after a change to
+  `reuse = true`, an admin undrains a machine that was drained this way.
 - Eviction (section 5) can destroy an idle or stopped machine earlier.
 
 ## 18. Security
@@ -2139,30 +2202,99 @@ What version 1 already blocks:
 - SSH keys: the machine trusts only the server key, `authorized_keys` is restored at
   cleanup, and the network rule (section 13) blocks direct SSH.
 - Processes that keep `HOSTEL_LEASE`, and changed helper or scripts (hash checks).
+- New or changed entries in the persistence locations of the machine user (M11,
+  section 17, after step 4), when the guest does not change Hostel's own files.
 
-What a guest can still do in version 1:
+What a guest can still do in version 1 (on a lease without a lease user):
 
 - Start a process without `HOSTEL_LEASE` (for example with `env -i`) that connects
   out from the machine (a reverse shell). Cleanup does not find it.
-- Add persistence for the machine user: `crontab`, `~/Library/LaunchAgents`, systemd
-  user units, shell startup files, or `~/.ssh/rc`.
+- Add persistence for the machine user in a place that the M11 audit does not
+  check. Before M11:
+  `crontab`, `~/Library/LaunchAgents`, systemd user units, shell startup files, or
+  `~/.ssh/rc`.
 - Put a changed binary in a shared cache (`hostel/cache`, mise tools, package
   stores). The next lease runs it.
 
-Planned hardening (milestone M11):
+Hardening (milestone M11):
 
-1. **One OS user for each lease.** Lease preparation creates a new user without
-   administrator rights; cleanup stops all its processes (`pkill -u`), removes its
-   crontab, and deletes the user and its home directory. Most persistence lives in
-   that home directory, so it goes too.
-2. **Read-only shared caches.** The Hostel user owns the caches and installs tools
-   into them. Lease users can read but not write them. A lease user has its own
-   writable cache, deleted at cleanup.
+1. **One OS user for each lease** (`lease_users = true` on a macOS or Linux
+   machine). A lease whose tools have no `machine_user` key gets the user
+   `hostel-<first 12 characters of the lease ID>`.
+   - **Root step.** `hostel machine join --lease-users` writes
+     `/etc/sudoers.d/hostel` (the machine user may run only
+     `/etc/hostel/hostel lease-user *` as root, the root-owned binary of the
+     join) and `/etc/hostel/server_key.pub`. The caller can be a guest on the
+     machine user, so the command takes only a name of that form, changes only
+     users whose full name is "Hostel lease", reads the key only from the
+     root-owned file, sets its own `PATH`, and never follows a path that another
+     user controls: it writes only into a home directory that it has just made
+     (through `os.Root`). `check` prints its version; the server checks it at
+     provisioning (a missing step makes the machine `broken` with a message).
+   - **Create** (preparing, before `begin`): the server records the name, then
+     runs `create` as the machine user through sudo: an existing lease user of
+     that name goes first; the new user gets a user ID that was never used
+     before (`/etc/hostel/lease-uid`, written atomically; a damaged counter fails
+     the creation), no administrator rights, the group
+     `hostel-leases` (its primary group on macOS; also `com.apple.access_ssh`
+     when Remote Login allows only some users), a home directory with mode
+     0700, and the server key. The machine user joins the group. Then the
+     machine user runs `helper share-cache` (item 2), and the server, as the
+     lease user, fills its home: its own `hostel/` with copies of the machine's
+     helper, mise, tools, and mise configuration, its own `cache/` with links to
+     the machine's cache entries (not mise's own directories), and `rooms/`.
+     The server records the home directory. The room steps and the guest's
+     connections then use the lease user, as for room users (section 7).
+   - **Delete** (cleanup, after the helper's cleanup as the lease user): end all
+     processes of the user (`launchctl bootout`, `loginctl terminate-user`,
+     `pkill -KILL -u` until none is left; on macOS each launchd domain of the
+     user must have no service after `bootout`), remove its crontab, its `at` jobs (a
+     failure stops the deletion, so the room stays blocked), and
+     its files in the shared directories (`/tmp`, `/var/tmp`, `/dev/shm`; on
+     macOS also `/private/var/folders` and `/Users/Shared`; `find -delete` as the user,
+     after it gives its own directories back their rights and clears its own
+     macOS flags; then root only looks with `find -print`, and a file that is
+     left stops the deletion), then its home directory (after root
+     clears the macOS flags `uchg` and `uappnd` without following links), then
+     the user record. A repeated deletion that finds no user removes a home
+     directory that is left. The lease user owns its helper and
+     its login: when the helper's cleanup fails, or the server cannot log in as
+     the user, the deletion runs anyway, and only a failed deletion makes the
+     machine `broken`. The cleanup and each provisioning also delete lease users
+     that no active room records (a failed preparing leaves one). One server
+     lock for each machine orders creation and these sweeps. When the server cannot
+     log in as the lease user (the user can break its own login), it deletes the
+     user without the helper's cleanup; if tools started for the lease, their stop
+     scripts did not run, and the cleanup fails.
+   - **Limit.** A guest on the machine user (a lease with a `machine_user` tool,
+     or any lease on a machine without `lease_users`) controls the machine
+     user's files and shell: it can change what later lease users copy and run
+     (the helper, tools, and the shared cache), fake the answers of the root
+     calls that run through the machine user's shell, and end the lease users of
+     other rooms. Lease users protect a machine fully only when all its leases
+     use lease users: no `machine_user` tools on it.
+   - Tools with `machine_user = true` need the machine user's account
+     (`macos-desktop`, `ios-simulator`, `android-emulator`, `windows-desktop`):
+     a lease with one of them uses the machine user and gets the audit
+     (section 17).
+2. **Read-only shared caches.** The machine user owns the caches and installs
+   tools into them. `helper share-cache` (as the machine user) gives its home and
+   `hostel/` the group `hostel-leases` with traverse rights only (`begin` keeps
+   `hostel/rooms` at mode 0700), the trees `hostel/bin`, `tools`, `mise`, and
+   `cache` the group with read rights and no write rights for the group or other
+   users (only what differs is changed), and takes the rights of the
+   group and of other users from all other entries there; so a lease user can
+   read the cache but not write it, and cannot read the machine user's rooms or
+   `machine-env.json`. Its
+   mise uses `MISE_SHARED_INSTALL_DIRS` for the machine's tools; a repository
+   tool that the machine does not have goes into its own cache, deleted with it.
+   A tool that writes into the machine's cache during a lease needs
+   `machine_user`.
 3. **Egress control (optional).** A machine firewall allows outbound traffic only to
    the gateway and to configured hosts (package registries, GitHub).
-4. **No reuse (strongest).** On on-demand machines, `warm_running = "0s"` destroys
-   the machine after each lease. No backdoor can survive, at the cost of a cold start
-   for each lease.
+4. **No reuse (strongest, M11).** On on-demand machines, `reuse = false` destroys
+   the machine after its lease (section 17). No backdoor can survive, at the cost
+   of a cold start for each lease.
 5. **Audit.** Cleanup compares the known persistence locations with a snapshot and
    marks the machine `broken` if something changed.
 

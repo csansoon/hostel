@@ -45,6 +45,8 @@ type fixtureOpts struct {
 	helperDir string
 	// tunnelCheck replaces the interval tunnel_check (default 1s).
 	tunnelCheck string
+	// leaseUsers: the machine has lease_users and the root step (M11).
+	leaseUsers bool
 }
 
 func defaultRepoFiles() map[string]string {
@@ -72,6 +74,10 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	}
 	e.roomUsers = opts.roomUsers
 	c := e.startStaticMachine("box")
+	if opts.leaseUsers {
+		c.installLeaseUserRoot()
+		opts.templateKeys += "lease_users = true\n"
+	}
 	if opts.noTools {
 		opts.templateTools = []string{}
 	} else {

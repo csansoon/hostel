@@ -198,8 +198,9 @@ func (s *Store) SetQueue(ctx context.Context, id string, position int, reason st
 
 // Assign reserves rooms of a machine for a queued lease and gives its tunnels
 // their machine ports (compare-and-set: the lease must be queued and the rooms
-// free). It reports whether the assignment happened.
-func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, rooms []string, ports map[string]int, now time.Time) (bool, error) {
+// free). With drain, the machine gets no later lease (reuse = false). It reports
+// whether the assignment happened.
+func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, rooms []string, ports map[string]int, drain bool, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'assigned', machine_id = ?, room_name = ?, provider = ?,
@@ -212,7 +213,12 @@ func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, roo
 			return nil
 		}
 		for _, sl := range rooms {
-			res, err := tx.ExecContext(ctx, `UPDATE rooms SET state = 'assigned', lease_id = ? WHERE machine_id = ? AND name = ? AND state = 'free'`,
+			// A lease user of an earlier lease that cleanup did not delete
+			// (a failed preparing) is not this lease's; a later cleanup or
+			// provisioning deletes it (M11).
+			res, err := tx.ExecContext(ctx, `UPDATE rooms SET state = 'assigned', lease_id = ?,
+				home = CASE WHEN lease_user != '' THEN '' ELSE home END, lease_user = ''
+				WHERE machine_id = ? AND name = ? AND state = 'free'`,
 				leaseID, machine.ID, sl)
 			if err != nil {
 				return err
@@ -224,6 +230,26 @@ func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, roo
 		for name, port := range ports {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, machine_port) VALUES (?, ?, ?)`, leaseID, name, port); err != nil {
 				return err
+			}
+		}
+		if drain {
+			// Compare-and-set: one scheduler pass can give several rooms of
+			// the machine to several leases; only the first gets it. And no
+			// other room may be in use (reuse = false set on a busy machine).
+			var busy int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rooms WHERE machine_id = ? AND state != 'free' AND lease_id != ?`,
+				machine.ID, leaseID).Scan(&busy); err != nil {
+				return err
+			}
+			if busy > 0 {
+				return errRoomTaken
+			}
+			res, err := tx.ExecContext(ctx, `UPDATE machines SET drained = 1 WHERE id = ? AND drained = 0`, machine.ID)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return errRoomTaken
 			}
 		}
 		ok = true

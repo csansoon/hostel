@@ -41,8 +41,9 @@ func roomFlag(name string, args []string) (string, []string, error) {
 	return *room, pos, nil
 }
 
-// begin writes the lease data of a room and saves authorized_keys as the base
-// that cleanup restores (a guest must not keep a key it added).
+// begin writes the lease data of a room and saves authorized_keys and the
+// persistence locations as the base that cleanup restores (a guest must not
+// keep a key or a program that starts later).
 func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	room, _, err := roomFlag("begin", args)
 	if err != nil {
@@ -52,6 +53,13 @@ func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return struct{}{}, fmt.Errorf("read the request: %w", err)
 	}
+	// rooms/ only for the user: lease users may traverse hostel/ (M11).
+	if err := os.MkdirAll(filepath.Join(h.root, "rooms"), 0o700); err != nil {
+		return struct{}{}, err
+	}
+	if err := os.Chmod(filepath.Join(h.root, "rooms"), 0o700); err != nil {
+		return struct{}{}, err
+	}
 	if err := os.MkdirAll(h.workDir(room), 0o755); err != nil {
 		return struct{}{}, err
 	}
@@ -59,20 +67,34 @@ func (h *helper) begin(args []string, stdin io.Reader) (struct{}, error) {
 	if err != nil {
 		return struct{}{}, err
 	}
-	if err := writeFileAtomic(filepath.Join(h.roomDir(room), "lease.json"), data, 0o644); err != nil {
-		return struct{}{}, err
-	}
 	// The base comes from a moment when the machine has no other lease: with a
 	// lease in another room, authorized_keys can have a key that that lease
-	// added, and the base must not keep it.
-	if busy, err := h.otherRoomBusy(room); err != nil || busy {
+	// added, and the base must not keep it. The lock: of two rooms that begin
+	// at the same time, the first takes the copies.
+	unlock, err := h.lockMachine()
+	if err != nil {
 		return struct{}{}, err
 	}
-	keys, err := os.ReadFile(h.authorizedKeysPath())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	defer unlock()
+	busy, err := h.otherRoomBusy(room)
+	if err != nil {
 		return struct{}{}, err
 	}
-	return struct{}{}, writeFileAtomic(h.authorizedKeysBase(), keys, 0o600)
+	// The copies before the marker: a failed copy leaves no marker, so the
+	// repeated begin (or another room's) makes them.
+	if !busy {
+		keys, err := os.ReadFile(h.authorizedKeysPath())
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return struct{}{}, err
+		}
+		if err := writeFileAtomic(h.authorizedKeysBase(), keys, 0o600); err != nil {
+			return struct{}{}, err
+		}
+		if err := h.snapshotPersistence(); err != nil {
+			return struct{}{}, fmt.Errorf("copy the persistence locations: %w", err)
+		}
+	}
+	return struct{}{}, writeFileAtomic(filepath.Join(h.roomDir(room), "lease.json"), data, 0o644)
 }
 
 // otherRoomBusy reports whether another room of the machine has a lease.

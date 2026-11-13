@@ -180,6 +180,14 @@ func (s *Server) doProvision(ctx context.Context, r store.Machine, m *config.Tem
 	if err := s.provisionRoomUsers(ctx, r, m); err != nil {
 		return err
 	}
+	if m.LeaseUsers {
+		if err := checkLeaseUserRoot(ctx, machine.Conn); err != nil {
+			return err
+		}
+		if err := s.deleteLeaseUsers(ctx, r.ID, ""); err != nil {
+			return err
+		}
+	}
 	if err := s.cleanDirtyRooms(ctx, machine, r.ID); err != nil {
 		return err
 	}
@@ -310,11 +318,20 @@ func roomUser(m *config.Template, room string) string {
 	return ""
 }
 
+// roomUserOf returns the OS user of a room: its configured user, the user of
+// its lease (M11), or "" (the machine user).
+func (s *Server) roomUserOf(ctx context.Context, r store.Machine, room string) (string, error) {
+	if u := roomUser(s.config().Template(r.Provider+"/"+r.Template), room); u != "" {
+		return u, nil
+	}
+	return s.store.RoomLeaseUser(ctx, r.ID, room)
+}
+
 // roomHome returns the home directory of a room's user: its own user's, or
 // the machine user's.
 func (s *Server) roomHome(ctx context.Context, r store.Machine, room string) (string, error) {
-	if roomUser(s.config().Template(r.Provider+"/"+r.Template), room) == "" {
-		return r.Home, nil
+	if u, err := s.roomUserOf(ctx, r, room); err != nil || u == "" {
+		return r.Home, err
 	}
 	home, err := s.store.RoomHome(ctx, r.ID, room)
 	if err == nil && home == "" {
@@ -526,6 +543,9 @@ func (s *Server) machineUpload(lc *liveConfig, machine *machineops.Machine, m *c
 	}
 	for k, v := range s.miseEnv(machine.OS, machine.Home) {
 		env[k] = v
+	}
+	if machine.SharedHome != "" {
+		env["MISE_SHARED_INSTALL_DIRS"] = machineops.Path(machine.OS, machine.SharedHome, "cache", "mise", "installs")
 	}
 	re := protocol.MachineEnv{Env: env, Rooms: map[string]map[string]string{}, OS: m.OS, ToolOptions: map[string][]string{}}
 	for _, sl := range m.Rooms {
