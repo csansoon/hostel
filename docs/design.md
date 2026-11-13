@@ -2093,8 +2093,11 @@ failed; the result lists each step.
    configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
    `~/.ssh/environment`.
    A new or changed entry is stopped first (`systemctl --user disable --now`,
-   `launchctl bootout`; each stop is best effort, and all of them have one
-   deadline of 2 minutes, after which the step fails), then deleted or restored,
+   `launchctl bootout` of the plist's label, by the name in the audited
+   location also when the file is a link; the step fails when the unit or
+   agent still runs afterwards, and all stops have one deadline of 2 minutes;
+   a machine without a systemd user instance has no running unit), then
+   deleted or restored,
    also when the guest removed the write rights or set `uchg`. For each link in
    these locations (also inside the directories), the copy also has the content
    behind the link and its path, and a changed target is restored too. `begin` and this step decide under a

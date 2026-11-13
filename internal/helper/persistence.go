@@ -132,7 +132,9 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 	var items, failed []string
 	// Stopping units and agents has one deadline; after it, cleanup fails.
 	deadline := time.Now().Add(2 * time.Minute)
-	repair := func(cur, copyRoot, rel, name string) {
+	// unloadAt is the path by which units are known (a link), when cur is the
+	// target behind it.
+	repair := func(cur, copyRoot, unloadAt, name string) {
 		changed, err := diffTree(cur, copyRoot, "")
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("%s: %v", name, err))
@@ -140,7 +142,11 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 		}
 		for _, c := range changed {
 			p := filepath.Join(cur, c)
-			if err := unloadAgents(p, deadline); err != nil {
+			at := p
+			if unloadAt != "" {
+				at = unloadAt
+			}
+			if err := unloadAgents(at, deadline); err != nil {
 				failed = append(failed, fmt.Sprintf("%s: %v", name, err))
 				continue
 			}
@@ -159,7 +165,7 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 				continue
 			}
 		}
-		repair(filepath.Join(home, rel), filepath.Join(base, "files", rel), rel, "~/"+rel)
+		repair(filepath.Join(home, rel), filepath.Join(base, "files", rel), "", "~/"+rel)
 	}
 	// The links are as in the copy now: the content behind them must be too.
 	_ = filepath.WalkDir(filepath.Join(base, "links"), func(p string, de fs.DirEntry, err error) error {
@@ -172,7 +178,7 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 			return nil
 		}
 		rp, _ := filepath.Rel(filepath.Join(base, "links"), p)
-		repair(string(real), filepath.Join(base, "targets", rp), rp, string(real))
+		repair(string(real), filepath.Join(base, "targets", rp), filepath.Join(home, rp), string(real))
 		return nil
 	})
 	if len(items) > 0 && runtime.GOOS == "linux" {
@@ -318,9 +324,10 @@ func copyTree(src, dst string) error {
 }
 
 // unloadAgents stops the user units or agents at path (a file, or the files
-// directly in a new directory) before they go. Each stop is best effort (a
-// machine can have no user manager); after the deadline, it fails, so that
-// many files cannot leave units running.
+// directly in a new directory) before they go, and checks that none of them
+// still runs. A machine without a user manager (no systemd user instance) has
+// no running unit. After the deadline, it fails, so that many files cannot
+// leave units running.
 func unloadAgents(path string, deadline time.Time) error {
 	files := []string{path}
 	if des, err := os.ReadDir(path); err == nil {
@@ -336,23 +343,50 @@ func unloadAgents(path string, deadline time.Time) error {
 		}
 		switch {
 		case runtime.GOOS == "linux" && strings.Contains(f, "/.config/systemd/user/"):
-			runQuiet("systemctl", "--user", "disable", "--now", "--", filepath.Base(f))
+			if runQuiet("systemctl", "--user", "show-environment") != nil {
+				continue // no user manager
+			}
+			unit := filepath.Base(f)
+			runQuiet("systemctl", "--user", "disable", "--now", "--", unit)
+			if runQuiet("systemctl", "--user", "is-active", "--quiet", "--", unit) == nil {
+				return fmt.Errorf("the user unit %s still runs", unit)
+			}
 		case runtime.GOOS == "darwin" && strings.HasSuffix(f, ".plist"):
-			runQuiet("launchctl", "bootout", "gui/"+uid, f)
-			runQuiet("launchctl", "bootout", "user/"+uid, f)
+			label, err := plistLabel(f)
+			if err != nil || label == "" {
+				continue // no label: launchd cannot have loaded it
+			}
+			for _, domain := range []string{"gui/" + uid, "user/" + uid} {
+				runQuiet("launchctl", "bootout", domain+"/"+label)
+				if runQuiet("launchctl", "print", domain+"/"+label) == nil {
+					return fmt.Errorf("the agent %s still is loaded in %s", label, domain)
+				}
+			}
 		}
 	}
 	return nil
 }
 
-func runQuiet(name string, args ...string) {
-	cmd := systemCommand(name)
+func plistLabel(file string) (string, error) {
+	cmd := systemCommand("plutil")
 	if cmd == "" {
-		return
+		return "", errors.New("no plutil")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(ctx, cmd, args...).Run()
+	out, err := exec.CommandContext(ctx, cmd, "-extract", "Label", "raw", "-o", "-", file).Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// runQuiet runs a system command with a deadline, without its output.
+func runQuiet(name string, args ...string) error {
+	cmd := systemCommand(name)
+	if cmd == "" {
+		return fmt.Errorf("no %s", name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, cmd, args...).Run()
 }
 
 // forceRemove removes path also when the guest took away the write rights or
