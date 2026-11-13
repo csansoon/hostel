@@ -482,17 +482,21 @@ Status: planned (`m10h-implementation.md`). Owner decisions of 2026-11-12
 Done when: the second Windows test flight runs with no manual step; the macOS
 cleanup and signing are shown on a real Mac; the E2E suite passes.
 
-## M11. Hardening against backdoors (later; not required for version 1)
+## M11. Hardening against backdoors (not required for version 1)
+
+Status: planned (`m11-implementation.md`). Owner decisions of 2026-11-13
+(`requirements.md`, section 3).
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the
 measures.
 
-- One OS user for each lease on macOS and Linux rooms; delete it at cleanup.
-- Read-only shared caches; a writable cache for each lease.
-- Optional egress firewall on rooms.
-- A machine option to destroy on-demand rooms after each lease.
-- Cleanup audit of persistence locations.
+- One OS user for each lease on macOS and Linux machines that opt in
+  (`lease_users`); delete it at cleanup. A narrow sudo rule gives the root step.
+- Read-only shared caches; a writable cache for each lease user.
+- A template option to destroy on-demand machines after each lease (`reuse`).
+- Cleanup audit of persistence locations: remove new items, and record them.
+- Not in M11: the egress firewall (later).
 
 E2E scenarios: a reverse-shell process without `HOSTEL_LEASE`, a crontab entry, a
 user LaunchAgent or systemd user unit, and a changed cache binary. None of them
