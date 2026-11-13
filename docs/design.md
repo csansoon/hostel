@@ -2200,7 +2200,8 @@ Hardening (milestone M11):
      runs `create` as the machine user through sudo: an existing lease user of
      that name goes first; the new user gets a user ID that was never used
      before (`/etc/hostel/lease-uid`), no administrator rights, the group
-     `hostel-leases` (its primary group on macOS), a home directory with mode
+     `hostel-leases` (its primary group on macOS; also `com.apple.access_ssh`
+     when Remote Login allows only some users), a home directory with mode
      0700, and the server key. The machine user joins the group. Then the
      machine user runs `helper share-cache` (item 2), and the server, as the
      lease user, fills its home: its own `hostel/` with copies of the machine's

@@ -274,8 +274,10 @@ func addLeaseUser(name string, uid int) error {
 			return err
 		}
 	}
-	if err := runSetup("dseditgroup", "-o", "edit", "-a", name, "-t", "user", leaseGroup); err != nil {
-		return err
+	for _, g := range macGroups() {
+		if err := runSetup("dseditgroup", "-o", "edit", "-a", name, "-t", "user", g); err != nil {
+			return err
+		}
 	}
 	return runSetup("createhomedir", "-c", "-u", name)
 }
@@ -326,6 +328,10 @@ func deleteLeaseUser(name string) error {
 		return err
 	}
 	if runtime.GOOS == "darwin" {
+		// A deleted user stays in the member lists of its groups.
+		for _, g := range macGroups() {
+			runQuietSetup("dseditgroup", "-o", "edit", "-d", name, "-t", "user", g)
+		}
 		if err := runSetup("dscl", ".", "-delete", "/Users/"+name); err != nil {
 			return err
 		}
@@ -337,6 +343,17 @@ func deleteLeaseUser(name string) error {
 		return os.RemoveAll(u.HomeDir)
 	}
 	return nil
+}
+
+// macGroups are the groups of a lease user on macOS: the lease group, and
+// the group of users that Remote Login allows, when Remote Login allows only
+// some users.
+func macGroups() []string {
+	groups := []string{leaseGroup}
+	if _, err := user.LookupGroup("com.apple.access_ssh"); err == nil {
+		groups = append(groups, "com.apple.access_ssh")
+	}
+	return groups
 }
 
 // removeAtJobs removes the at jobs of the user ("atq" lines: job, date,
