@@ -115,6 +115,9 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 			}
 		}
 	})
+	// After the room is gone: of two last rooms that clean at the same time,
+	// each saw the other's lease before; the later one restores now.
+	step("remove persistence after the room", removePersistence)
 	step("check tools", func() error {
 		var err error
 		resp.Checks, err = h.check(req.Check)

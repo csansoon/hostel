@@ -576,10 +576,15 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 			err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
 		}
 	}
+	var helperFailed error
 	if err != nil && leaseUser && !errors.Is(err, machineops.ErrUnreachable) {
 		// The lease user owns its helper and can break it; its deletion
-		// below ends and removes everything of it.
+		// below ends and removes everything of it. The stop scripts of its
+		// tools did not run, though.
 		s.log.Warn("cleanup as the lease user failed; the user is deleted", "machine_id", machineID, "room", room, "err", err)
+		if len(req.Started) > 0 {
+			helperFailed = fmt.Errorf("cleanup as the lease user (the stop scripts did not run): %w", err)
+		}
 		resp, err = protocol.CleanupResponse{}, nil
 	}
 	if err != nil {
@@ -604,6 +609,9 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	}
 	if err := s.deleteLeaseUsers(ctx, machineID, room); err != nil {
 		failed = append(failed, err.Error())
+	}
+	if helperFailed != nil {
+		failed = append(failed, helperFailed.Error())
 	}
 	if len(failed) > 0 {
 		return errors.New(strings.Join(failed, "; "))

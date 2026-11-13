@@ -76,24 +76,30 @@ func (h *helper) snapshotPersistence() error {
 		if err := copyTree(filepath.Join(home, rel), filepath.Join(files, rel)); err != nil {
 			return fmt.Errorf("copy ~/%s: %w", rel, err)
 		}
-		// A location that is a link (dotfile managers): the copy has the link;
-		// the content behind it is copied too, with the path it had.
-		fi, err := os.Lstat(filepath.Join(home, rel))
-		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
-			continue
-		}
-		real, err := filepath.EvalSymlinks(filepath.Join(home, rel))
+		// Links (dotfile managers, units linked from elsewhere): the copy has
+		// the link; the content behind it is copied too, with its path.
+		err := filepath.WalkDir(filepath.Join(home, rel), func(p string, de fs.DirEntry, err error) error {
+			if err != nil || de.Type()&fs.ModeSymlink == 0 {
+				return nil
+			}
+			real, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				return nil // a dangling link: the link itself is compared
+			}
+			rp, _ := filepath.Rel(home, p)
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(base, "links", rp)), 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(base, "links", rp), []byte(real), 0o600); err != nil {
+				return err
+			}
+			if err := copyTree(real, filepath.Join(base, "targets", rp)); err != nil {
+				return fmt.Errorf("copy the target of ~/%s: %w", rp, err)
+			}
+			return nil
+		})
 		if err != nil {
-			continue // a dangling link: the link itself is compared
-		}
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(base, "links", rel)), 0o700); err != nil {
 			return err
-		}
-		if err := os.WriteFile(filepath.Join(base, "links", rel), []byte(real), 0o600); err != nil {
-			return err
-		}
-		if err := copyTree(real, filepath.Join(base, "targets", rel)); err != nil {
-			return fmt.Errorf("copy the target of ~/%s: %w", rel, err)
 		}
 	}
 	if tab, ok, err := readCrontab(); err != nil {
@@ -153,13 +159,22 @@ func (h *helper) restorePersistence(room string) ([]string, error) {
 				continue
 			}
 		}
-		n := len(items)
 		repair(filepath.Join(home, rel), filepath.Join(base, "files", rel), rel, "~/"+rel)
-		// The link did not change: the content behind it must not either.
-		if real, err := os.ReadFile(filepath.Join(base, "links", rel)); err == nil && len(items) == n {
-			repair(string(real), filepath.Join(base, "targets", rel), rel, string(real))
-		}
 	}
+	// The links are as in the copy now: the content behind them must be too.
+	_ = filepath.WalkDir(filepath.Join(base, "links"), func(p string, de fs.DirEntry, err error) error {
+		if err != nil || de.IsDir() {
+			return nil
+		}
+		real, err := os.ReadFile(p)
+		if err != nil {
+			failed = append(failed, err.Error())
+			return nil
+		}
+		rp, _ := filepath.Rel(filepath.Join(base, "links"), p)
+		repair(string(real), filepath.Join(base, "targets", rp), rp, string(real))
+		return nil
+	})
 	if len(items) > 0 && runtime.GOOS == "linux" {
 		runQuiet("systemctl", "--user", "daemon-reload")
 	}

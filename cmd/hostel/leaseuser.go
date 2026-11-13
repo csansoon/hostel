@@ -143,7 +143,11 @@ func leaseUsers() ([]string, error) {
 		if !leaseUserName.MatchString(n) {
 			continue
 		}
-		if ok, err := isLeaseUser(n); err == nil && ok {
+		ok, err := isLeaseUser(n)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			out = append(out, n)
 		}
 	}
