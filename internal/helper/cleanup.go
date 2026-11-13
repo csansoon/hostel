@@ -97,8 +97,8 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 	step("remove persistence", removePersistence)
 	step("check", func() error { return h.checkClean(room, req.LeaseID, req.Ports) })
 	step("remove persistence again", removePersistence)
-	// The lease's marker goes, and the last restore runs, in one hold of the
-	// machine lock: of two last rooms that clean at the same time, each saw
+	// The last restore runs, and then the lease's marker goes, in one hold of
+	// the machine lock: of two last rooms that clean at the same time, each saw
 	// the other's lease before, and a begin in between must not copy this
 	// lease's persistence as the new base.
 	step("remove persistence after the room", func() error {
@@ -107,16 +107,22 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 			return err
 		}
 		defer unlock()
-		if err := os.Remove(filepath.Join(h.roomDir(room), "lease.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+		// The restore ignores this room's own marker. The marker goes only
+		// after it worked: another room's begin must not copy a partly
+		// restored state as the new base.
 		items, err := h.restorePersistenceLocked(room)
 		for _, it := range items {
 			if !slices.Contains(resp.Removed, it) {
 				resp.Removed = append(resp.Removed, it)
 			}
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(h.roomDir(room), "lease.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
 	})
 	step("delete room", func() error {
 		// Markers of jobs whose supervisor was killed.

@@ -2111,8 +2111,8 @@ failed; the result lists each step.
    (`systemd-run --user`), and the step fails when it still runs. `begin` and this step decide under a
    lock file (`hostel/machine.lock`) whether another room has a lease, so of two
    rooms that begin at the same time, the first makes the copy. The step runs a
-   third time before step 5, in one hold of the lock with the removal of the
-   lease's marker (`lease.json`): of two last rooms that clean at the same time,
+   third time before step 5, in one hold of the lock, and only when it works the
+   lease's marker (`lease.json`) goes: of two last rooms that clean at the same time,
    each saw the other's lease before, and the later one restores then; a
    `begin` cannot copy the leaving lease's persistence as the new base. The home
    directory comes from the helper's path and the commands from fixed system
