@@ -327,8 +327,9 @@ func deleteLeaseUser(name string) error {
 	for _, d := range tmp {
 		if _, err := os.Stat(d); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			// As the user: its own flags first (macOS uchg, uappnd), then its files.
-			script := `find "$1" -xdev -user "$2" -delete`
+			// As the user: its own rights and flags first (mode 000; macOS
+			// uchg, uappnd), then its files.
+			script := `find "$1" -xdev -user "$2" -type d -exec chmod u+rwx {} + 2>/dev/null; find "$1" -xdev -user "$2" -delete`
 			if runtime.GOOS == "darwin" {
 				script = `find "$1" -xdev -user "$2" -exec chflags -h nouchg,nouappnd {} + 2>/dev/null; ` + script
 			}
@@ -336,8 +337,12 @@ func deleteLeaseUser(name string) error {
 			asUser(cmd, uid, gid)
 			// BSD find opens the current directory, which the user may not read.
 			cmd.Dir = "/"
-			_ = cmd.Run()
+			_ = cmd.Run() // fails for directories of other users that it cannot read
 			cancel()
+			// Root only looks: is a file of the user left?
+			if left, _ := setupOutput("find", d, "-xdev", "-user", name, "-print", "-quit"); strings.TrimSpace(left) != "" {
+				return fmt.Errorf("a file of %s is left in %s: %s", name, d, strings.TrimSpace(left))
+			}
 		}
 	}
 	if err := killUser(name); err != nil {

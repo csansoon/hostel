@@ -255,7 +255,8 @@ func TestLeaseUsers(t *testing.T) {
 		t.Fatalf("shared cache and machine rooms seen by the lease user: %q", r.stdout)
 	}
 	f.e.mustHostel("run", "--", "nohup env -i setsid sleep 1005 > /dev/null 2>&1 < /dev/null & "+
-		"echo '* * * * * true door' | crontab - && touch /tmp/door-$(id -un)")
+		"echo '* * * * * true door' | crontab - && touch /tmp/door-$(id -un) && "+
+		"mkdir -p /tmp/locked/inner && touch /tmp/locked/inner/f && chmod 000 /tmp/locked")
 	procs := "for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null; echo; done | grep -c '^sleep 1005' || true"
 	f.e.waitFor("the backdoor process runs", time.Minute, func() bool { return f.c.sh(procs) == "1" })
 	// The lease user breaks its helper and its login: cleanup still deletes it.

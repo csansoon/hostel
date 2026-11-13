@@ -2102,7 +2102,11 @@ failed; the result lists each step.
    label cannot be read fails the step. For each link in these locations (also
    inside the directories, and inside linked directories, at most 8 deep), the
    copy also has the content behind the link and its path, and a changed target
-   is restored too. `begin` and this step decide under a
+   is restored too. The copy also lists the loaded user services (systemd units
+   of the user manager; launchd services of the gui and user domains); a service
+   that was not loaded then is stopped (on macOS not Apple's own, which macOS
+   starts at any time), also one that changed its file or has none
+   (`systemd-run --user`), and the step fails when it still runs. `begin` and this step decide under a
    lock file (`hostel/machine.lock`) whether another room has a lease, so of two
    rooms that begin at the same time, the first makes the copy. The step runs a
    third time before step 5, in one hold of the lock with the removal of the
@@ -2192,7 +2196,7 @@ What a guest can still do in version 1 (on a lease without a lease user):
 - Start a process without `HOSTEL_LEASE` (for example with `env -i`) that connects
   out from the machine (a reverse shell). Cleanup does not find it.
 - Add persistence for the machine user in a place that the M11 audit does not
-  check, or a transient unit (`systemd-run --user`) that has no file. Before M11:
+  check. Before M11:
   `crontab`, `~/Library/LaunchAgents`, systemd user units, shell startup files, or
   `~/.ssh/rc`.
 - Put a changed binary in a shared cache (`hostel/cache`, mise tools, package
@@ -2231,7 +2235,9 @@ Hardening (milestone M11):
      `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs (a
      failure stops the deletion, so the room stays blocked), and
      its files in the shared temporary directories (`find -delete` as the user,
-     after it clears its own macOS flags), then its home directory (after root
+     after it gives its own directories back their rights and clears its own
+     macOS flags; then root only looks with `find -print`, and a file that is
+     left stops the deletion), then its home directory (after root
      clears the macOS flags `uchg` and `uappnd` without following links), then
      the user record. A repeated deletion that finds no user removes a home
      directory that is left. The lease user owns its helper and

@@ -82,6 +82,11 @@ func (h *helper) snapshotPersistence() error {
 			return err
 		}
 	}
+	if names, ok := loadedServices(); ok {
+		if err := os.WriteFile(filepath.Join(base, "services"), []byte(strings.Join(names, "\n")), 0o600); err != nil {
+			return err
+		}
+	}
 	if tab, ok, err := readCrontab(); err != nil {
 		return err
 	} else if ok {
@@ -211,6 +216,15 @@ func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
 	})
 	if len(items) > 0 && runtime.GOOS == "linux" {
 		runQuiet("systemctl", "--user", "daemon-reload")
+	}
+	// Services loaded since the copy, also from a changed file or with no
+	// file (systemd-run --user).
+	if before, err := os.ReadFile(filepath.Join(base, "services")); err == nil {
+		stopped, err := stopNewServices(strings.Split(string(before), "\n"))
+		items = append(items, stopped...)
+		if err != nil {
+			failed = append(failed, err.Error())
+		}
 	}
 	if item, err := restoreCrontab(base); err != nil {
 		failed = append(failed, "crontab: "+err.Error())
@@ -358,7 +372,17 @@ func copyTree(src, dst string) error {
 // leave units running.
 func unloadAgents(path string, deadline time.Time) error {
 	files := []string{path}
-	if des, err := os.ReadDir(path); err == nil {
+	if fi, err := os.Lstat(path); err == nil && fi.IsDir() {
+		des, err := os.ReadDir(path)
+		if err != nil {
+			// A guest can take away the rights (mode 000); the user owns it.
+			if cerr := os.Chmod(path, 0o700); cerr != nil {
+				return fmt.Errorf("read %s: %w", path, err)
+			}
+			if des, err = os.ReadDir(path); err != nil {
+				return fmt.Errorf("read %s: %w", path, err)
+			}
+		}
 		files = files[:0]
 		for _, de := range des {
 			files = append(files, filepath.Join(path, de.Name()))
@@ -405,6 +429,103 @@ func plistLabel(file string) (string, error) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, cmd, "-extract", "Label", "raw", "-o", "-", file).Output()
 	return strings.TrimSpace(string(out)), err
+}
+
+// loadedServices lists the loaded user services: systemd units of the user
+// manager, or launchd services of the user's gui and user domains
+// ("<domain>/<label>"). ok is false when the machine has none to list.
+func loadedServices() (names []string, ok bool) {
+	switch runtime.GOOS {
+	case "linux":
+		out, err := outputQuiet("systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "--no-pager",
+			"--type=service,timer,socket,path")
+		if err != nil {
+			return nil, false
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if f := strings.Fields(line); len(f) > 0 {
+				names = append(names, f[0])
+			}
+		}
+		return names, true
+	case "darwin":
+		uid := strconv.Itoa(os.Getuid())
+		for _, domain := range []string{"gui/" + uid, "user/" + uid} {
+			out, err := outputQuiet("launchctl", "print", domain)
+			if err != nil {
+				continue // no gui session
+			}
+			ok = true
+			in := false
+			for _, line := range strings.Split(out, "\n") {
+				switch t := strings.TrimSpace(line); {
+				case t == "services = {":
+					in = true
+				case in && t == "}":
+					in = false
+				case in:
+					if f := strings.Fields(t); len(f) > 0 {
+						names = append(names, domain+"/"+f[len(f)-1])
+					}
+				}
+			}
+		}
+		return names, ok
+	}
+	return nil, false
+}
+
+// stopNewServices stops the loaded services that are not in before (not
+// Apple's on macOS: macOS starts them at any time), and fails for one that
+// still runs.
+func stopNewServices(before []string) ([]string, error) {
+	now, ok := loadedServices()
+	if !ok {
+		return nil, nil
+	}
+	had := map[string]bool{}
+	for _, n := range before {
+		had[n] = true
+	}
+	var stopped, failed []string
+	for _, n := range now {
+		if had[n] || n == "" {
+			continue
+		}
+		switch runtime.GOOS {
+		case "linux":
+			runQuiet("systemctl", "--user", "stop", "--", n)
+			if runQuiet("systemctl", "--user", "is-active", "--quiet", "--", n) == nil {
+				failed = append(failed, "the user unit "+n+" still runs")
+				continue
+			}
+		case "darwin":
+			if label := n[strings.LastIndex(n, "/")+1:]; strings.HasPrefix(label, "com.apple.") {
+				continue
+			}
+			runQuiet("launchctl", "bootout", n)
+			if runQuiet("launchctl", "print", n) == nil {
+				failed = append(failed, "the agent "+n+" still is loaded")
+				continue
+			}
+		}
+		stopped = append(stopped, "service "+n)
+	}
+	if len(failed) > 0 {
+		return stopped, errors.New(strings.Join(failed, "; "))
+	}
+	return stopped, nil
+}
+
+func outputQuiet(name string, args ...string) (string, error) {
+	cmd := systemCommand(name)
+	if cmd == "" {
+		return "", fmt.Errorf("no %s", name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, cmd, args...).Output()
+	return string(out), err
 }
 
 // runQuiet runs a system command with a deadline, without its output.
