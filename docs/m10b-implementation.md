@@ -118,6 +118,6 @@ Smoke (owner's done-when): on `hostel.example.com`, with a coworker's lease.
 - **Terminal emulation in tests.** Bubble Tea draws only changed lines; the
   test must read the screen through an emulator, not the raw bytes.
 - **Windows console.** Bubble Tea supports it; the owner's done-when is on macOS.
-  A Windows check runs on `win-pc` (SSH, no GUI) at the end.
+  A Windows check runs on the Windows VM (SSH, no GUI) at the end.
 - **Live use on macOS.** `vm_stat` and `top` are slow or need parsing; a deadline
   and best effort keep the page fast.

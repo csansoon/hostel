@@ -1,6 +1,6 @@
 # $args[0] is the output path. SSH sessions have no screen, so the capture runs
 # in the desktop session through "desktop" (the Hostel desktop task,
-# docs/static-machine-setup.md, Windows, step 6).
+# docs/machine-setup.md, section 4.4).
 param([string] $Out, [switch] $Capture)
 $ErrorActionPreference = 'Stop'
 if (-not $Capture) {

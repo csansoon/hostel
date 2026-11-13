@@ -23,7 +23,7 @@ import (
 
 // The desktop program ("machine desktop serve") runs as the machine user in the
 // desktop session, which SSH sessions cannot reach (Windows: a scheduled task
-// of the desktop user starts it; m7-implementation.md). "helper desktop run"
+// starts it when the machine user signs in; machine-setup.md, section 4.4). "helper desktop run"
 // sends it a command of a lease, and it runs the command there.
 
 const (
@@ -220,14 +220,19 @@ func (h *helper) desktopServeConn(conn net.Conn, token string, n int, track func
 	env := envMap(req.Env)
 	env["HOSTEL_LEASE"] = lease.LeaseID
 	env["HOSTEL_ROOM"] = req.Room
+	dir := req.Dir
+	if dir == "" {
+		dir = h.workDir(req.Room)
+	}
 	path, err := lookPath(req.Argv[0], envList(env))
 	if err != nil {
 		fail(fmt.Errorf("%s: command not found in the lease PATH", req.Argv[0]))
 		return
 	}
-	dir := req.Dir
-	if dir == "" {
-		dir = h.workDir(req.Room)
+	// Windows resolves a relative program path against the desktop program's
+	// directory, not against the command's directory.
+	if path == req.Argv[0] && !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
 	}
 	cmd := &exec.Cmd{Path: path, Args: req.Argv, Dir: dir, Env: envList(env), WaitDelay: desktopWaitDelay}
 	if !req.Detach {
@@ -305,7 +310,7 @@ func (h *helper) desktopRun(args []string, stdout, stderr io.Writer) int {
 		conn, err = net.DialTimeout("tcp", addr.Addr, desktopDialTimeout)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "hostel: this machine has no desktop session (%v). The machine needs a signed-in desktop and the Hostel desktop task (docs/static-machine-setup.md).\n", err)
+		fmt.Fprintf(stderr, "hostel: this machine has no desktop session (%v). The machine needs a signed-in desktop and the Hostel desktop task (docs/machine-setup.md).\n", err)
 		return 69
 	}
 	defer conn.Close()

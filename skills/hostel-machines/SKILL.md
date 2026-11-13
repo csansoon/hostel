@@ -118,7 +118,7 @@ env = { HOSTEL_IOS_RUNTIME = "26.5" }
   machine's `env` keys replace keys with the same name; a machine's `tools` list replaces
   the provider's list.
 - The server pins the machine's SSH host key at the first connection.
-- Windows by hand: `docs/static-machine-setup.md`, section "Windows" (the user,
+- Windows by hand: `docs/machine-setup.md`, section 8 (the user,
   and the access rules of `authorized_keys` that OpenSSH requires).
 - For a public address: allow inbound SSH only from the server, or use
   `connect = true` (the join flow) and close inbound SSH.

@@ -199,16 +199,20 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "\nDone: %s connects to %s. \"hostel status\" shows its machine within a minute.\n", st.Template, st.Server)
 	switch osName {
 	case config.OSMacOS:
-		fmt.Fprintln(stdout, `Steps that only a person can do (docs/static-machine-setup.md):
+		fmt.Fprintln(stdout, `Steps that only a person can do (docs/machine-setup.md, section 3):
   - System Settings > General > Sharing > Remote Login: on, for the user "hostel".
-  - For iOS: install Xcode and its iOS Simulator runtime.
-  - For desktop leases (label "desktop"): sign in "hostel" to the desktop, and set "Require password" to Never.`)
+  - For xcode and ios-simulator: install Xcode and its iOS Simulator runtime.
+  - For ios-simulator and macos-desktop: automatic login of "hostel", no screen lock.
+  - For macos-desktop: Screen Recording for sshd-keygen-wrapper, and Automation Mode.
+  - For Mac app QA: apps in /Applications, privacy permissions, and signing (optional).`)
 	case config.OSWindows:
-		fmt.Fprintln(stdout, `Steps that only a person can do (docs/static-machine-setup.md):
+		fmt.Fprintln(stdout, `Steps that only a person can do (docs/machine-setup.md, section 4):
   - OpenSSH Server must run and start automatically (Get-Service sshd).
-  - For desktop leases (label "desktop"): the "Hostel desktop" task, section "Desktop".`)
+  - The build tools for all users (.NET SDK, Windows SDK, PowerShell 7).
+  - For windows-desktop: a signed-in desktop and the "Hostel desktop" task.
+  - For signed packages: read access for "hostel" to the certificate's private key (optional).`)
 	default:
-		fmt.Fprintln(stdout, "The SSH server must run on this machine (port 22) and allow key login for \"hostel\".")
+		fmt.Fprintln(stdout, "The SSH server must run on this machine (port 22) and allow key login for \"hostel\". For android-emulator, \"hostel\" needs /dev/kvm (docs/machine-setup.md, section 5).")
 	}
 	return 0
 }

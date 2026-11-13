@@ -133,7 +133,7 @@ type Mise struct {
 
 type Provider struct {
 	Kind string `toml:"kind"`
-	// Label is the name that people see ("Windows 365"); default: the key.
+	// Label is the name that people see ("Office"); default: the key.
 	Label       string               `toml:"label,omitempty"`
 	MaxMachines *int                 `toml:"max_machines,omitempty"`
 	Limits      []Limit              `toml:"limits,omitempty"`

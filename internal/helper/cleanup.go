@@ -94,7 +94,13 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 				}
 			}
 		}
-		return os.RemoveAll(h.roomDir(room))
+		// Windows: a file of an ended process can stay open for a short time.
+		var err error
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+			if err = os.RemoveAll(h.roomDir(room)); err == nil || time.Now().After(deadline) {
+				return err
+			}
+		}
 	})
 	step("check tools", func() error {
 		var err error
@@ -219,13 +225,28 @@ func (h *helper) restoreAuthorizedKeys() error {
 // The machine's SSH server removes its listeners after the connections close, so
 // the port check retries for up to 10 seconds.
 func (h *helper) checkClean(room, leaseID string, ports []int) error {
-	left, err := h.leaseProcesses(room, leaseID)
-	if err != nil {
-		return err
+	// A process that was told to end can need some time (Windows: a process in
+	// a system call ends when the call returns), or it started during the stop.
+	var left []int
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		var err error
+		if left, err = h.leaseProcesses(room, leaseID); err != nil {
+			return err
+		}
+		if len(left) == 0 || time.Now().After(deadline) {
+			break
+		}
+		for _, p := range left {
+			signalProcess(p, true)
+		}
 	}
 	if len(left) > 0 {
 		sort.Ints(left)
-		return fmt.Errorf("processes of the lease still run: %v", left)
+		names := make([]string, len(left))
+		for i, p := range left {
+			names[i] = fmt.Sprintf("%d (%s)", p, processName(p))
+		}
+		return fmt.Errorf("processes of the lease still run: %s", strings.Join(names, ", "))
 	}
 	addrs := []string{"127.0.0.1"}
 	if ln, err := net.Listen("tcp", "[::1]:0"); err == nil {

@@ -47,8 +47,8 @@ Hostel server setup
   >
   Your name [Alex Example]:
 
-Wrote /home/exedev/.config/hostel/server.toml
-Wrote the server keys and the TLS certificate to /home/exedev/.local/share/hostel
+Wrote /home/hostel/.config/hostel/server.toml
+Wrote the server keys and the TLS certificate to /home/hostel/.local/share/hostel
 (Run "hostel server run" as a service: see the hostel-server-setup skill.)
 
 Connect your computer as the first admin. Run this on your computer:
@@ -66,7 +66,7 @@ The code works once, for 24 hours.
     serves the API and the gateway (SSH in WebSocket, `/v1/gateway`) over HTTPS
     on one address. Clients pin its key from the invite code. No domain and no
     certificate authority are necessary.
-  - `off`: for a server behind a proxy with TLS (exe.dev, Caddy). Clients check
+  - `off`: for a server behind a proxy with TLS (for example Caddy). Clients check
     the proxy's certificate in the normal way.
 
 ## 4. Connecting a client

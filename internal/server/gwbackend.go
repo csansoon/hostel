@@ -57,6 +57,12 @@ func (b gwBackend) Ready(ctx context.Context, leaseID string) bool {
 	return err == nil && l.State == protocol.LeaseReady
 }
 
+// TrafficInterval is 30 s, or a quarter of idle_timeout when that is shorter
+// (tests), so that data always renews the lease before it is idle.
+func (b gwBackend) TrafficInterval() time.Duration {
+	return min(30*time.Second, b.s.config().IdleTimeout.D()/4)
+}
+
 func (b gwBackend) Activity(leaseID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

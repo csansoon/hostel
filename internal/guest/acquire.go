@@ -514,7 +514,7 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 	}
 	fmt.Fprintf(w, "  room:       %s\n", a.Room)
 	fmt.Fprintf(w, "  work dir:   %s\n", a.WorkDir)
-	fmt.Fprintf(w, "  expires:    %s at the latest; without activity at %s (each hostel command extends it)\n",
+	fmt.Fprintf(w, "  expires:    %s at the latest; without activity at %s (each hostel command and tunnel data extend it)\n",
 		a.ExpiresAt.Local().Format(time.DateTime), a.IdleExpiresAt.Local().Format(time.DateTime))
 	tunnels, _ := loadTunnels(st)
 	if len(tunnels) > 0 {

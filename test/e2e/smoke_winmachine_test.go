@@ -64,8 +64,8 @@ os = "windows"
 	return e, s
 }
 
-// TestSmokeWindows runs against a real static Windows machine (M6; the owner's
-// Cloud PC win-pc). It runs only with HOSTEL_SMOKE_WINDOWS=<user@host[:port]>
+// TestSmokeWindows runs against a real static Windows machine (M6), for
+// example a Windows VM. It runs only with HOSTEL_SMOKE_WINDOWS=<user@host[:port]>
 // ("make test-smoke-windows", which builds the Windows helper first).
 // HOSTEL_SMOKE_WINDOWS_KEY is the private key that the machine user accepts; it
 // becomes the test server's key. The machine user must have no other work: the

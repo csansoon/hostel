@@ -3,10 +3,25 @@
 package helper
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 )
+
+// processName returns the command name of a process, or "unknown".
+func processName(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if name := strings.TrimSpace(string(out)); err == nil && name != "" {
+		return name
+	}
+	return "unknown"
+}
 
 // startInGroup starts cmd in a new process group. The name is for Windows.
 func startInGroup(cmd *exec.Cmd, _ string) error {

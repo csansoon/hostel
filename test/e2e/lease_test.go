@@ -43,6 +43,8 @@ type fixtureOpts struct {
 	roomUsers []string
 	// helperDir replaces the shared helper_dir (a test that changes it).
 	helperDir string
+	// tunnelCheck replaces the interval tunnel_check (default 1s).
+	tunnelCheck string
 }
 
 func defaultRepoFiles() map[string]string {
@@ -85,6 +87,9 @@ func newFixtureWithEnv(t *testing.T, e *env, opts *fixtureOpts) *fixture {
 	header := serverHeaderWith(opts.agentDevice)
 	if opts.helperDir != "" {
 		header = strings.Replace(header, fmt.Sprintf("helper_dir = %q", helperDir), fmt.Sprintf("helper_dir = %q", opts.helperDir), 1)
+	}
+	if opts.tunnelCheck != "" {
+		header = strings.Replace(header, `tunnel_check = "1s"`, fmt.Sprintf("tunnel_check = %q", opts.tunnelCheck), 1)
 	}
 	e.writeConfig(header + opts.serverKeys + fmt.Sprintf(`
 [providers.home]

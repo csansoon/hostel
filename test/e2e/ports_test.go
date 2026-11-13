@@ -240,6 +240,103 @@ func TestForwards(t *testing.T) {
 	})
 }
 
+// TestPortsNextLease: the port process of an expired lease stops only at its
+// next lease check (tunnel_check). The next lease in the same repository stops
+// it and starts its own, so the next lease's tunnel works.
+func TestPortsNextLease(t *testing.T) {
+	t.Parallel()
+	port := localHTTP(t, "127.0.0.1:0", "guest")
+	f := newFixture(t, &fixtureOpts{serverKeys: "idle_timeout = \"3s\"\n", tunnelCheck: "5m", files: map[string]string{
+		"hostel.toml": "[tunnels.api]\nlocal_port = " + fmt.Sprint(port) + "\n",
+	}})
+	f.acquire()
+	f.waitRoomFree()
+	if r := f.e.hostel("run", "--", "true"); r.code != 1 || !strings.Contains(r.stderr, "ended (expired: idle") {
+		t.Fatalf("run after the first lease: %s", r)
+	}
+	f.acquire()
+	r := f.e.mustHostel("run", "--", `printf 'GET / HTTP/1.0\r\n\r\n' | nc -N -w 5 127.0.0.1 "$HOSTEL_TUNNEL_API_PORT"`)
+	if !strings.Contains(r.stdout, "guest") {
+		t.Fatalf("tunnel of the next lease: %s", r)
+	}
+}
+
+// TestTrafficActivity is scenario 14 (activity): data through a tunnel or a
+// forward keeps a lease active without hostel commands; when the data stops,
+// the lease expires after idle_timeout.
+func TestTrafficActivity(t *testing.T) {
+	t.Parallel()
+	port := localHTTP(t, "127.0.0.1:0", "guest")
+	f := newFixture(t, &fixtureOpts{serverKeys: "idle_timeout = \"4s\"\n", files: map[string]string{
+		"hostel.toml": "[tunnels.api]\nlocal_port = " + fmt.Sprint(port) + "\n",
+	}})
+
+	// Tunnel: a detached job (which alone does not keep the lease) sends
+	// requests from the machine to the guest for 16 s, 4 × idle_timeout.
+	f.acquire()
+	f.e.mustHostel("run", "--detach", "--", `end=$(($(date +%s)+16)); while [ "$(date +%s)" -lt "$end" ]; do printf 'GET / HTTP/1.0\r\n\r\n' | nc -N -w 2 127.0.0.1 "$HOSTEL_TUNNEL_API_PORT" >/dev/null; sleep 0.5; done`)
+	f.staysLeased(14 * time.Second)
+	f.waitRoomFree()
+	if r := f.e.hostel("run", "--", "true"); r.code != 1 || !strings.Contains(r.stderr, "ended (expired: idle") {
+		t.Fatalf("run after the tunnel traffic: %s", r)
+	}
+
+	// Forward: the guest connects to a machine server for 16 s.
+	f.acquire()
+	f.e.mustHostel("run", "--detach", "--", "while true; do echo hello-machine | nc -N -l 127.0.0.1 7700; done")
+	local := strings.TrimSpace(f.e.mustHostel("forward", "7700").stdout)
+	stop := time.Now().Add(16 * time.Second)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for time.Now().Before(stop) {
+			if c, err := net.DialTimeout("tcp", local, 2*time.Second); err == nil {
+				c.SetDeadline(time.Now().Add(2 * time.Second))
+				io.ReadAll(c)
+				c.Close()
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+	f.staysLeased(14 * time.Second)
+	<-done
+	f.waitRoomFree()
+}
+
+// TestRuntimeTunnelEnds is scenario 14 (runtime tunnels): a tunnel that a lease
+// added with "hostel tunnel add" does not come back in the next lease of a
+// repository without tunnels.
+func TestRuntimeTunnelEnds(t *testing.T) {
+	t.Parallel()
+	port := localHTTP(t, "127.0.0.1:0", "guest")
+	f := newFixture(t, nil)
+	f.acquire()
+	f.e.mustHostel("tunnel", "add", "extra", "--local-port", fmt.Sprint(port))
+	if r := f.e.mustHostel("run", "--", "echo $HOSTEL_TUNNEL_EXTRA_PORT"); strings.TrimSpace(r.stdout) == "" {
+		t.Fatalf("the runtime tunnel has no port in the lease: %s", r)
+	}
+	f.e.mustHostel("release")
+	f.waitRoomFree()
+	f.acquire()
+	if r := f.e.mustHostel("info"); strings.Contains(r.stdout, "extra") {
+		t.Fatalf("the tunnel of the last lease came back: %s", r.stdout)
+	}
+	if r := f.e.mustHostel("run", "--", "echo \"[$HOSTEL_TUNNEL_EXTRA_PORT]\""); strings.TrimSpace(r.stdout) != "[]" {
+		t.Fatalf("the tunnel of the last lease is in the environment: %s", r)
+	}
+}
+
+// staysLeased fails if the fixture's room becomes free within d.
+func (f *fixture) staysLeased(d time.Duration) {
+	f.e.t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(500 * time.Millisecond) {
+		r := f.s.machine("home/box")
+		if len(r.Rooms) == 1 && r.Rooms[0].LeaseID == "" {
+			f.e.t.Fatalf("the lease ended %s before the traffic stopped", time.Until(end).Round(time.Second))
+		}
+	}
+}
+
 // lease1 returns the lease ID of the fixture's repository.
 func (f *fixture) lease1(t *testing.T) string {
 	t.Helper()

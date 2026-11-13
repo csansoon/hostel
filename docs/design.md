@@ -170,7 +170,7 @@ The guest sees only tools.
   account limits, and defaults for its machines.
 - A `static` provider is a named group of real hosts: each entry under
   `machines` is one machine. Its `label` is the name that people see, for example
-  "Windows 365" or "Office".
+  "Office" or "Lab".
 - An on-demand provider (`namespace`, `external`) has **templates**. A template
   gives up to its `max_machines` machines at the same time. The provider creates
   them when a lease needs one.
@@ -718,7 +718,7 @@ path as a key (for example Xcode DerivedData) are therefore reused.
    `cmd` and in PowerShell), and then `echo %OS%` to find the SSH server's default
    shell: `cmd` prints `Windows_NT`, PowerShell prints `%OS%`. The shell goes to
    `machines.shell`; the server and the gateway quote each command for it (package
-   `shell`). Only the PowerShell default shell is tested (on `win-pc`); `cmd`
+   `shell`). Only the PowerShell default shell is tested (on a Windows VM); `cmd`
    is not (its quoting rules for `cmd /c` with several quoted words are a risk). A PowerShell command line ends with `exit $LASTEXITCODE`, because
    PowerShell itself exits with 0 or 1. The result selects
    `hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>` from `helper_dir` (Go names:
@@ -1225,13 +1225,25 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   watchdog; a retry a few seconds later works.
 - **Desktop cleanup (M7).** Apps that a guest starts with `open` are children of
   launchd, without `HOSTEL_LEASE` and outside the lease's sessions, so the process
-  cleanup (section 17) does not find them. For a desktop lease
-  (`macos-desktop`), its `start.macos.sh` records the foreground apps
-  (`lsappinfo`; PID, start time, bundle ID) and the entries of
-  `~/Applications`, and its `stop.macos.sh` ends each foreground app that was not
-  running then (SIGKILL: a quit can wait at a save dialog; not Finder or the
-  Dock), deletes its saved window state, ends the `agent-device` runner, and
-  deletes the new entries of `~/Applications`. A lease without `macos-desktop`
+  cleanup (section 17) does not find them. Agents that an app registers
+  (`SMAppService`, `launchctl bootstrap`) are jobs of the user's launchd domain.
+  A desktop lease holds the whole machine, so all of these belong to it. For a
+  desktop lease (`macos-desktop`), its `start.macos.sh` records the apps of all
+  types (`lsappinfo`; PID, start time, type, bundle ID, executable), the jobs of
+  `gui/<uid>`, and the entries of `~/Applications` and `~/Library/LaunchAgents`.
+  Its `stop.macos.sh` (M10h) first runs `launchctl bootout` on each new job that
+  is not `com.apple.*` and deletes the new plists in `~/Library/LaunchAgents`.
+  Then it ends each app that was not running at the start (SIGKILL: a quit can
+  wait at a save dialog): a foreground app, except Finder and the Dock, or a
+  background app (UI element or background only) that is not `com.apple.*` and
+  not under `/System`, `/usr`, `/Library/Apple`, `/bin`, or `/sbin` (macOS starts
+  its own agents at any time). It deletes their saved window state, ends the
+  `agent-device` runner, and deletes the new entries of `~/Applications`. Jobs
+  and apps from before the lease stay. Tested on a real Mac (2026-11-12): a
+  test launch agent, a background app, and a new foreground app ended; the
+  agents from before stayed. A lease without `macos-desktop` does not get this
+  cleanup: apps that it opens stay (found on a real Mac: windows from earlier
+  leases still ran days later). A lease without `macos-desktop`
   does not touch the desktop. The machine needs an unlocked desktop session: a locked screen
   gives the lock screen to `screencapture` and blocks the runner (found on the
   static MacBook, 2026-10-29).
@@ -1240,13 +1252,15 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
 
 - The guest asks for it with `hostel acquire windows-desktop` (with `dotnet` or
   other tools to build; `whole_machine = true`, as on the Mac). The owner lists
-  `windows-desktop` only for a machine with a signed-in desktop user and the
-  "Hostel desktop" task (`static-machine-setup.md`, Windows, step 6).
+  `windows-desktop` only for a machine whose desktop user is the machine user
+  (automatic sign-in) and that has the "Hostel desktop" task (`machine-setup.md`,
+  section 4.4).
 - **The desktop program.** SSH sessions (Windows session 0) cannot show
-  windows, take screenshots, or use UI Automation. The task of the desktop user
-  starts `hostel helper desktop serve` as the machine user in the desktop session
-  (`Start-Process -Credential`; the Secondary Logon service gives it access to
-  that desktop). It listens on `127.0.0.1` with a random port; `hostel/desktop.json`
+  windows, take screenshots, or use UI Automation. The task of the machine user
+  starts `hostel helper desktop serve` at its sign-in, in its desktop session.
+  (Until M10h, the desktop user was another user, and its task started the
+  program with `Start-Process -Credential`; packaged apps cannot start that way.)
+  It listens on `127.0.0.1` with a random port; `hostel/desktop.json`
   (only the machine user can read it) has the address and a random token. It ends
   when the helper file changes, and the task starts the new helper.
 - **`desktop [--detach] <command>`** (`hostel/bin/desktop`, `hostel helper
@@ -1273,12 +1287,23 @@ simulator. The screen tool `macos-desktop` gives it. Rules:
   window.
 - **Screenshot.** `tools/windows-desktop/screenshot.windows.ps1` captures the
   whole desktop through `desktop`.
-- **Limits.** The apps of a lease run as the machine user, but they share the
-  desktop with the desktop user's windows: real input can reach a window of
-  the desktop user that is not elevated. An app that is started through the
-  shell (for example a packaged app through its activation) is not a child of
-  the program and has no `HOSTEL_LEASE`, so cleanup does not end it. A
-  disconnected or locked desktop stops real input and screenshots.
+- **Limits.** The desktop user must be the machine user: a packaged app (MSIX)
+  starts only for the user of the desktop session (with another user, activation
+  fails with `0x80070520`, "A specified logon session does not exist"; M10h test
+  flight, 2026-11-12). Windows 11 has one desktop session: a Remote Desktop
+  connection of another user disconnects it, and a disconnected or locked
+  desktop stops real input and screenshots.
+- **Desktop cleanup (M10h).** Programs that the shell starts for a lease
+  (`explorer.exe <file>`, packaged apps) are not children of the lease and do
+  not have `HOSTEL_LEASE`. `start.windows.ps1` records the processes of the
+  desktop session and the packages of the machine user (`Get-AppxPackage`).
+  `stop.windows.ps1` ends the new processes of the session (not `hostel.exe`
+  and `explorer.exe`, and not programs in the Windows folder, which Windows
+  starts at any time), and removes the packages that the lease installed, with
+  their app data. Install packages through `desktop`: in a job (a network logon),
+  `Add-AppxPackage` fails with `0x80070005` when the machine user has a desktop
+  session (M10h). Other files
+  and settings of the machine user stay for the next lease, as on macOS.
 
 ### mise on machines
 
@@ -1735,7 +1760,7 @@ guest ──SSH (lease key)──► gateway ──SSH (server key)──► mac
 
 - **Transport.** The gateway listens on TCP (`gateway_listen`). It also accepts
   the same SSH inside a WebSocket (binary messages) on the API listener at
-  `GET /v1/gateway`, for a server that only HTTPS reaches (an exe.dev VM, M5).
+  `GET /v1/gateway`, for a server that only HTTPS reaches (a VPS behind an HTTPS proxy, M5).
   `gateway_public` tells guests which one to use: a `host:port`, or a `ws://` or
   `wss://` URL (port 0 means the real port). For the system `ssh` (`hostel ssh`,
   `hostel shell`), the ssh_config of a WebSocket gateway has a `ProxyCommand`
@@ -1919,6 +1944,11 @@ handles all tunnels and forwards of the lease.
   and have mode 0700, because `/tmp` is shared. On Windows the socket is a Unix
   socket in `%LOCALAPPDATA%\hostel\` (Go supports Unix sockets on Windows 10 and
   later), so no named pipe is necessary.
+- **Next lease.** All leases of a repository use the same socket. The process of
+  an ended lease stops only at its next lease check (`tunnel_check`). Its ping
+  answer has its lease ID; when the ID is not the current lease, a lease command
+  stops that process, waits until the socket no longer answers, and starts its
+  own. Only the listener's close removes the socket file.
 - **Files.** The tunnels of a lease (local port source, requested and given machine
   port) are in `tunnels.json` in the local state directory; only `acquire` (before
   the process starts) and the process write it. The process writes its log to
@@ -1979,9 +2009,13 @@ handles all tunnels and forwards of the lease.
 ## 16. Activity and expiry
 
 - `last_activity_at` changes when a guest calls `touch`, when a `cmd` connection
-  opens, and when a `cmd` connection closes.
+  opens, when a `cmd` connection closes, and when data goes through a tunnel or a
+  forward of the lease, in either direction (M10h). The gateway records data at
+  most once per 30 s, or per a quarter of `idle_timeout` when that is shorter. So a
+  test on the guest that only uses a tunnel keeps its lease. Hostel's own checks
+  send no data on these channels: a tunnel is confirmed by its remote listen.
 - A lease is active while the gateway has an open `cmd` connection for it.
-  `ports` connections do not count.
+  An open `ports` connection, tunnel, or forward without data does not count.
 - A `ready` lease expires when it has no open `cmd` connection and
   `last_activity_at` is older than `idle_timeout` (default 10 minutes).
 - At server start, `last_activity_at` of each `ready` lease and `last_poll_at` of
@@ -2039,7 +2073,9 @@ failed; the result lists each step.
    reverse order of `start`. If `rooms/<room>/` does not exist (a repeated cleanup
    after step 5), the helper creates it empty first; `stop` must then do nothing.
 3. Restore `authorized_keys` from `authorized_keys.base`.
-4. Check that no process of the lease (step 1) remains, and that the room
+4. Check that no process of the lease (step 1) remains: for up to 10 seconds,
+   end the ones that still run (a process can need time to end, or it started
+   during step 2), then fail with their PIDs and names (M10h). Check that the room
    ports and the lease's fixed machine ports (`ports` in the input) are free: try to
    bind each port on `127.0.0.1` and on `::1` (skip `::1` if the machine has no IPv6
    loopback address), and retry for up to 10 seconds, because
@@ -2079,8 +2115,8 @@ Warm policy after cleanup:
 - **Transport.** With `tls = "self-signed"`, the API and the WebSocket gateway are
   HTTPS with the server's own certificate; clients check its key against the
   key that they pinned from the invite code (`internal/tlspin`), not the name or a
-  chain. With `tls = "off"`, the server is behind a proxy with TLS (exe.dev,
-  Caddy), and clients use the system roots. Both SSH
+  chain. With `tls = "off"`, the server is behind a proxy with TLS (for
+  example Caddy), and clients use the system roots. Both SSH
   legs (guest to gateway, gateway to machine) are encrypted. The gateway sees the
   plaintext.
 - **Revocation.** Guests have no machine credentials. Ending a lease closes its

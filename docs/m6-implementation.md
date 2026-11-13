@@ -1,15 +1,15 @@
 # M6 implementation plan
 
 Status: in progress (2026-10-29). Milestone M6 in `plan.md`: Windows rooms and
-several slots for each room. The Windows room is the owner's cloud Windows PC
-`win-pc` (owner decision, 2026-10-29). This file gives the facts, the decisions,
+several slots for each room. The Windows room is a Windows VM
+(owner decision, 2026-10-29). This file gives the facts, the decisions,
 the build order, and the risks. `design.md` stays the contract.
 
 ## 1. Facts from the experiments (2026-10-29)
 
-`win-pc`: Windows 11 Enterprise 10.0.26300, amd64, 2 CPUs, 8 GB, 57 GB free. Not
-in a domain. Reached at a Tailscale address only. Agents of other projects use it
-(SSH alias `win-pc`, and a `windows` desktop lock of those projects).
+The Windows VM: Windows 11 Enterprise 10.0.26300, amd64, 2 CPUs, 8 GB, 57 GB free. Not
+in a domain. Reached at a private network address only. Agents of other projects use it
+(with a `windows` desktop lock of those projects).
 
 - **SSH.** OpenSSH Server runs (automatic start). The default shell of the SSH
   server is Windows PowerShell 5.1 (`HKLM\SOFTWARE\OpenSSH\DefaultShell`); this is
@@ -57,7 +57,7 @@ in a domain. Reached at a Tailscale address only. Agents of other projects use i
     snapshot; a child must be younger than its parent, because Windows reuses
     the PID of an ended parent). Start times (`GetProcessTimes`) guard against
     reused PIDs. Windows has no sessions in the Unix sense; that part of cleanup
-    does not apply. Checked on `win-pc`: after a release, no process of the
+    does not apply. Checked on the Windows VM: after a release, no process of the
     `hostel` user remained, also not a process that had broken away.
   - Windows has no SIGTERM for programs without a console. Stop and cleanup
     terminate at once (no 10 s grace time).
@@ -139,8 +139,8 @@ request.
 3. **Windows in CI.** An E2E job on a GitHub Windows runner with its own OpenSSH
    server, if the runner can start one in a few minutes. Else the smoke test stays
    the Windows check, and the owner accepts that.
-4. **`win-pc` through the VPS.** `room connect` as a scheduled task; the machine
-   in the exe.dev server's configuration; `deploy-vps.md` for Windows.
+4. **The Windows VM through the VPS.** `room connect` as a scheduled task; the machine
+   in the production server's configuration; `deploy-vps.md` for Windows.
 5. **Several slots.** Slot `user`; forwards limited to the slot; E2E scenarios: two
    leases at the same time on one Docker room with two slot users, each with its
    own files, processes, and ports, and cleanup of one that does not touch the
@@ -150,12 +150,12 @@ request.
 
 ## 4. Done when
 
-- A guest on the owner's Mac acquires `windows` through `https://hostel.example.com`
-  on `win-pc`, syncs a repository, runs a .NET build, a detached job, and a
-  tunnel. After the release, no process of the lease runs on `win-pc`.
+- A guest on a Mac acquires `windows` through `https://hostel.example.com`
+  on the Windows VM, syncs a repository, runs a .NET build, a detached job, and a
+  tunnel. After the release, no process of the lease runs on the Windows VM.
 - The E2E suite has the slot scenarios of phase 5, and it passes in the 10-run
-  gate and once on the owner's Mac.
-- The Windows smoke test passes on `win-pc` (and the Windows CI job, if phase 3
+  gate and once on a Mac.
+- The Windows smoke test passes on the Windows VM (and the Windows CI job, if phase 3
   makes one).
 
 ## 5. Risks
@@ -165,11 +165,11 @@ request.
 | Hostel work slows down the agents of other projects on a 2-CPU machine. | One slot. The owner can drain the machine (`hostel admin`) while those agents need it. |
 | A guest process escapes the jobs (for example through WMI or a scheduled task). | Cleanup also finds it by `HOSTEL_LEASE` in its environment. A process that clears its environment and is started outside the lease's process tree escapes, as on macOS (design, section 18). |
 | Microsoft Defender blocks or slows down the unsigned helper. | Not seen in the experiments. If it happens, the owner adds an exclusion for `C:\Users\hostel\hostel`. |
-| The Cloud PC restarts or sleeps. | `room connect` starts at boot; the room is unreachable until then, and the lease returns to the queue (design, section 6). |
+| The Windows VM restarts or sleeps. | `room connect` starts at boot; the room is unreachable until then, and the lease returns to the queue (design, section 6). |
 
 ## 6. Results (2026-10-29)
 
-- **Windows smoke test** (`make test-smoke-windows` against `win-pc`): passed
+- **Windows smoke test** (`make test-smoke-windows` against the Windows VM): passed
   in 203 s. Lease environment, exit codes (native, PowerShell, through `ssh`),
   tunnel, forward, `cp` both ways, sync of a change, `diff`, `job stop`, a
   breakaway that a job refuses ("Access is denied"), and one from an SSH session
@@ -177,8 +177,8 @@ request.
   first.
 - **Slot users** (`TestSlotUsers`, E2E with two slot users in one Docker room):
   passed. The first run found that health ran as the slot user; fixed.
-- **Done-when, Windows part:** from the owner's Mac through
-  `https://hostel.example.com`, a `windows` lease on `win-pc` was ready in 15 s; a
+- **Done-when, Windows part:** from a Mac through
+  `https://hostel.example.com`, a `windows` lease on the Windows VM was ready in 15 s; a
   .NET 10 build and run, a tunnel ("hello from the guest mac"), and a detached
   job worked. After the release, the `hostel` user had no process; only `room
   connect` (as `LOCAL SERVICE`) ran.

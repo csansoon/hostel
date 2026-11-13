@@ -45,7 +45,7 @@ stay, Next machine), each with a plain description (in the footer for a selectab
 
 - Go version: `mise.toml`. Run `mise install` once; then use `mise exec -- go ...`,
   or activate mise in your shell.
-- Docker is necessary for the E2E tests (OrbStack on the owner's Mac).
+- Docker is necessary for the E2E tests (on a Mac, for example OrbStack).
 - Pure Go dependencies only (no cgo), so that `GOOS`/`GOARCH` cross-builds work.
 
 ## Engineering rules
@@ -88,7 +88,7 @@ stay, Next machine), each with a plain description (in the footer for a selectab
   in 10 separate runs in CI (the label `e2e-10` on the pull request starts the
   workflow "E2E gate"), and in one local run on macOS (`make test-e2e`) when the
   Mac has a normal load. `make test-e2e-10` runs the 10 runs locally.
-- **Shared machine.** The owner's Mac also runs other projects. Their Docker
+- **Shared machine.** A developer's Mac can also run other projects. Their Docker
   containers (for example `app-postgres` and `app-storage`) and local servers must
   not be touched. E2E tests label every container, network, and volume that they
   create with `hostel-e2e=<run id>`, and remove only objects with their own run ID,

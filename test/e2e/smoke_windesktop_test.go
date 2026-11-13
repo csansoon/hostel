@@ -48,13 +48,14 @@ public partial class MainWindow : System.Windows.Window {
 
 // TestSmokeWindowsDesktop (M7) runs against a real Windows machine with a
 // desktop (HOSTEL_SMOKE_WINDOWS, as TestSmokeWindows; the machine needs the
-// Hostel desktop task, docs/static-machine-setup.md). The desktop must be
+// Hostel desktop task, docs/machine-setup.md). The desktop must be
 // connected, and nobody may use it during the test. HOSTEL_SMOKE_OUT
 // (optional) is a directory for the screenshot.
 //
 // A desktop lease builds a small WPF app, starts it on the desktop, reads and
 // drives it with winapp ui (UI Automation, real clicks and keys), and takes a
-// desktop screenshot. A second lease finds no process of the app.
+// desktop screenshot. It starts the app again through explorer.exe. A second
+// lease finds no process of the app.
 func TestSmokeWindowsDesktop(t *testing.T) {
 	e, s := windowsSmoke(t, true, "tools = [\"windows-desktop\"]\n", func(int) map[string]string { return smokeWPF })
 	acquire := func() {
@@ -99,9 +100,11 @@ func TestSmokeWindowsDesktop(t *testing.T) {
 		}
 		time.Sleep(time.Second)
 	}
-	if r := ui("inspect", "--interactive"); !strings.Contains(r.stdout, "add") || !strings.Contains(r.stdout, "name") {
-		t.Fatalf("inspect: %s", r)
-	}
+	// The window can show before its controls are in the UI Automation tree.
+	e.waitFor("the app's controls", time.Minute, func() bool {
+		r := ui("inspect", "--interactive")
+		return strings.Contains(r.stdout, "add") && strings.Contains(r.stdout, "name")
+	})
 	// UI Automation patterns, then real input.
 	ui("invoke", "add")
 	ui("invoke", "add")
@@ -118,6 +121,14 @@ func TestSmokeWindowsDesktop(t *testing.T) {
 	if r := ui("get-value", "count"); !strings.Contains(r.stdout, "Count: 3") {
 		t.Fatalf("label after a click: %s", r)
 	}
+	// A program that the shell starts has no HOSTEL_LEASE: the stop script of
+	// windows-desktop ends it (M10h).
+	// explorer.exe exits with 1 also when it starts the program.
+	e.hostel("run", "--", `desktop explorer.exe "$PWD\out\HostelSmoke.exe"`)
+	e.waitFor("the app started by explorer", time.Minute, func() bool {
+		r := e.hostel("run", "--", "@(Get-Process HostelSmoke -ErrorAction SilentlyContinue).Count")
+		return r.code == 0 && strings.TrimSpace(r.stdout) == "2"
+	})
 	shot := filepath.Join(t.TempDir(), "desktop.png")
 	if dir := os.Getenv("HOSTEL_SMOKE_OUT"); dir != "" {
 		shot = filepath.Join(dir, "smoke-windows-desktop.png")

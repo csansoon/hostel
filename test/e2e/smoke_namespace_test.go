@@ -80,8 +80,8 @@ max_lifetime = "3h"
 
 // namespaceDevboxSmoke starts a server with a namespace provider "ns" (the
 // given provider keys and machines) for a smoke test on the real account. It
-// stops if a devbox exists (the plan allows one; another one can be the
-// owner's), and deletes the test's devboxes at the end, also when the test
+// stops if a devbox exists (the plan allows one; another one can belong
+// to someone else), and deletes the test's devboxes at the end, also when the test
 // fails. It returns the devbox name prefix of the test.
 func namespaceDevboxSmoke(t *testing.T, providerKeys, templates string, agentDevice bool) (*env, *serverProc, string) {
 	t.Helper()

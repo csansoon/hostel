@@ -185,7 +185,7 @@ the hidden `job supervise`. Details:
   - Each test removes the containers, networks, and volumes with its own label,
     also when it fails.
   - Server process control: start, stop, `kill -9`, restart.
-- **Docker architecture.** OrbStack on the owner's Mac runs `linux/arm64`
+- **Docker architecture.** Docker on an Apple silicon Mac (for example OrbStack) runs `linux/arm64`
   containers. The harness asks Docker for the architecture.
 
 ## 8. Phases
@@ -218,7 +218,7 @@ Each test tool comes in the first phase that uses it.
 ## 10. Result
 
 - All 28 E2E scenarios of `plan.md` have tests in `test/e2e`.
-- Suite time: about 2 to 4 minutes on the owner's Mac (8 CPUs for Docker), and
+- Suite time: about 2 to 4 minutes on the test Mac (8 CPUs for Docker), and
   about 9.5 minutes on a GitHub Actions Linux runner.
 - Not covered by E2E: the provider deadline extension (`Extend`) of a warm room
   that is used again much later (the creation deadline is always later in a test),
