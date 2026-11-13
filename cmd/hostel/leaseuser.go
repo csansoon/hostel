@@ -320,6 +320,8 @@ func deleteLeaseUser(name string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			cmd := exec.CommandContext(ctx, "find", d, "-xdev", "-user", name, "-delete")
 			asUser(cmd, uid, gid)
+			// BSD find opens the current directory, which the user may not read.
+			cmd.Dir = "/"
 			_ = cmd.Run()
 			cancel()
 		}
