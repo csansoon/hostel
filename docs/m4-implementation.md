@@ -7,7 +7,7 @@ adds a detail to the contract, the same commit updates `design.md`.
 
 ## 1. Facts from the experiments (2026-10-27)
 
-`devbox` 0.0.204 and `nsc` 0.0.587 on the owner's Mac, Developer plan.
+`devbox` 0.0.204 and `nsc` 0.0.587 on the test Mac, Developer plan.
 
 - **Linux devbox and KVM.** A Linux devbox (size M, `builtin:default`) is Ubuntu
   24.04 on x86_64 with 8 vCPU and 15 GB. `/dev/kvm` exists and every user can read
@@ -163,7 +163,7 @@ adds a detail to the contract, the same commit updates `design.md`.
   the lease; release; the instance was destroyed. Total 1 min 59 s. `nsc list`
   was empty before and after.
 - 2026-10-27, done-when check: an Android app on a Namespace instance
-  (owner's server, machine `namespace/android`, `linux/amd64:8x16`, default image,
+  (test server, machine `namespace/android`, `linux/amd64:8x16`, default image,
   `tools = { java = "21" }`), against the API of the app's worktree on the Mac
   through the tunnel:
   - `acquire android --require kvm` returned after 351 s: `nsc create` and the

@@ -40,7 +40,7 @@ it needs from Hostel:
 
 ### Prototype "berth" (2026-10-20, abandoned)
 
-A first prototype in TypeScript stayed on the owner's Mac (never pushed). Its design:
+A first prototype in TypeScript was never published. Its design:
 
 - No central server. Each machine ran a broker (`harbor`) that the client called over
   SSH with one JSON request on stdin.

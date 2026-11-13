@@ -11,7 +11,7 @@ import (
 
 // TestGatewayWebSocket: with a wss:// gateway_public, guests reach the gateway
 // over a WebSocket on the API listener (a server that only HTTPS reaches, for
-// example on exe.dev): commands, the port process (a tunnel), and the system
+// example behind a VPS proxy): commands, the port process (a tunnel), and the system
 // ssh through "hostel gateway-proxy".
 func TestGatewayWebSocket(t *testing.T) {
 	t.Parallel()

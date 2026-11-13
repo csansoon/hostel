@@ -7,7 +7,7 @@ detail to the contract, the same commit updates `design.md`.
 
 ## 1. Facts from the experiments (2026-10-26)
 
-`devbox` 0.0.204 on the owner's Mac, Developer plan. Details in `namespace.md`.
+`devbox` 0.0.204 on the test Mac, Developer plan. Details in `namespace.md`.
 
 - **Access.** `devbox create` writes `~/.namespace/ssh/<name>.devbox.namespace.key`
   and `.ssh`. The proxy command is `devbox ssh-proxy <name>` (stdin and stdout are
@@ -126,7 +126,7 @@ detail to the contract, the same commit updates `design.md`.
   screenshot (2560×1600); `kill -9` of the server and a restart during the lease;
   release; the devbox was deleted. Total 2 min 26 s. `devbox list` was empty
   before and after.
-- 2026-10-26, the M2 app flow on a devbox (server on the owner's Mac; machine
+- 2026-10-26, the M2 app flow on a devbox (server on the test Mac; machine
   `namespace/mac` with `DEVELOPER_DIR` for Xcode 26.5 and the label `devbox`):
   - The first three tries failed: the server ran the `ios` health script at room
     provisioning, before the `ios` provision script, which an on-demand room runs

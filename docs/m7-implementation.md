@@ -46,13 +46,13 @@ contract.
 ### Windows
 
 - `agent-device` has no Windows support.
-- The QA tools of another project control the `win-pc` desktop with a bridge: a
+- The QA tools of another project control the Windows VM's desktop with a bridge: a
   scheduled task in the desktop user's session runs PowerShell jobs, UI
-  Automation (FlaUI), and screenshots. A Cloud PC stops drawing when no client is connected.
+  Automation (FlaUI), and screenshots. A Windows VM stops drawing when no client is connected.
 
-### Windows: the room user on another user's desktop (`win-pc`, 2026-10-30)
+### Windows: the room user on another user's desktop (Windows VM, 2026-10-30)
 
-The owner approved a test on `win-pc` while they keep its desktop connected
+The owner approved a test on the Windows VM while its desktop stays connected
 (option A: the apps of a lease run as the room user `hostel`, not as the desktop
 user).
 
@@ -85,8 +85,8 @@ user).
     `RegisterClientSideProviderAssembly` fails in PowerShell. WPF (and other
     apps with their own UI Automation support) show correctly.
   - Input goes to the foreground window. Before keys, check that the foreground
-    window belongs to the app (an app's QA guide: otherwise keys go to the owner's
-    desktop).
+    window belongs to the app (an app's QA guide: otherwise keys go to the desktop
+    user's windows).
 - After the test, the task was removed and no test process remained.
 
 ## 2. Decisions (macOS)
@@ -115,8 +115,8 @@ user).
 
 - **Rooms.** `hostel acquire windows --require desktop` on a static Windows
   machine with a signed-in desktop user and the "Hostel desktop" task
-  (`static-room-setup.md`, Windows, step 6). The test room is `win-pc`
-  while the owner keeps its desktop connected (owner, 2026-10-30).
+  (`static-room-setup.md`, Windows, step 6). The test room is the Windows VM
+  while its desktop stays connected (owner, 2026-10-30).
 - **Account.** The apps of a lease run as the room user `hostel` on the desktop
   user's desktop (option A, owner, 2026-10-30), not as the desktop user.
 - **The desktop program** (`hostel room desktop serve`) runs in the desktop
@@ -141,7 +141,7 @@ user).
 
 ## 4. Done when (macOS)
 
-An agent on the owner's Mac acquires a macOS desktop lease on a Namespace devbox,
+An agent on a Mac acquires a macOS desktop lease on a Namespace devbox,
 builds a small macOS app there, starts it, reads its accessibility snapshot,
 clicks and types in it, and takes a screenshot; after the release, the app runs
 no more and the desktop is clean (checked by a second lease on the same room).
@@ -167,9 +167,9 @@ no more and the desktop is clean (checked by a second lease on the same room).
 
 ## 6. Results (Windows, 2026-10-30)
 
-- `TestSmokeWindowsDesktop` passed on `win-pc` (72 s; the owner kept the
-  desktop connected; the `windows` desktop lock of the other projects was held, and the room `home/win` of
-  the exe.dev server was drained during the test). First lease (ready after
+- `TestSmokeWindowsDesktop` passed on the Windows VM (72 s; the
+  desktop stayed connected; the `windows` desktop lock of the other projects was held, and the room `home/win` of
+  the production server was drained during the test). First lease (ready after
   20 s): `dotnet build` of a small WPF app (4 s), `desktop --detach
   out\HostelSmoke.exe`, `winapp ui status` and `inspect`, two `invoke`s
   (`Count: 2`), `set-value` and `get-value` on the text field, a real `click`
@@ -190,6 +190,6 @@ no more and the desktop is clean (checked by a second lease on the same room).
   - `winapp ui send-keys " and keys"` lost the first space (not checked
     further; the test types `+keys`).
   - The first `winapp ui status` of a new install can take more than a minute.
-  - After the test, the exe.dev server installs its older helper again, which
+  - After the test, the production server installs its older helper again, which
     has no `room desktop serve`; the task tries again every 10 seconds until
     that server runs a build with M7.

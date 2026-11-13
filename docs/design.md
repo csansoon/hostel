@@ -170,7 +170,7 @@ The guest sees only tools.
   account limits, and defaults for its machines.
 - A `static` provider is a named group of real hosts: each entry under
   `machines` is one machine. Its `label` is the name that people see, for example
-  "Windows 365" or "Office".
+  "Office" or "Lab".
 - An on-demand provider (`namespace`, `external`) has **templates**. A template
   gives up to its `max_machines` machines at the same time. The provider creates
   them when a lease needs one.
@@ -718,7 +718,7 @@ path as a key (for example Xcode DerivedData) are therefore reused.
    `cmd` and in PowerShell), and then `echo %OS%` to find the SSH server's default
    shell: `cmd` prints `Windows_NT`, PowerShell prints `%OS%`. The shell goes to
    `machines.shell`; the server and the gateway quote each command for it (package
-   `shell`). Only the PowerShell default shell is tested (on `win-pc`); `cmd`
+   `shell`). Only the PowerShell default shell is tested (on a Windows VM); `cmd`
    is not (its quoting rules for `cmd /c` with several quoted words are a risk). A PowerShell command line ends with `exit $LASTEXITCODE`, because
    PowerShell itself exits with 0 or 1. The result selects
    `hostel-<goos>-<goarch>` and `mise-<goos>-<goarch>` from `helper_dir` (Go names:
@@ -1760,7 +1760,7 @@ guest ──SSH (lease key)──► gateway ──SSH (server key)──► mac
 
 - **Transport.** The gateway listens on TCP (`gateway_listen`). It also accepts
   the same SSH inside a WebSocket (binary messages) on the API listener at
-  `GET /v1/gateway`, for a server that only HTTPS reaches (an exe.dev VM, M5).
+  `GET /v1/gateway`, for a server that only HTTPS reaches (a VPS behind an HTTPS proxy, M5).
   `gateway_public` tells guests which one to use: a `host:port`, or a `ws://` or
   `wss://` URL (port 0 means the real port). For the system `ssh` (`hostel ssh`,
   `hostel shell`), the ssh_config of a WebSocket gateway has a `ProxyCommand`
@@ -2110,8 +2110,8 @@ Warm policy after cleanup:
 - **Transport.** With `tls = "self-signed"`, the API and the WebSocket gateway are
   HTTPS with the server's own certificate; clients check its key against the
   key that they pinned from the invite code (`internal/tlspin`), not the name or a
-  chain. With `tls = "off"`, the server is behind a proxy with TLS (exe.dev,
-  Caddy), and clients use the system roots. Both SSH
+  chain. With `tls = "off"`, the server is behind a proxy with TLS (for
+  example Caddy), and clients use the system roots. Both SSH
   legs (guest to gateway, gateway to machine) are encrypted. The gateway sees the
   plaintext.
 - **Revocation.** Guests have no machine credentials. Ending a lease closes its

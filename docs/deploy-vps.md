@@ -1,8 +1,8 @@
 # Deploy the server on a VPS
 
-This guide puts the Hostel server on a Linux VPS (milestone M5). The reference
-deployment is an exe.dev VM; section 8 shows the changes for another VPS. Machines
-behind NAT (for example a Mac at home) connect to the server with `hostel machine connect` (before M9: `hostel helper connect`)
+This guide puts the Hostel server on a Linux VPS (milestone M5), at any provider,
+behind an HTTPS proxy with TLS. Machines behind NAT (for example a Mac at home)
+connect to the server with `hostel machine connect` (before M9: `hostel helper connect`)
 (section 6).
 
 ## 1. What you need
@@ -14,27 +14,36 @@ behind NAT (for example a Mac at home) connect to the server with `hostel machin
   (section 5).
 - A GitHub release of Hostel (`install.sh`).
 
-## 2. Create the VM (exe.dev)
+## 2. Create the VM and the HTTPS proxy
 
-On your own machine:
-
-```sh
-ssh exe.dev new --name=hostel --no-email
-```
-
-The default image (`exeuntu`) runs systemd and has the user `exedev` with `sudo`.
-The VM has the address `https://hostel.example.com`. exe.dev terminates TLS and sends
-HTTPS requests to one port of the VM (8000 by default). It does not let raw TCP
-in; that is why the gateway uses the WebSocket.
-
-Make the HTTPS address public. Without this, exe.dev sends every request to its own
-login page:
+Create a Linux VM at the provider that you use, and point a DNS name (in this
+guide, `hostel.example.com`) to it. Create a user for the service; this guide
+uses `hostel`:
 
 ```sh
-ssh exe.dev share set-public hostel
+sudo useradd --create-home --shell /bin/bash hostel
 ```
 
-The tokens are the only access control of the API, as on any server.
+Hostel does not get certificates for a domain. Put a proxy with TLS in front of the
+server, for example Caddy (install it as its documentation tells you), with this
+`Caddyfile`:
+
+```
+hostel.example.com {
+	reverse_proxy 127.0.0.1:8000
+}
+```
+
+Caddy gets the certificate and passes WebSocket upgrades without more settings.
+The proxy sends HTTPS requests to one port of the VM (8000 in this guide); the
+gateway uses the WebSocket, so the VM needs no other open port.
+
+Some providers have their own HTTPS proxy in front of a VM (for example exe.dev).
+You can use it instead of Caddy: let it send to the server's port, set `listen`
+to the address on which the proxy reaches the server (for example
+`0.0.0.0:8000`, section 4), and make the HTTPS address public if the proxy
+otherwise asks for a login. The tokens are the only access control of the API,
+as on any server.
 
 ## 3. Install Hostel
 
@@ -43,13 +52,13 @@ On the VM (`ssh hostel.example.com`):
 ```sh
 curl -fsSL -o install.sh https://raw.githubusercontent.com/csansoon/hostel/main/install.sh
 sudo sh install.sh --dir /opt/hostel/bin --server /opt/hostel
-sudo chown -R exedev /opt/hostel
+sudo chown -R hostel /opt/hostel
 sudo ln -sf /opt/hostel/bin/hostel /usr/local/bin/hostel
 ```
 
 `/opt/hostel/bin/hostel` is the server binary, `/opt/hostel/helpers` gets the
 binaries for all machines (the default tools are in the binary). The
-service's user (`exedev`) owns `/opt/hostel`, so that an admin can update the
+service's user (`hostel`) owns `/opt/hostel`, so that an admin can update the
 server from the app (Front desk › This server › Update the server) or with `hostel server
 update --remote`; the server then starts again by itself. On the VM,
 `hostel server update` and a restart of the service (section 4) do the same.
@@ -59,16 +68,16 @@ it, logs a warning, and starts. Delete the key.
 
 ## 4. Configure and start the server
 
-As the server user (`exedev`):
+As the server user (`sudo -iu hostel`):
 
 ```sh
-hostel server init --tls off --listen 0.0.0.0:8000 --url https://hostel.example.com
+hostel server init --tls off --listen 127.0.0.1:8000 --url https://hostel.example.com
 ```
 
 It asks for the server name and your name, and creates the data directory
 (`~/.local/share/hostel`: the database and the keys). It prints the first admin
 invite code (`hostel connect hostel1-...`): run that command on your own computer
-within 24 hours (section 4.1). On a VPS behind a proxy with TLS (exe.dev, Caddy),
+within 24 hours (section 4.1). On a VPS behind a proxy with TLS (for example Caddy),
 use `--tls off`; on a machine without a proxy or a domain (an IP address or a
 Tailscale name), leave the default `self-signed`: the server then serves HTTPS
 with its own certificate, and clients pin its key.
@@ -76,8 +85,8 @@ with its own certificate, and clients pin its key.
 `server.toml` keeps only the keys of the server machine:
 
 ```toml
-server_id = "exe"
-listen = "0.0.0.0:8000"
+server_id = "hostel"
+listen = "127.0.0.1:8000"
 tls = "off"
 public_urls = ["https://hostel.example.com"]
 gateway_listen = "127.0.0.1:7422"
@@ -110,7 +119,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=exedev
+User=hostel
 ExecStart=/opt/hostel/bin/hostel server run
 Restart=on-failure
 RestartSec=5
@@ -165,11 +174,12 @@ curl -fsSL https://get.namespace.so/cloud/install.sh | sh        # nsc (instance
 curl -fsSL get.namespace.so/devbox/install.sh | bash             # devbox (macOS devboxes)
 ```
 
-Both go to `~/.local/bin`. The server service must find them there:
+Both go to `~/.local/bin`. The server service must find them there (as a user
+with `sudo`):
 
 ```sh
 sudo mkdir -p /etc/systemd/system/hostel.service.d
-printf '[Service]\nEnvironment=PATH=%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n' "$HOME" \
+printf '[Service]\nEnvironment=PATH=%s/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n' /home/hostel \
   | sudo tee /etc/systemd/system/hostel.service.d/path.conf
 sudo systemctl daemon-reload && sudo systemctl restart hostel
 ```
@@ -186,7 +196,7 @@ the client prints each URL. Open it in a browser, and select the workspace. The
 command ends when the login is complete; the credentials stay on the server.
 `--cli nsc` or `--cli devbox` logs in one CLI only. The server refuses a
 Namespace provider without a valid login for each product that its machines
-use. A login lasts days (the owner's `nsc` login of 2026-10-20 was still valid
+use. A login lasts days (in a test, an `nsc` login of 2026-10-20 was still valid
 on 2026-10-29); when it ends, the provider calls fail, and you must log in
 again.
 
@@ -325,24 +335,13 @@ these:
 
 - Use `connect = true`, and close inbound SSH on the machine (firewall or Remote
   Login off for other networks).
-- Allow inbound SSH only from the server's address. On exe.dev, the VM has no
-  fixed outbound address that you control; use `connect = true` there.
+- Allow inbound SSH only from the server's address. If the server has no fixed
+  outbound address that you control, use `connect = true`.
 
-## 8. Another VPS
+## 8. A raw TCP gateway (optional)
 
-Hostel has no TLS code. Put a TLS proxy in front of the server, for example
-Caddy:
-
-```
-hostel.example.com {
-	reverse_proxy 127.0.0.1:8000
-}
-```
-
-Then `listen = "127.0.0.1:8000"` and
-`gateway_public = "wss://hostel.example.com/v1/gateway"`. Caddy passes WebSocket
-upgrades without more settings. If the VPS lets raw TCP in, you can instead open
-the gateway port (`gateway_listen = "0.0.0.0:7422"`,
+If the VPS lets raw TCP in, you can open the gateway port instead of the
+WebSocket (`gateway_listen = "0.0.0.0:7422"`,
 `gateway_public = "hostel.example.com:7422"`).
 
 ## 9. Backups

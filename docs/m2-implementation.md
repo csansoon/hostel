@@ -7,7 +7,7 @@ contract, the same commit updates `design.md`.
 
 ## 1. Setup
 
-- The Hostel server runs on the owner's Mac (`hostel server init` done on
+- The Hostel server runs on a developer's Mac (`hostel server init` done on
   2026-10-22; `~/.config/hostel/server.toml`, `~/.local/share/hostel`). It listens
   on the default `127.0.0.1:7410` (API) and `127.0.0.1:7422` (gateway). Guests run
   on the same Mac, in an app's worktrees.
@@ -28,7 +28,7 @@ contract, the same commit updates `design.md`.
   ```
 
 - The platform directories are in this repository (`platforms/ios`,
-  `platforms/macos`). The server reads them from `platforms_dir`; on the owner's
+  `platforms/macos`). The server reads them from `platforms_dir`; on the test
   Mac, `platforms_dir` points to the repository checkout.
 
 ## 2. Work that does not need the MacBook
@@ -114,7 +114,7 @@ env = { APP_API_BASE_URL = "http://localhost:{tunnels.api.port}" }
 
 ## 5. Acceptance (the "done when" of M2)
 
-From an app's worktree on the owner's Mac, with the local API running:
+From an app's worktree on the test Mac, with the local API running:
 
 1. `hostel acquire ios --device iphone-17-pro`; `hostel run` of the iOS build; app
    install and launch; sign-in against the local API through the tunnel;
@@ -144,7 +144,7 @@ the MacBook are manual; their results go into this file (section 8).
 
 ## 8. Results
 
-- 2026-10-22, `ps -E` (check 2), on the owner's Mac (macOS 27.2): `ps -E` shows
+- 2026-10-22, `ps -E` (check 2), on the test Mac (macOS 27.2): `ps -E` shows
   the environment of a Python process, but not of `/bin/sleep` or `/bin/zsh`
   (Apple's own binaries). Cleanup did not find a guest's leftover `sh` or `sleep`.
   Fix: cleanup also finds the processes in the lease's sessions (design, section
@@ -152,7 +152,7 @@ the MacBook are manual; their results go into this file (section 8).
   on the old code (2 processes stay) and passes now. Check again on the MacBook
   (macOS 26).
 - 2026-10-22, the room Mac: MacBook, macOS 26.6.2, arm64, 8 cores, 8 GB memory,
-  Xcode 26.5 (17F42), iOS 26.5 runtime (23F77). The server on the owner's Mac
+  Xcode 26.5 (17F42), iOS 26.5 runtime (23F77). The server on the test Mac
   reaches it by its `.local` name over IPv6; IPv4 between the two Wi-Fi address
   ranges does not work on this network.
 - 2026-10-22, setup guide: the `echo` with a line break inside quotes wrote one
@@ -196,7 +196,7 @@ the MacBook are manual; their results go into this file (section 8).
   leases.
 - 2026-10-22, acceptance item 2: a second lease was ready in 47 s, and the app was
   not installed on its simulator.
-- 2026-10-22, tunnel: from the room, `localhost:7500` reaches the owner's local
+- 2026-10-22, tunnel: from the room, `localhost:7500` reaches the test Mac's local
   app API; the app's sign-in request returns 200. The app's debug build signs in
   by itself with a test account against a localhost API, and that account was
   then in the worktree's own database (only reachable through the tunnel).

@@ -4,8 +4,8 @@ Build Hostel in this order. Finish each milestone, show the evidence to the owne
 and wait for approval before the next one. From M1, each milestone ends with all E2E
 tests passing in 10 separate runs of the whole suite in CI (the workflow "E2E
 gate", started by the label `e2e-10` on the pull request), and in one local run on
-macOS (`make test-e2e`). Before 2026-10-26 the gate was `make test-e2e-10` on the
-owner's Mac.
+macOS (`make test-e2e`). Before 2026-10-26 the gate was `make test-e2e-10` on a
+developer's Mac.
 
 ## M0. Repository setup
 
@@ -168,8 +168,8 @@ E2E scenarios (each one through real binaries):
     `hostel run`; a second lease on the warm room does not download the tool again.
     The tool download needs internet; skip only this part when `HOSTEL_E2E_OFFLINE=1`.
 
-Done when: `make test-e2e-10` passes on the owner's Mac (Docker through
-OrbStack is installed).
+Done when: `make test-e2e-10` passes on a Mac (Docker is installed, for
+example OrbStack).
 
 ## M2. Spare MacBook as a static iOS room
 
@@ -236,8 +236,7 @@ Build:
 - `instance` machines in the `namespace` provider (or a Linux `devbox` machine, if
   KVM works there and it is simpler).
 - `platforms/android/` with `.linux.sh` and `.macos.sh` scripts and a clean emulator
-  for each lease. Test it on a Linux machine and on the MacBook
-  (`mac-mini`). Namespace macOS devboxes do not get `android` (owner
+  for each lease. Test it on a Linux machine and on a Mac. Namespace macOS devboxes do not get `android` (owner
   decision, 2026-10-27).
 - A Linux Docker image or provision step with the Android SDK, if the boot time
   needs it.
@@ -260,13 +259,13 @@ Build:
 - Release builds (for example GoReleaser) and an install method.
 - `docs/deploy-vps.md`.
 
-Done when: a guest on the owner's Mac uses the home MacBook through a server on
-an exe.dev VM (owner decision, 2026-10-27; a cloud agent is an optional extra
+Done when: a guest on a Mac uses the home MacBook through a server on
+a VPS behind an HTTPS proxy (owner decision, 2026-10-27; a cloud agent is an optional extra
 check).
 
 ## M6. Windows and several slots
 
-- Windows on a static Windows host, the owner's Cloud PC `win-pc` (owner
+- Windows on a static Windows host, a Windows VM (owner
   decision, 2026-10-29): verify SSH, write the `.windows.ps1` scripts, and test
   job objects and cleanup. `docs/m6-implementation.md` has the plan.
 - Several slots per room: an OS user for each slot on static rooms, port and device
@@ -274,7 +273,7 @@ check).
   exclusive lease (platform `exclusive`, or the `desktop` label) takes all slots of a
   room with two slots.
 
-Done when: a guest on the owner's Mac uses `win-pc` through the exe.dev server
+Done when: a guest on a Mac uses the Windows VM through the production server
 (sync, a .NET build, a detached job, a tunnel; no lease process remains after the
 release), and the E2E suite has scenarios with two leases on one room
 (`m6-implementation.md`, section 4).
@@ -290,11 +289,11 @@ Not in scope: the repository's own UI test suites, signed builds.
   accessibility snapshot, refs, and actions), install and cleanup of `.app`
   bundles, and a clean desktop after each lease.
 - Windows after that: the owner selects the machine (a desktop session that stays
-  drawn; not the owner's session on `win-pc`). agent-device has no Windows
+  drawn; not another user's session on the Windows VM). agent-device has no Windows
   support; Hostel needs a bridge in the desktop session (UI Automation, input,
   screenshots), as the QA bridge of another project does.
 
-Done when: an agent on the owner's Mac builds a small macOS app on the MacBook,
+Done when: an agent on a Mac builds a small macOS app on the MacBook,
 starts it, reads its accessibility snapshot, clicks and types in it, and takes a
 screenshot; after the release, the app is gone and the desktop is clean. The
 Windows part gets its own done-when when the owner selects the machine.
@@ -320,7 +319,7 @@ Owner decisions, 2026-10-30; design: `multiplayer.md`, sections 3 to 6 and 9.
   client prints who did it.
 
 Done when: the owner invites a coworker; the coworker connects with the code to the
-exe.dev server and to a test server that has only an IP address (TLS
+production server and to a test server that has only an IP address (TLS
 `self-signed`); `hostel status` shows the leases of both users; the owner ends the
 coworker's lease with `hostel release <lease>`, and the coworker's client says so.
 (Moving queue entries has its API and E2E test in M8 and its command in M10.)

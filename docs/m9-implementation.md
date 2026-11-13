@@ -171,16 +171,16 @@ E2E (Docker rooms):
 - Existing tests: the harness writes the document with `hostel config apply`
   (or the import, for tests of the old form).
 
-Smoke (owner's done-when): from the owner's Mac, without a shell on the server:
+Smoke (owner's done-when): from a Mac, without a shell on the server:
 `hostel config rooms add` and the printed command on a new machine; a new
 platform with `config platforms new` and `push`; a lease for it on that machine;
 `config rooms set` for its labels; `config rooms remove`.
 
 ## 5. Risks
 
-- **The exe.dev upgrade.** The import changes `server.toml` on the VM (a copy
+- **The production server upgrade.** The import changes `server.toml` on the VM (a copy
   stays). Check the rooms `home/macbook` and `home/win` after the deploy.
 - **Service installation on three OSes.** Only the Linux path runs in the E2E
-  tests; macOS and Windows get a smoke test on the owner's machines.
+  tests; macOS and Windows get a smoke test on real machines.
 - **Scope.** M9 is larger than M8. If it grows, provider login (phase 5) can
   move to a later milestone; the owner decides.

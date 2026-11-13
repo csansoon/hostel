@@ -4,7 +4,7 @@ Namespace (namespace.so) is the first on-demand provider. This file records what
 we measured and read on 2026-10-20 and 2026-10-21. Verify a fact again before a
 design decision depends on it; plans and CLIs change.
 
-The owner's Mac has both CLIs installed and logged in: `devbox` 0.0.204 and `nsc`
+The test Mac has both CLIs installed and logged in: `devbox` 0.0.204 and `nsc`
 0.0.587. The account is on the **Developer** plan.
 
 ## Two products on the same compute
@@ -36,7 +36,7 @@ macOS instance.
 - Devbox minutes for each minute of use: Linux S = 1, M = 2, L = 4, XL = 8;
   macOS M = 15, L = 30.
 - Higher limits: support@namespacelabs.com.
-- All Hostel leases use the owner's account, so the "per user" limit applies to all
+- All Hostel leases use one account, so the "per user" limit applies to all
   agents together.
 
 ## Spike measurements (2026-10-20)
@@ -181,7 +181,7 @@ Windows: `nsc create` failed with "not allowed to create windows/amd64 instances
 | How the server can `Dial` an `nsc` instance's SSH server (`--ssh_key` with a public address, `nsc proxy`, or a relay through `nsc ssh`). | M4: `nsc instance port-forward <id> --target_port <port>`; the instance's agent refuses remote forwards, so the machine is a container with OpenSSH (2026-10-27) |
 | KVM on a Linux devbox (it was tested only on an instance). | M4: yes, `/dev/kvm` for every user; the Android emulator runs (2026-10-27) |
 | Does the Android emulator run inside a macOS devbox (virtualization inside a virtual machine)? | Not needed: Android on Namespace uses Linux only (owner decision, 2026-10-27). |
-| Headless login for `devbox` and `nsc` on a Linux VPS. | M5: `login --browser=false` prints a URL to open elsewhere (checked on the exe.dev VM; login not completed there). A session lasts days: the owner's `nsc` login of 2026-10-20 was valid on 2026-10-29 (2026-10-29) |
+| Headless login for `devbox` and `nsc` on a Linux VPS. | M5: `login --browser=false` prints a URL to open elsewhere (checked on the production VPS; login not completed there). A session lasts days: an `nsc` login of 2026-10-20 was valid on 2026-10-29 (2026-10-29) |
 | SSH server on a Windows instance (after a plan change). | M6 |
 
 ## Sources

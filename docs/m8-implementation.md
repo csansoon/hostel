@@ -14,7 +14,7 @@ moves into `design.md`.
   `HOSTEL_SERVER` and `HOSTEL_TOKEN` (`internal/config/guest.go`). The E2E harness
   uses the variables.
 - The server listens with plain HTTP (`listen`). TLS comes from a proxy
-  (exe.dev). The gateway is an SSH port (`gateway_listen`) and SSH in WebSocket
+  (the VPS provider's). The gateway is an SSH port (`gateway_listen`) and SSH in WebSocket
   on `/v1/gateway`; `gateway_public` tells the guest which one to use.
   `internal/gateway/dial.go` dials both; `hostel ssh-config` uses
   `hostel gateway-proxy wss://...` as the ProxyCommand.
@@ -140,18 +140,18 @@ the test needs `off`):
 Unit: the invite code encoding; the scheduler order (lanes, manual position, no
 aging).
 
-Smoke (owner's done-when): the exe.dev server (TLS `off`, behind its proxy) and
-a test server on the owner's Mac reached by its LAN or Tailscale IP (TLS
+Smoke (owner's done-when): the production server (TLS `off`, behind its proxy) and
+a test server on a Mac reached by its LAN or Tailscale IP (TLS
 `self-signed`).
 
 ## 5. Risks
 
-- **The exe.dev upgrade.** Its `server.toml` has no `tls` key, so it stays `off`.
+- **The production server upgrade.** Its `server.toml` has no `tls` key, so it stays `off`.
   Its existing tokens become users by the migration. Check with `hostel status`
-  from the owner's client and the room tokens of `home/macbook` and `home/win`
+  from the admin's client and the room tokens of `home/macbook` and `home/win`
   after the deploy.
 - **Clients of other projects.** T3 Code and the agents of other projects use
   `HOSTEL_SERVER` and `HOSTEL_TOKEN`; these keep working.
 - **WebSocket gateway on HTTPS.** Long SSH sessions over the WebSocket on the
-  API listener need the same timeouts as on exe.dev (checked in M5); with TLS
+  API listener need the same timeouts as behind the VPS proxy (checked in M5); with TLS
   `self-signed`, the E2E tests use this path.

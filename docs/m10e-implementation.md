@@ -378,24 +378,24 @@ later milestone:
   idempotent), then the lease fails as a `prepare` failure does today.
 - **Two heavy screens on one machine** (two emulators on an 8 GB Mac). The slots
   of the machine limit it, as today; the admin sets the slots.
-- **The owner's own server** needs a new configuration at the update (section
+- **The production server** needs a new configuration at the update (section
   8).
 
 ## 13. State at the end of M10e (2026-11-06)
 
-Done. v0.3.0 is released and runs on the owner's server.
+Done. v0.3.0 is released and runs on the production server.
 
 - **Gate:** 10 of 10 local E2E runs on `6790f67` (owner decision: local, because
   a billing lock stops GitHub Actions). The release files are built and signed
   locally for the same reason.
-- **Real machines:** the Windows smoke tests pass. On the owner's server, real
+- **Real machines:** the Windows smoke tests pass. On the production server, real
   leases of `ios-simulator`, `android-emulator`, `macos-desktop` (`ns/mac`), and
   `windows-desktop` work, with screenshots.
 - **Done-when:** a new agent built, tested, and did QA of the Android app of a
   real repository in 20 minutes with only the docs. It chose `android-sdk
   jdk:21` for the build (no emulator) and `android-emulator:pixel-9` for QA. It
   had none of the problems 1, 2, and 7 of the 2026-11-05 report.
-- **Not tested:** the Namespace smoke tests (the login of the owner's Mac may not
+- **Not tested:** the Namespace smoke tests (the Namespace login of the test Mac may not
   create machines); `ns/linux` with tools.
 
 Follow-ups from the done-when report, done in M10f (`plan.md`):
