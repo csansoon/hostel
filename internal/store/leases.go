@@ -198,8 +198,9 @@ func (s *Store) SetQueue(ctx context.Context, id string, position int, reason st
 
 // Assign reserves rooms of a machine for a queued lease and gives its tunnels
 // their machine ports (compare-and-set: the lease must be queued and the rooms
-// free). It reports whether the assignment happened.
-func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, rooms []string, ports map[string]int, now time.Time) (bool, error) {
+// free). With drain, the machine gets no later lease (reuse = false). It reports
+// whether the assignment happened.
+func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, rooms []string, ports map[string]int, drain bool, now time.Time) (bool, error) {
 	ok := false
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE leases SET state = 'assigned', machine_id = ?, room_name = ?, provider = ?,
@@ -223,6 +224,11 @@ func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, roo
 		}
 		for name, port := range ports {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO lease_tunnels (lease_id, name, machine_port) VALUES (?, ?, ?)`, leaseID, name, port); err != nil {
+				return err
+			}
+		}
+		if drain {
+			if _, err := tx.ExecContext(ctx, `UPDATE machines SET drained = 1 WHERE id = ?`, machine.ID); err != nil {
 				return err
 			}
 		}

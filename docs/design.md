@@ -1093,7 +1093,7 @@ Server-level keys and defaults:
 | `[mise]` | `idiomatic_tools = ["node", "python"]` (also when `[mise]` sets only other keys; `[]` turns idiomatic files off); `github_token` unset; `agent_device = true` |
 
 Provider, machine, and template keys. A machine or template inherits only these provider keys: `tools`,
-`env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`. `max_machines` is
+`env`, `max_lease`, `max_lifetime`, `warm_running`, `warm_stopped`, `reuse`. `max_machines` is
 not inherited: on a provider it is a limit for all machines together.
 
 | Key | Where | Default |
@@ -1111,6 +1111,7 @@ not inherited: on a provider it is a limit for all machines together.
 | `env` | provider, machine, template, room | `{}` |
 | `max_lease` | provider, machine, template | `2h` |
 | `warm_running`, `warm_stopped` | provider, template | `5m`, `24h` (on-demand only) |
+| `reuse` | provider, template | `true` (on-demand only); `false`: one lease for each machine (M11) |
 | `command`, `command_env`, `timeouts` | external provider | `command` required; `timeouts = { provision = "5m", default = "1m" }` |
 
 Explicit rooms: `rooms = [{ name = "a", ports = [7500, 7501], env = { ANDROID_SERIAL = "emulator-5554" } }]`.
@@ -2118,6 +2119,11 @@ Warm policy after cleanup:
   stop) or destroys it (an on-demand machine that cannot stop). Static machines stay
   running.
 - A stopped machine is destroyed after `warm_stopped`.
+- With `reuse = false` (M11), the server drains a machine in the same transaction
+  that assigns a lease to it, and destroys it when it is idle again, also before
+  `warm_running`. An admin who undrains such a machine allows one more lease. A
+  machine with several rooms can get leases in all of its rooms in the same
+  scheduler pass; they share the machine, and the machine goes after the last one.
 - Eviction (section 5) can destroy an idle or stopped machine earlier.
 
 ## 18. Security
@@ -2184,9 +2190,9 @@ Planned hardening (milestone M11):
    writable cache, deleted at cleanup.
 3. **Egress control (optional).** A machine firewall allows outbound traffic only to
    the gateway and to configured hosts (package registries, GitHub).
-4. **No reuse (strongest).** On on-demand machines, `warm_running = "0s"` destroys
-   the machine after each lease. No backdoor can survive, at the cost of a cold start
-   for each lease.
+4. **No reuse (strongest, M11).** On on-demand machines, `reuse = false` destroys
+   the machine after its lease (section 17). No backdoor can survive, at the cost
+   of a cold start for each lease.
 5. **Audit.** Cleanup compares the known persistence locations with a snapshot and
    marks the machine `broken` if something changed.
 

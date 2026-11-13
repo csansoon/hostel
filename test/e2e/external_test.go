@@ -170,6 +170,21 @@ func TestWarmDestroy(t *testing.T) {
 	}
 }
 
+// TestNoReuse (M11): with reuse = false, an on-demand machine is destroyed
+// after its lease (not after warm_running), and the next lease gets a new one.
+func TestNoReuse(t *testing.T) {
+	t.Parallel()
+	f := newExternalFixture(t, "", "warm_running = \"10m\"\nreuse = false", nil, smallTemplate)
+	f.acquire()
+	first := f.cloudMachines()[0].Name
+	f.e.mustHostel("release")
+	f.waitNoCloudMachines()
+	f.acquire()
+	if ms := f.cloudMachines(); len(ms) != 1 || ms[0].Name == first {
+		t.Fatalf("machines of the second lease: %+v, want one new machine (not %s)", ms, first)
+	}
+}
+
 // TestRemoveOnDemandTemplate (M9): an on-demand machine with a machine cannot be
 // removed (the provider destroys a machine through its machine's settings); the
 // admin destroys the free machine, and then removes the machine.

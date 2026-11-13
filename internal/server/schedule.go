@@ -212,7 +212,9 @@ func (s *Server) schedule(ctx context.Context) error {
 				return err
 			}
 		}
-		ok, err := s.store.Assign(ctx, l.ID, machine, a.Rooms, ports, now)
+		// reuse = false: no other lease after this one; warm destroys the
+		// machine when it is idle (design, section 17).
+		ok, err := s.store.Assign(ctx, l.ID, machine, a.Rooms, ports, !m.Reused(), now)
 		if err != nil {
 			return err
 		}

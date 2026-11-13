@@ -143,6 +143,7 @@ type Provider struct {
 	MaxLease    *Duration            `toml:"max_lease"`
 	WarmRunning *Duration            `toml:"warm_running,omitempty"`
 	WarmStopped *Duration            `toml:"warm_stopped,omitempty"`
+	Reuse       *bool                `toml:"reuse,omitempty"`
 	Command     []string             `toml:"command,omitempty"`
 	CommandEnv  map[string]string    `toml:"command_env,omitempty"`
 	Timeouts    *Timeouts            `toml:"timeouts,omitempty"`
@@ -180,6 +181,8 @@ type Template struct {
 	MaxLifetime *Duration         `toml:"max_lifetime,omitempty"`
 	WarmRunning *Duration         `toml:"warm_running,omitempty"`
 	WarmStopped *Duration         `toml:"warm_stopped,omitempty"`
+	// Reuse false destroys an on-demand machine after its first lease (M11).
+	Reuse *bool `toml:"reuse,omitempty"`
 
 	Name     string `toml:"-"`
 	Provider string `toml:"-"`
@@ -544,8 +547,8 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 		}
 	}
 	if !onDemand {
-		if p.MaxMachines != nil || len(p.Limits) > 0 || p.MaxLifetime != nil || p.WarmRunning != nil || p.WarmStopped != nil {
-			el.add(key, "max_machines, limits, max_lifetime, warm_running, and warm_stopped are only for on-demand providers")
+		if p.MaxMachines != nil || len(p.Limits) > 0 || p.MaxLifetime != nil || p.WarmRunning != nil || p.WarmStopped != nil || p.Reuse != nil {
+			el.add(key, "max_machines, limits, max_lifetime, warm_running, warm_stopped, and reuse are only for on-demand providers")
 		}
 	} else {
 		setDur(&p.WarmRunning, 5*time.Minute)
@@ -594,8 +597,8 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 		if m.Spec != nil {
 			el.add(key+".spec", "a static machine has no spec")
 		}
-		if m.MaxMachines != nil || m.MaxLifetime != nil || m.WarmRunning != nil || m.WarmStopped != nil {
-			el.add(key, "max_machines, max_lifetime, warm_running, and warm_stopped are only for on-demand machines")
+		if m.MaxMachines != nil || m.MaxLifetime != nil || m.WarmRunning != nil || m.WarmStopped != nil || m.Reuse != nil {
+			el.add(key, "max_machines, max_lifetime, warm_running, warm_stopped, and reuse are only for on-demand machines")
 		}
 		one := 1
 		m.MaxMachines = &one
@@ -637,6 +640,9 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 		inherit(&m.MaxLifetime, p.MaxLifetime)
 		inherit(&m.WarmRunning, p.WarmRunning)
 		inherit(&m.WarmStopped, p.WarmStopped)
+		if m.Reuse == nil {
+			m.Reuse = p.Reuse
+		}
 	}
 	if m.MaxLease.D() <= 0 {
 		el.add(key+".max_lease", "must be longer than 0")
@@ -1015,6 +1021,10 @@ func setDur(p **Duration, v time.Duration) {
 		*p = dur(v)
 	}
 }
+
+// Reused reports whether a machine of the template can have more than one
+// lease (reuse, default true).
+func (m *Template) Reused() bool { return m.Reuse == nil || *m.Reuse }
 
 func inherit(dst **Duration, src *Duration) {
 	if *dst == nil && src != nil {

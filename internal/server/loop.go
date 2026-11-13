@@ -226,6 +226,8 @@ func (s *Server) warm(ctx context.Context) error {
 		switch {
 		case r.State == protocol.MachineBroken && !busy[r.ID]:
 			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineBroken}, protocol.MachineDestroying, r.BrokenReason, now)
+		case r.State == protocol.MachineRunning && idle[r.ID] && r.Drained && !m.Reused():
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, protocol.MachineDestroying, "reuse = false: destroyed after its lease", now)
 		case r.State == protocol.MachineRunning && !idle[r.ID]:
 			if !r.WarmUntil.IsZero() {
 				s.store.SetWarmUntil(ctx, r.ID, time.Time{})
