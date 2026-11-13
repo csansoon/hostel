@@ -480,7 +480,13 @@ func loadedServices() (names, present []string, err error) {
 					in = false
 				case in:
 					if f := strings.Fields(t); len(f) > 0 {
-						names = append(names, domain+"/"+f[len(f)-1])
+						name := domain + "/" + f[len(f)-1]
+						// Not Apple's: with the plist that it came from, so
+						// that a replaced service of the same label is new.
+						if !strings.HasPrefix(f[len(f)-1], "com.apple.") {
+							name += "\t" + servicePath(name)
+						}
+						names = append(names, name)
 					}
 				}
 			}
@@ -488,6 +494,20 @@ func loadedServices() (names, present []string, err error) {
 		return names, present, nil
 	}
 	return nil, nil, nil
+}
+
+// servicePath is the plist path of a loaded launchd service ("path = ...").
+func servicePath(service string) string {
+	out, err := outputQuiet("launchctl", "print", service)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if p, ok := strings.CutPrefix(strings.TrimSpace(line), "path = "); ok {
+			return p
+		}
+	}
+	return ""
 }
 
 // userManager reports whether the systemd user manager of this user runs: it
@@ -538,6 +558,7 @@ func stopNewServices(before []string) ([]string, error) {
 				continue
 			}
 		case "darwin":
+			n, _, _ = strings.Cut(n, "\t")
 			domain, label := n[:strings.LastIndex(n, "/")], n[strings.LastIndex(n, "/")+1:]
 			if !present[domain] || strings.HasPrefix(label, "com.apple.") {
 				continue

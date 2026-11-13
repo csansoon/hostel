@@ -234,7 +234,16 @@ func (s *Store) Assign(ctx context.Context, leaseID string, machine Machine, roo
 		}
 		if drain {
 			// Compare-and-set: one scheduler pass can give several rooms of
-			// the machine to several leases; only the first gets it.
+			// the machine to several leases; only the first gets it. And no
+			// other room may be in use (reuse = false set on a busy machine).
+			var busy int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rooms WHERE machine_id = ? AND state != 'free' AND lease_id != ?`,
+				machine.ID, leaseID).Scan(&busy); err != nil {
+				return err
+			}
+			if busy > 0 {
+				return errRoomTaken
+			}
 			res, err := tx.ExecContext(ctx, `UPDATE machines SET drained = 1 WHERE id = ? AND drained = 0`, machine.ID)
 			if err != nil {
 				return err

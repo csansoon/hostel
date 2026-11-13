@@ -32,7 +32,7 @@ func (h *helper) shareCache() (struct{}, error) {
 			switch {
 			case dir == home && de.Name() == filepath.Base(h.root):
 			case dir == h.root && share[de.Name()]:
-				if err := shareTree(p, gid, de.Name() != "cache"); err != nil {
+				if err := shareTree(p, gid); err != nil {
 					return struct{}{}, err
 				}
 			default:
@@ -51,31 +51,33 @@ func (h *helper) shareCache() (struct{}, error) {
 	return struct{}{}, nil
 }
 
-// shareTree gives the group read rights on p; with all, on the whole tree.
-// The cache's entries keep their modes (its users read them as others).
-func shareTree(p string, gid int, all bool) error {
-	walk := func(q string, de fs.DirEntry, err error) error {
+// shareTree gives the group read rights on the tree at p, and takes write
+// rights from the group and other users: lease users read it, and cannot
+// change it. It changes only what differs (the cache can be large).
+func shareTree(p string, gid int) error {
+	return filepath.WalkDir(p, func(q string, de fs.DirEntry, err error) error {
 		if err != nil || de.Type()&fs.ModeSymlink != 0 {
 			return err
 		}
-		if err := os.Lchown(q, -1, gid); err != nil {
+		fi, err := de.Info()
+		if err != nil {
 			return err
 		}
-		return chmodNoFollow(q, func(m fs.FileMode) fs.FileMode {
-			if m.IsDir() || m&0o100 != 0 {
-				return m.Perm()&^0o007 | 0o050
+		if g, ok := fileGID(fi); !ok || g != gid {
+			if err := os.Lchown(q, -1, gid); err != nil {
+				return err
 			}
-			return m.Perm()&^0o007 | 0o040
-		})
-	}
-	if all {
-		return filepath.WalkDir(p, walk)
-	}
-	fi, err := os.Lstat(p)
-	if err != nil {
-		return err
-	}
-	return walk(p, fs.FileInfoToDirEntry(fi), nil)
+		}
+		m := fi.Mode().Perm()
+		want := m&^0o022 | 0o040
+		if fi.IsDir() || m&0o100 != 0 {
+			want |= 0o010
+		}
+		if want == m {
+			return nil
+		}
+		return os.Chmod(q, want)
+	})
 }
 
 func chmodNoFollow(p string, mode func(fs.FileMode) fs.FileMode) error {

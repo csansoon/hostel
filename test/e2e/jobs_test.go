@@ -244,11 +244,16 @@ func TestLeaseUsers(t *testing.T) {
 	// fake-screen writes into the machine's cache: a tool like that needs the
 	// machine user. fake-sdk does not.
 	f := newFixture(t, &fixtureOpts{leaseUsers: true, templateTools: []string{"fake-sdk"}})
-	f.c.sh("mkdir -p ~/hostel/cache/shared && echo original > ~/hostel/cache/shared/tool")
+	f.c.sh("mkdir -p ~/hostel/cache/shared && echo original > ~/hostel/cache/shared/tool && chmod 666 ~/hostel/cache/shared/tool")
+	// An installer with a strict umask: the lease user can read it all the same.
+	f.c.sh("mkdir -m 700 ~/hostel/cache/strict && (umask 077 && echo strict > ~/hostel/cache/strict/f)")
 	lease := f.acquire("fake-sdk")
 	user := "hostel-" + lease[:12]
 	if r := f.e.mustHostel("run", "--", "id -un; echo $HOME"); r.stdout != user+"\n/home/"+user+"\n" {
 		t.Fatalf("user and home of the lease: %q", r.stdout)
+	}
+	if r := f.e.mustHostel("run", "--", "cat ~/hostel/cache/strict/f"); r.stdout != "strict\n" {
+		t.Fatalf("a strict cache entry for the lease user: %q", r.stdout)
 	}
 	if r := f.e.mustHostel("run", "--", "cat ~/hostel/cache/shared/tool; (echo changed > ~/hostel/cache/shared/tool) 2>/dev/null || echo refused; "+
 		"ls /home/hostel/hostel/rooms >/dev/null 2>&1 || echo hidden"); r.stdout != "original\nrefused\nhidden\n" {

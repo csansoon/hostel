@@ -2106,7 +2106,9 @@ failed; the result lists each step.
    copy also has the content behind the link and its path, and a changed target
    is restored too. The copy also lists the loaded user services (systemd
    services, timers, sockets, paths, and scopes of the user manager; launchd
-   services of the gui and user domains) and which managers and domains existed;
+   services of the gui and user domains, those not of Apple with the plist that
+   they came from, so that a replaced service of the same label is new) and
+   which managers and domains existed;
    a service that was not loaded then is stopped (on macOS not Apple's own,
    which macOS starts at any time, and none of a domain that did not exist then),
    also one that changed its file or has none (`systemd-run --user`), and the
@@ -2149,7 +2151,8 @@ Warm policy after cleanup:
 - A stopped machine is destroyed after `warm_stopped`.
 - With `reuse = false` (M11), the server drains a machine in the same transaction
   that assigns a lease to it, and destroys it when it is idle again, also before
-  `warm_running`. The drain is a compare-and-set: of the leases that one
+  `warm_running`. The assignment also needs all other rooms of the machine
+  free (`reuse` set to `false` on a busy machine). The drain is a compare-and-set: of the leases that one
   scheduler pass gives to rooms of the machine, only the first gets it, and the
   others wait. An admin who undrains such a machine allows one more lease.
 - Eviction (section 5) can destroy an idle or stopped machine earlier.
@@ -2270,8 +2273,9 @@ Hardening (milestone M11):
 2. **Read-only shared caches.** The machine user owns the caches and installs
    tools into them. `helper share-cache` (as the machine user) gives its home and
    `hostel/` the group `hostel-leases` with traverse rights only (`begin` keeps
-   `hostel/rooms` at mode 0700), `hostel/bin`,
-   `tools`, `mise`, and `cache` group read rights, and takes the rights of the
+   `hostel/rooms` at mode 0700), the trees `hostel/bin`, `tools`, `mise`, and
+   `cache` the group with read rights and no write rights for the group or other
+   users (only what differs is changed), and takes the rights of the
    group and of other users from all other entries there; so a lease user can
    read the cache but not write it, and cannot read the machine user's rooms or
    `machine-env.json`. Its
