@@ -152,3 +152,19 @@ E2E suite passes.
 - The egress firewall (owner decision, 2026-11-13).
 - Windows (lease users and the audit).
 - Root escalation on a machine (design, section 18).
+
+## 11. Evidence
+
+- The whole E2E suite passed in one local run on macOS (2026-11-13, 615 s, before the
+  macOS fixes below), with the new scenarios `TestCleanupPersistence`, `TestNoReuse`,
+  `TestLeaseUsers`, `TestLeaseUserMise`, `TestPortsNextLease`, and the
+  `--lease-users` check in `TestMachineJoin`.
+- A real Mac (macOS 26.6, `TestSmokeMacLeaseUsers`, 2026-11-13): a lease user is
+  ready in about 30 s and runs Xcode; it cannot write the machine's cache or read
+  its rooms; after the release, the user, its home directory, its crontab, its
+  process without `HOSTEL_LEASE`, its file in `/tmp`, and its group entries are
+  gone. Found and fixed there: Remote Login that allows only some users
+  (`com.apple.access_ssh`), group entries of deleted users, and BSD `find`, which
+  opens the current directory.
+- Not tested: systemd user units and `at` jobs (the test machines have neither);
+  the 10-run CI gate.
