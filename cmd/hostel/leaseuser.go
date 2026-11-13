@@ -337,8 +337,12 @@ func deleteLeaseUser(name string) error {
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
 	if runtime.GOOS == "darwin" {
-		runQuietSetup("launchctl", "bootout", "user/"+u.Uid)
-		runQuietSetup("launchctl", "bootout", "gui/"+u.Uid)
+		for _, domain := range []string{"user/" + u.Uid, "gui/" + u.Uid} {
+			runQuietSetup("launchctl", "bootout", domain)
+			if err := checkNoServices(domain); err != nil {
+				return err
+			}
+		}
 	} else {
 		runQuietSetup("loginctl", "terminate-user", name)
 	}
@@ -428,6 +432,33 @@ func macGroups() []string {
 		groups = append(groups, "com.apple.access_ssh")
 	}
 	return groups
+}
+
+// checkNoServices fails when a launchd domain still has services: print
+// exits with 112 for a domain that does not exist.
+func checkNoServices(domain string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "launchctl", "print", domain).Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 112 {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("launchctl print %s: %w", domain, err)
+	}
+	in := false
+	for _, line := range strings.Split(string(out), "\n") {
+		switch t := strings.TrimSpace(line); {
+		case t == "services = {":
+			in = true
+		case in && t == "}":
+			in = false
+		case in && t != "":
+			return fmt.Errorf("the launchd domain %s still has the service %s", domain, t)
+		}
+	}
+	return nil
 }
 
 // checkNoFilesOf fails when a file of the user is left in dir, or when the

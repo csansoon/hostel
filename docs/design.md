@@ -2115,7 +2115,9 @@ failed; the result lists each step.
    which macOS starts at any time, and none of a domain that did not exist then),
    also one that changed its file or has none (`systemd-run --user`), and the
    step fails when it still runs. A systemd user manager that started during the
-   lease is stopped as a whole (`systemctl --user exit`). `begin` and this step decide under a
+   lease is stopped as a whole (`systemctl --user exit`), and so is one whose
+   environment (`set-environment`) changed or whose generator directories the
+   step restored: what these change is not in the files. `begin` and this step decide under a
    lock file (`hostel/machine.lock`) whether another room has a lease, so of two
    rooms that begin at the same time, the first makes the copy. The step runs a
    third time before step 5, in one hold of the lock, and only when it works the
@@ -2243,7 +2245,8 @@ Hardening (milestone M11):
      connections then use the lease user, as for room users (section 7).
    - **Delete** (cleanup, after the helper's cleanup as the lease user): end all
      processes of the user (`launchctl bootout`, `loginctl terminate-user`,
-     `pkill -KILL -u` until none is left), remove its crontab, its `at` jobs (a
+     `pkill -KILL -u` until none is left; on macOS each launchd domain of the
+     user must have no service after `bootout`), remove its crontab, its `at` jobs (a
      failure stops the deletion, so the room stays blocked), and
      its files in the shared directories (`/tmp`, `/var/tmp`, `/dev/shm`; on
      macOS also `/private/var/folders` and `/Users/Shared`; `find -delete` as the user,

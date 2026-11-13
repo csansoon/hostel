@@ -85,6 +85,16 @@ func (h *helper) snapshotPersistence() error {
 			return err
 		}
 	}
+	// The environment of the systemd user manager (set-environment changes it).
+	if runtime.GOOS == "linux" && userManager() {
+		env, err := outputQuiet("systemctl", "--user", "show-environment")
+		if err != nil {
+			return fmt.Errorf("systemctl --user show-environment: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(base, "environment"), []byte(env), 0o600); err != nil {
+			return err
+		}
+	}
 	// The services, and the managers that existed ("#present" lines): a
 	// manager that starts during the lease is checked too.
 	names, present, err := loadedServices()
@@ -231,6 +241,27 @@ func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
 	if len(items) > 0 && runtime.GOOS == "linux" && userManager() {
 		if err := runQuiet("systemctl", "--user", "daemon-reload"); err != nil {
 			failed = append(failed, "systemctl --user daemon-reload: "+err.Error())
+		}
+	}
+	// A changed generator or manager environment changes units that the
+	// files do not show: the user manager stops as a whole (it starts again at
+	// the next login, from the restored files).
+	if runtime.GOOS == "linux" && userManager() {
+		changed := slices.ContainsFunc(items, func(it string) bool { return strings.Contains(it, "generators") })
+		if before, err := os.ReadFile(filepath.Join(base, "environment")); err == nil {
+			now, err := outputQuiet("systemctl", "--user", "show-environment")
+			if err != nil {
+				failed = append(failed, "systemctl --user show-environment: "+err.Error())
+			} else if now != string(before) {
+				changed = true
+			}
+		}
+		if changed {
+			if err := exitUserManager(); err != nil {
+				failed = append(failed, err.Error())
+			} else {
+				items = append(items, "the user manager")
+			}
 		}
 	}
 	// Services loaded since the copy, also from a changed file or with no
@@ -538,6 +569,18 @@ func unitStopped(unit string) error {
 	return fmt.Errorf("the state of the user unit %s: %w", unit, err)
 }
 
+// exitUserManager stops the systemd user manager with all its units, and
+// waits until its socket is gone.
+func exitUserManager() error {
+	runQuiet("systemctl", "--user", "exit")
+	for deadline := time.Now().Add(15 * time.Second); userManager(); time.Sleep(200 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			return errors.New("the user manager still runs after systemctl --user exit")
+		}
+	}
+	return nil
+}
+
 // unitFile reports whether f is in a directory of systemd user units.
 func unitFile(f string) bool {
 	for _, d := range []string{"/.config/systemd/user/", "/.config/systemd/user.control/", "/.local/share/systemd/user/"} {
@@ -590,11 +633,8 @@ func stopNewServices(before []string) ([]string, error) {
 		return nil, err
 	}
 	if runtime.GOOS == "linux" && slices.Contains(nowPresent, "systemd") && !present["systemd"] {
-		runQuiet("systemctl", "--user", "exit")
-		for deadline := time.Now().Add(15 * time.Second); userManager(); time.Sleep(200 * time.Millisecond) {
-			if time.Now().After(deadline) {
-				return nil, errors.New("the user manager that started during the lease still runs")
-			}
+		if err := exitUserManager(); err != nil {
+			return nil, err
 		}
 		return []string{"the user manager"}, nil
 	}
