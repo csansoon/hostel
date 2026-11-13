@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,12 +83,19 @@ func (h *helper) snapshotPersistence() error {
 			return err
 		}
 	}
-	names, ok, err := loadedServices()
+	// The services, and the managers that existed ("#present" lines): a
+	// manager that starts during the lease is checked too.
+	names, present, err := loadedServices()
 	if err != nil {
 		return err
 	}
-	if ok {
-		if err := os.WriteFile(filepath.Join(base, "services"), []byte(strings.Join(names, "\n")), 0o600); err != nil {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		var lines []string
+		for _, p := range present {
+			lines = append(lines, "#present "+p)
+		}
+		lines = append(lines, names...)
+		if err := os.WriteFile(filepath.Join(base, "services"), []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 			return err
 		}
 	}
@@ -435,26 +443,26 @@ func plistLabel(file string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// loadedServices lists the loaded user services: systemd units of the user
-// manager, or launchd services of the user's gui and user domains
-// ("<domain>/<label>"). ok is false when the machine has none to list.
-func loadedServices() (names []string, ok bool, err error) {
+// loadedServices lists the loaded user units and services: systemd units of
+// the user manager (present: "systemd"), or launchd services of the user's
+// gui and user domains ("<domain>/<label>"; present: each domain).
+func loadedServices() (names, present []string, err error) {
 	switch runtime.GOOS {
 	case "linux":
 		if !userManager() {
-			return nil, false, nil
+			return nil, nil, nil
 		}
 		out, err := outputQuiet("systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "--no-pager",
-			"--type=service,timer,socket,path")
+			"--type=service,timer,socket,path,scope")
 		if err != nil {
-			return nil, false, fmt.Errorf("list the user units: %w", err)
+			return nil, nil, fmt.Errorf("list the user units: %w", err)
 		}
 		for _, line := range strings.Split(out, "\n") {
 			if f := strings.Fields(line); len(f) > 0 {
 				names = append(names, f[0])
 			}
 		}
-		return names, true, nil
+		return names, []string{"systemd"}, nil
 	case "darwin":
 		uid := strconv.Itoa(os.Getuid())
 		for _, domain := range []string{"gui/" + uid, "user/" + uid} {
@@ -462,7 +470,7 @@ func loadedServices() (names []string, ok bool, err error) {
 			if err != nil {
 				continue // no gui session
 			}
-			ok = true
+			present = append(present, domain)
 			in := false
 			for _, line := range strings.Split(out, "\n") {
 				switch t := strings.TrimSpace(line); {
@@ -477,9 +485,9 @@ func loadedServices() (names []string, ok bool, err error) {
 				}
 			}
 		}
-		return names, ok, nil
+		return names, present, nil
 	}
-	return nil, false, nil
+	return nil, nil, nil
 }
 
 // userManager reports whether the systemd user manager of this user runs: it
@@ -490,21 +498,36 @@ func userManager() bool {
 	return err == nil
 }
 
-// stopNewServices stops the loaded services that are not in before (not
-// Apple's on macOS: macOS starts them at any time), and fails for one that
-// still runs.
+// stopNewServices stops the units and services that were not loaded at the
+// copy (before: its lines), and fails for one that still runs. A systemd user
+// manager that did not exist then is stopped as a whole. On macOS, Apple's
+// services (macOS starts them at any time) and a domain that did not exist then
+// (a person signed in) are left.
 func stopNewServices(before []string) ([]string, error) {
-	now, ok, err := loadedServices()
-	if err != nil || !ok {
+	had, present := map[string]bool{}, map[string]bool{}
+	for _, l := range before {
+		if p, ok := strings.CutPrefix(l, "#present "); ok {
+			present[p] = true
+		} else if l != "" {
+			had[l] = true
+		}
+	}
+	now, nowPresent, err := loadedServices()
+	if err != nil {
 		return nil, err
 	}
-	had := map[string]bool{}
-	for _, n := range before {
-		had[n] = true
+	if runtime.GOOS == "linux" && slices.Contains(nowPresent, "systemd") && !present["systemd"] {
+		runQuiet("systemctl", "--user", "exit")
+		for deadline := time.Now().Add(15 * time.Second); userManager(); time.Sleep(200 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				return nil, errors.New("the user manager that started during the lease still runs")
+			}
+		}
+		return []string{"the user manager"}, nil
 	}
 	var stopped, failed []string
 	for _, n := range now {
-		if had[n] || n == "" {
+		if had[n] {
 			continue
 		}
 		switch runtime.GOOS {
@@ -515,7 +538,8 @@ func stopNewServices(before []string) ([]string, error) {
 				continue
 			}
 		case "darwin":
-			if label := n[strings.LastIndex(n, "/")+1:]; strings.HasPrefix(label, "com.apple.") {
+			domain, label := n[:strings.LastIndex(n, "/")], n[strings.LastIndex(n, "/")+1:]
+			if !present[domain] || strings.HasPrefix(label, "com.apple.") {
 				continue
 			}
 			runQuiet("launchctl", "bootout", n)

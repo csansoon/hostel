@@ -239,10 +239,17 @@ func ensureLeaseGroup(machineUser string) error {
 
 func nextLeaseUID() (int, error) {
 	uid := firstLeaseUID
-	if data, err := os.ReadFile(leaseUIDFile); err == nil {
-		if n, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && n > uid {
-			uid = n
+	data, err := os.ReadFile(leaseUIDFile)
+	switch {
+	case err == nil:
+		// Fail closed: a damaged counter must not start again at the first ID.
+		n, perr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if perr != nil || n < firstLeaseUID {
+			return 0, fmt.Errorf("%s is damaged (%q); write the next free user ID into it", leaseUIDFile, strings.TrimSpace(string(data)))
 		}
+		uid = n
+	case !errors.Is(err, os.ErrNotExist):
+		return 0, err
 	}
 	for {
 		if _, err := user.LookupId(strconv.Itoa(uid)); err != nil {
@@ -250,7 +257,15 @@ func nextLeaseUID() (int, error) {
 		}
 		uid++
 	}
-	return uid, os.WriteFile(leaseUIDFile, []byte(strconv.Itoa(uid+1)+"\n"), 0o644)
+	tmp := leaseUIDFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(uid+1)+"\n"), 0o644); err != nil {
+		return 0, err
+	}
+	if f, err := os.Open(tmp); err == nil {
+		f.Sync()
+		f.Close()
+	}
+	return uid, os.Rename(tmp, leaseUIDFile)
 }
 
 func addLeaseUser(name string, uid int) error {

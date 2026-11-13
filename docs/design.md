@@ -2104,11 +2104,14 @@ failed; the result lists each step.
    label cannot be read fails the step. For each link in these locations (also
    inside the directories, and inside linked directories, at most 8 deep), the
    copy also has the content behind the link and its path, and a changed target
-   is restored too. The copy also lists the loaded user services (systemd units
-   of the user manager; launchd services of the gui and user domains); a service
-   that was not loaded then is stopped (on macOS not Apple's own, which macOS
-   starts at any time), also one that changed its file or has none
-   (`systemd-run --user`), and the step fails when it still runs. `begin` and this step decide under a
+   is restored too. The copy also lists the loaded user services (systemd
+   services, timers, sockets, paths, and scopes of the user manager; launchd
+   services of the gui and user domains) and which managers and domains existed;
+   a service that was not loaded then is stopped (on macOS not Apple's own,
+   which macOS starts at any time, and none of a domain that did not exist then),
+   also one that changed its file or has none (`systemd-run --user`), and the
+   step fails when it still runs. A systemd user manager that started during the
+   lease is stopped as a whole (`systemctl --user exit`). `begin` and this step decide under a
    lock file (`hostel/machine.lock`) whether another room has a lease, so of two
    rooms that begin at the same time, the first makes the copy. The step runs a
    third time before step 5, in one hold of the lock, and only when it works the
@@ -2222,7 +2225,8 @@ Hardening (milestone M11):
    - **Create** (preparing, before `begin`): the server records the name, then
      runs `create` as the machine user through sudo: an existing lease user of
      that name goes first; the new user gets a user ID that was never used
-     before (`/etc/hostel/lease-uid`), no administrator rights, the group
+     before (`/etc/hostel/lease-uid`, written atomically; a damaged counter fails
+     the creation), no administrator rights, the group
      `hostel-leases` (its primary group on macOS; also `com.apple.access_ssh`
      when Remote Login allows only some users), a home directory with mode
      0700, and the server key. The machine user joins the group. Then the
