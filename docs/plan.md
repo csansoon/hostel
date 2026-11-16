@@ -496,7 +496,7 @@ Still to do (owner decision, 2026-11-16: merge first, do these later):
 - Windows lease users and the cleanup audit on Windows (owner decision,
   2026-11-16). The root step is a Hostel service that runs as SYSTEM, with a named
   pipe that only the machine user can open, for `lease-user` only; `machine join
-  --lease-users` installs it. `windows-desktop` leases keep the desktop user.
+  --lease-users` installs it. `windows-desktop` leases keep the desktop user. In progress: `m11w-implementation.md`.
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the
