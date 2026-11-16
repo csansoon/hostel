@@ -2254,7 +2254,7 @@ Hardening (milestone M11):
      its files in the shared directories (`/tmp`, `/var/tmp`, `/dev/shm`; on
      macOS also `/private/var/folders` and `/Users/Shared`; `find -delete` as the user,
      after it gives its own directories back their rights and clears its own
-     macOS flags; then root only looks with `find -print`, and a file that is
+     macOS flags; then root only looks with `find -print0`, and a file that is
      left stops the deletion). On macOS, the user's own directory in
      `/private/var/folders/<xx>/` has a parent that root owns, and a process of
      the user makes launchd write there again. So `/private/var/folders` is

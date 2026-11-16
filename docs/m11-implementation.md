@@ -172,7 +172,8 @@ E2E suite passes.
   root. Root cannot remove its skeleton either, because the system protects it
   (`sunlnk`, `com.apple.rootless`, SIP). A data vault in it cannot even be
   read by root. Root now removes the user's entries there, and the check
-  accepts only the protected, empty skeleton.
+  accepts only the protected skeleton and entries that root cannot read (a
+  data vault).
 - Not tested: systemd user units and `at` jobs (the test machines have neither);
   the 10-run CI gate.
 

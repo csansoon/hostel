@@ -571,10 +571,10 @@ func checkNoFilesOf(name, dir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var stderr strings.Builder
-	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print")
+	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print0")
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	for _, left := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, left := range strings.Split(string(out), "\x00") {
 		if left == "" {
 			continue
 		}
