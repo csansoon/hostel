@@ -396,6 +396,18 @@ func (p *portProc) connectLoop(ctx context.Context) {
 	}
 }
 
+// waitConn waits up to d until the port process has a gateway connection.
+func (p *portProc) waitConn(ctx context.Context, d time.Duration) {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline) && ctx.Err() == nil; time.Sleep(100 * time.Millisecond) {
+		p.mu.Lock()
+		ok := p.conn != nil
+		p.mu.Unlock()
+		if ok {
+			return
+		}
+	}
+}
+
 // listenTunnel asks the gateway for the remote forward of a tunnel. A refusal
 // (for example a machine service uses the port) is recorded in the tunnel state.
 func (p *portProc) listenTunnel(name string) error {
@@ -730,6 +742,9 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 		delete(p.state, req.Name)
 		p.mu.Unlock()
 	} else if needRegister {
+		// The port process can be in a reconnect (a lost gateway connection,
+		// a busy server): the tunnel waits for it.
+		p.waitConn(ctx, 30*time.Second)
 		if err := p.listenTunnel(req.Name); err != nil {
 			// Undo: the old list, with its forwards.
 			p.mu.Lock()
