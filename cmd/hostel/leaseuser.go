@@ -485,8 +485,8 @@ func removeAllButSystemDirs(path string, fi os.FileInfo) error {
 	for _, e := range entries {
 		p := filepath.Join(path, e.Name())
 		fi, err := os.Lstat(p)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			continue // gone, or a data vault that root cannot see either
 		}
 		if err != nil {
 			return err
@@ -571,10 +571,10 @@ func checkNoFilesOf(name, dir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var stderr strings.Builder
-	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print")
+	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print0")
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	for _, left := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, left := range strings.Split(string(out), "\x00") {
 		if left == "" {
 			continue
 		}
