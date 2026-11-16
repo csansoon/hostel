@@ -261,7 +261,7 @@ signing), Linux (KVM), on-demand providers, and a check after each part.
 | W10 | `desktop --detach <relative path>` failed (exit 127). | The path is now relative to the command's directory; checked by the Windows smoke test (`desktop --detach out\HostelSmoke.exe`) |
 | W11 | Event times have no date (an event of two days earlier looked like today). | `hostel status` shows the date for an event of another day |
 | W12 | Small free disk on the machine (8.5 GB). | Machine guide: disk space |
-| W13 | A sync that lost its connection made a lease expire. | Open: not reproduced |
+| W13 | A sync that lost its connection made a lease expire. | Closed: not reproduced, and no lease ID or log (owner decision, 2026-11-16) |
 | W14 | After a helper update, the desktop program restarts within 10 s; a lease that started in that time failed in the `windows-desktop` start script, and the machine became `broken`. | The start script waits up to 30 s for the program |
 | W15 | Windows PowerShell did not start in the desktop task at the first sign-in of the machine user (0.08 s CPU in 10 minutes). | The task runs a `cmd` loop |
 | W16 | At the first sign-in, the Start menu was open and had the focus: real clicks failed ("Target window is not in the foreground"). The console screen was 1024 × 768. | Machine guide 4.4: a second restart, and the screen size |
