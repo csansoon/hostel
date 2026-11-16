@@ -336,7 +336,7 @@ func (r *Machine) uploadHelperWindows(ctx context.Context, f *os.File) error {
 		"try { Move-Item -Force " + q(tmp+`\hostel.exe`) + " $dst }\n" +
 		"catch { Move-Item -Force $dst (Join-Path $dir ('.hostel.exe.old-' + [guid]::NewGuid())); Move-Item -Force " + q(tmp+`\hostel.exe`) + " $dst }\n" +
 		"Remove-Item -Recurse -Force " + q(tmp) + "\n"
-	cmd, err := r.powerShell(prepare)
+	cmd, err := r.PowerShell(prepare)
 	if err != nil {
 		return err
 	}
@@ -363,14 +363,14 @@ func (r *Machine) uploadHelperWindows(ctx context.Context, f *os.File) error {
 	if err != nil {
 		return err
 	}
-	if cmd, err = r.powerShell(finish); err != nil {
+	if cmd, err = r.PowerShell(finish); err != nil {
 		return err
 	}
 	return r.run(ctx, "upload helper", cmd, nil)
 }
 
-// powerShell returns a command line that runs a Windows PowerShell script.
-func (r *Machine) powerShell(script string) (string, error) {
+// PowerShell returns a command line that runs a Windows PowerShell script.
+func (r *Machine) PowerShell(script string) (string, error) {
 	return shell.Command(r.Shell, "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodePS(script))
 }
 

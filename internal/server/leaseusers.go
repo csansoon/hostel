@@ -34,6 +34,25 @@ for e in "$m"/cache/*; do
 	[ -e "$d/cache/$n" ] || [ -L "$d/cache/$n" ] || ln -s "$e" "$d/cache/$n"
 done`
 
+// fillLeaseHomeWindows is fillLeaseHome for Windows, in PowerShell: junctions
+// for the cache entries that are directories (a user can make junctions, not
+// links), copies of the others.
+func fillLeaseHomeWindows(machineDir string) string {
+	return `$ErrorActionPreference = 'Stop'
+$m = '` + strings.ReplaceAll(machineDir, "'", "''") + `'; $d = Join-Path $HOME 'hostel'
+New-Item -ItemType Directory -Force "$d\cache", "$d\rooms" | Out-Null
+foreach ($x in 'bin', 'tools', 'mise') {
+  if (Test-Path "$d\$x") { Remove-Item -Recurse -Force "$d\$x" }
+  if (Test-Path "$m\$x") { Copy-Item -Recurse "$m\$x" "$d\$x" }
+}
+foreach ($e in Get-ChildItem -Force "$m\cache") {
+  if ($e.Name -in 'mise', 'mise-cache') { continue }
+  $t = Join-Path "$d\cache" $e.Name
+  if (Test-Path $t) { continue }
+  if ($e.PSIsContainer) { New-Item -ItemType Junction -Path $t -Target $e.FullName | Out-Null } else { Copy-Item $e.FullName $t }
+}`
+}
+
 // Lease users (M11, design section 18): on a machine with lease_users, a lease
 // whose tools do not need the machine user gets its own OS user. The root
 // command runs through a sudo rule that allows only it.
@@ -60,11 +79,18 @@ func wantsLeaseUser(cfg *config.Server, m *config.Template, l store.Lease) bool 
 }
 
 // rootLeaseUser runs "hostel lease-user <args>" as root through sudo, as the
-// machine user, and decodes its JSON output into out.
-func rootLeaseUser(ctx context.Context, conn *machineops.Conn, out any, args ...string) error {
+// machine user, and decodes its JSON output into out. On Windows the machine
+// user's helper asks the service of lease users, which runs as SYSTEM.
+func rootLeaseUser(ctx context.Context, machine *machineops.Machine, out any, args ...string) error {
 	var stdout bytes.Buffer
 	cmd := "sudo -n " + leaseUserRoot + " lease-user " + strings.Join(args, " ")
-	code, stderr, err := conn.Run(ctx, cmd, bytes.NewReader(nil), &stdout)
+	if machine.OS == config.OSWindows {
+		var err error
+		if cmd, err = shell.Command(machine.Shell, machine.HelperPath(), append([]string{"lease-user"}, args...)...); err != nil {
+			return err
+		}
+	}
+	code, stderr, err := machine.Conn.Run(ctx, cmd, bytes.NewReader(nil), &stdout)
 	if err != nil {
 		return err
 	}
@@ -79,9 +105,9 @@ func rootLeaseUser(ctx context.Context, conn *machineops.Conn, out any, args ...
 }
 
 // checkLeaseUserRoot checks the root step at provisioning.
-func checkLeaseUserRoot(ctx context.Context, conn *machineops.Conn) error {
+func checkLeaseUserRoot(ctx context.Context, machine *machineops.Machine) error {
 	var c protocol.LeaseUserCheck
-	if err := rootLeaseUser(ctx, conn, &c, "check"); err != nil {
+	if err := rootLeaseUser(ctx, machine, &c, "check"); err != nil {
 		return err
 	}
 	if c.Version < leaseUserVersion {
@@ -125,7 +151,7 @@ func (s *Server) ensureLeaseUser(ctx context.Context, l store.Lease) error {
 	}
 	defer machine.Conn.Close()
 	var created protocol.LeaseUserCreated
-	if err := rootLeaseUser(ctx, machine.Conn, &created, "create", name); err != nil {
+	if err := rootLeaseUser(ctx, machine, &created, "create", name); err != nil {
 		return fmt.Errorf("create the lease user: %w", err)
 	}
 	if created.Home == "" {
@@ -147,6 +173,10 @@ func (s *Server) ensureLeaseUser(ctx context.Context, l store.Lease) error {
 	}
 	defer conn.Close()
 	cmd, err := shell.Command(shell.SH, "/bin/sh", "-c", fillLeaseHome, "sh", machineops.Path(r.OS, r.Home))
+	if r.OS == config.OSWindows {
+		lease := &machineops.Machine{Conn: conn, OS: r.OS, Shell: r.Shell}
+		cmd, err = lease.PowerShell(fillLeaseHomeWindows(machineops.Path(r.OS, r.Home)))
+	}
 	if err != nil {
 		return err
 	}
@@ -194,14 +224,14 @@ func (s *Server) deleteLeaseUsers(ctx context.Context, machineID int64, room str
 	}
 	defer machine.Conn.Close()
 	var list protocol.LeaseUserList
-	if err := rootLeaseUser(ctx, machine.Conn, &list, "list"); err != nil {
+	if err := rootLeaseUser(ctx, machine, &list, "list"); err != nil {
 		return err
 	}
 	for _, u := range list.Users {
 		if keep[u] {
 			continue
 		}
-		if err := rootLeaseUser(ctx, machine.Conn, nil, "delete", u); err != nil {
+		if err := rootLeaseUser(ctx, machine, nil, "delete", u); err != nil {
 			return fmt.Errorf("delete the lease user %s: %w", u, err)
 		}
 		if err := s.store.ClearLeaseUser(ctx, machineID, u); err != nil {

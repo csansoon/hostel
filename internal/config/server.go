@@ -634,9 +634,6 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 	}
 
 	if m.LeaseUsers {
-		if m.OS != OSLinux && m.OS != OSMacOS {
-			el.add(key+".lease_users", "lease users are for macOS and Linux machines")
-		}
 		if slices.ContainsFunc(m.Rooms, func(r Room) bool { return r.User != "" }) {
 			el.add(key+".lease_users", "a machine with lease users has no room users")
 		}

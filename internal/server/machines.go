@@ -181,7 +181,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Machine, m *config.Tem
 		return err
 	}
 	if m.LeaseUsers {
-		if err := checkLeaseUserRoot(ctx, machine.Conn); err != nil {
+		if err := checkLeaseUserRoot(ctx, machine); err != nil {
 			return err
 		}
 		if err := s.deleteLeaseUsers(ctx, r.ID, ""); err != nil {
