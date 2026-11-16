@@ -354,8 +354,10 @@ func deleteLeaseUser(name string) error {
 	}
 	tmp := []string{"/tmp", "/var/tmp", "/dev/shm"}
 	if runtime.GOOS == "darwin" {
-		// /Users/Shared: all local users can write it.
-		tmp = []string{"/private/tmp", "/private/var/tmp", "/private/var/folders", "/Users/Shared"}
+		// /Users/Shared: all local users can write it. /private/var/folders is
+		// last: a process of the user makes launchd make its directories there
+		// again.
+		tmp = []string{"/private/tmp", "/private/var/tmp", "/Users/Shared", "/private/var/folders"}
 	}
 	for _, d := range tmp {
 		if _, err := os.Stat(d); err == nil {
@@ -414,7 +416,9 @@ func deleteLeaseUser(name string) error {
 // the user (also the find above) makes launchd start the user's agents, which
 // make them again. So it ends the user's domains and processes first. Root
 // removes only directories, not links, that the user owns in a directory that
-// root owns; RemoveAll does not follow links.
+// root owns; RemoveAll does not follow links. The as-user find already cleared
+// the flags of the user's files; root does not, because a hard link there can
+// be a file of another user.
 func removeDarwinUserDirs(name, uid string) error {
 	for _, domain := range []string{"user/" + uid, "gui/" + uid} {
 		runQuietSetup("launchctl", "bootout", domain)
@@ -442,13 +446,15 @@ func removeDarwinUserDirs(name, uid string) error {
 		for _, e := range entries {
 			dir := filepath.Join(parent, e.Name())
 			fi, err := os.Lstat(dir)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			if err != nil {
 				return err
 			}
 			if owner, ok := fileOwner(fi); !ok || strconv.FormatUint(uint64(owner), 10) != uid || !fi.IsDir() {
 				continue
 			}
-			runQuietSetup("chflags", "-R", "-P", "nouchg,nouappnd", dir)
 			if err := os.RemoveAll(dir); err != nil {
 				return err
 			}
