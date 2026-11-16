@@ -19,7 +19,10 @@ import (
 // HOSTEL_SMOKE_MAC=<user@host> and HOSTEL_SMOKE_MAC_KEY, the private key that
 // the machine user accepts and whose public key is in
 // /etc/hostel/server_key.pub; it becomes the test server's key. The machine
-// must have no other lease during the test.
+// must have no other lease during the test (drain it on its own server). The
+// test server's tools replace the machine user's tool files: set
+// HOSTEL_SMOKE_MAC_TOOLS to the machine's tools on its own server (default
+// xcode), or repair the machine there after the test.
 //
 // A lease runs as its own user, cannot read the machine user's rooms or write
 // its cache; its backdoors (a process without HOSTEL_LEASE, a crontab entry, a
@@ -65,9 +68,9 @@ kind = "static"
 [providers.home.machines.mac]
 address = %q
 os = "macos"
-tools = ["xcode"]
+tools = %s
 lease_users = true
-`, addr)
+`, addr, tomlList(macSmokeTools()))
 	e.writeConfig(strings.Replace(cfg, fmt.Sprintf("helper_dir = %q", helperDir), fmt.Sprintf("helper_dir = %q", dist), 1))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
 	e.useGuestToken()
@@ -110,4 +113,11 @@ lease_users = true
 		strings.Contains(strings.SplitN(got, "GroupMembership:", 2)[1], user) {
 		t.Fatalf("after the release (user, home, /tmp, processes, lease users, group):\n%s", got)
 	}
+}
+
+func macSmokeTools() []string {
+	if v := os.Getenv("HOSTEL_SMOKE_MAC_TOOLS"); v != "" {
+		return strings.Split(v, ",")
+	}
+	return []string{"xcode"}
 }

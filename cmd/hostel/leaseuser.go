@@ -435,13 +435,15 @@ func macGroups() []string {
 }
 
 // checkNoServices fails when a launchd domain still has services that are
-// not Apple's: print exits with 112 for a domain that does not exist.
+// not Apple's: print exits with 112 for a domain that does not exist, and with
+// 125 ("Domain does not support specified action") for the gui domain of a
+// user without a GUI session (checked on macOS 26).
 func checkNoServices(domain string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "launchctl", "print", domain).Output()
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 112 {
+	if errors.As(err, &exit) && (exit.ExitCode() == 112 || exit.ExitCode() == 125) {
 		return nil
 	}
 	if err != nil {
