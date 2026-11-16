@@ -46,6 +46,9 @@ const (
 var leaseUserName = regexp.MustCompile(`^hostel-[0-9a-z]{12}$`)
 
 func leaseUserCmd(args []string, stdout, stderr io.Writer) int {
+	if runtime.GOOS == "windows" {
+		return leaseUserWindows(args, stdout, stderr)
+	}
 	usage := "usage: hostel lease-user check | list | create <name> | delete <name> (as root, through sudo)"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "hostel:", usage)
@@ -57,7 +60,7 @@ func leaseUserCmd(args []string, stdout, stderr io.Writer) int {
 	var err error
 	switch {
 	case runtime.GOOS != "linux" && runtime.GOOS != "darwin":
-		err = errors.New("lease users are for Linux and macOS machines")
+		err = errors.New("lease users are for Linux, macOS, and Windows machines")
 	case os.Geteuid() != 0:
 		err = errors.New("lease-user must run as root (sudo -n /etc/hostel/hostel lease-user ...)")
 	case args[0] == "check" && len(args) == 1:
@@ -670,8 +673,8 @@ func runQuietSetup(name string, args ...string) {
 // rule that lets the machine user run only "<bin> lease-user ..." as root,
 // checked with visudo.
 func installLeaseUserRule(osName, bin, serverKey string) error {
-	if osName != "linux" && osName != "macos" {
-		return errors.New("lease users are for macOS and Linux machines")
+	if osName == "windows" {
+		return installLeaseUserService(serverKey)
 	}
 	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(serverKey)); err != nil {
 		return fmt.Errorf("the server key: %w", err)
