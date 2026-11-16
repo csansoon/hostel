@@ -372,6 +372,11 @@ func deleteLeaseUser(name string) error {
 			cmd.Dir = "/"
 			_ = cmd.Run() // fails for directories of other users that it cannot read
 			cancel()
+			if d == "/private/var/folders" {
+				if err := removeDarwinUserDirs(name, u.Uid); err != nil {
+					return err
+				}
+			}
 			// Root only looks: is a file of the user left?
 			if err := checkNoFilesOf(name, d); err != nil {
 				return err
@@ -399,6 +404,55 @@ func deleteLeaseUser(name string) error {
 		}
 	} else if err := runSetup("userdel", name); err != nil {
 		return err
+	}
+	return nil
+}
+
+// removeDarwinUserDirs removes the user's own directories in
+// /private/var/folders/<xx>/ (its temporary and cache directories). The user
+// cannot remove them, because their parent belongs to root, and a process of
+// the user (also the find above) makes launchd start the user's agents, which
+// make them again. So it ends the user's domains and processes first. Root
+// removes only directories, not links, that the user owns in a directory that
+// root owns; RemoveAll does not follow links.
+func removeDarwinUserDirs(name, uid string) error {
+	for _, domain := range []string{"user/" + uid, "gui/" + uid} {
+		runQuietSetup("launchctl", "bootout", domain)
+	}
+	if err := killUser(name); err != nil {
+		return err
+	}
+	parents, err := os.ReadDir("/private/var/folders")
+	if err != nil {
+		return err
+	}
+	for _, p := range parents {
+		parent := filepath.Join("/private/var/folders", p.Name())
+		fi, err := os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+		if owner, ok := fileOwner(fi); !ok || owner != 0 || !fi.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			dir := filepath.Join(parent, e.Name())
+			fi, err := os.Lstat(dir)
+			if err != nil {
+				return err
+			}
+			if owner, ok := fileOwner(fi); !ok || strconv.FormatUint(uint64(owner), 10) != uid || !fi.IsDir() {
+				continue
+			}
+			runQuietSetup("chflags", "-R", "-P", "nouchg,nouappnd", dir)
+			if err := os.RemoveAll(dir); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
