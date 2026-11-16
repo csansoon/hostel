@@ -5,6 +5,7 @@ package e2e
 import (
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,5 +79,71 @@ Test-Path 'C:\Users\` + user + `', 'C:\ProgramData\door-` + user + `.txt', 'C:\d
 & C:\Users\hostel\hostel\bin\hostel.exe lease-user list`)
 	if strings.Contains(got, "exists") || strings.Contains(got, "True") || !strings.Contains(got, `{"users":null}`) {
 		t.Fatalf("after the release (user, profile, files, lease users):\n%s", got)
+	}
+}
+
+// TestSmokeWindowsCleanupAudit runs against a real Windows machine, as
+// TestSmokeWindows. A lease on the machine user leaves a Run value, a user
+// environment variable, a file in the Startup folder, a PowerShell profile, and
+// a scheduled task; after the release they are gone, and the event log names
+// them.
+func TestSmokeWindowsCleanupAudit(t *testing.T) {
+	e, s := windowsSmoke(t, true, "tools = [\"windows-desktop\"]\n", func(int) map[string]string {
+		return map[string]string{"a.txt": "one\n"}
+	})
+	addr, keyFile := os.Getenv("HOSTEL_SMOKE_WINDOWS"), os.Getenv("HOSTEL_SMOKE_WINDOWS_KEY")
+	machineSh := func(cmd string) string {
+		t.Helper()
+		out, err := exec.Command("ssh", "-o", "BatchMode=yes", "-i", keyFile, addr, cmd).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", cmd, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	start := time.Now()
+	var lease string
+	for {
+		r := e.hostel("acquire", "--task", "windows cleanup audit smoke test", "--wait", "1m")
+		if r.code == 0 {
+			lease = leaseIDRE.FindStringSubmatch(r.stdout + r.stderr)[1]
+			break
+		}
+		if r.code != 75 || time.Since(start) > 15*time.Minute {
+			t.Fatalf("acquire: %s", r)
+		}
+	}
+	e.mustHostel("run", "--", `Set-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run door 'cmd /c echo door'
+Set-ItemProperty HKCU:\Environment HOSTEL_DOOR door
+'echo door' | Set-Content "$HOME\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\door.cmd"
+New-Item -ItemType Directory -Force "$HOME\Documents\WindowsPowerShell" | Out-Null
+'# door' | Add-Content "$HOME\Documents\WindowsPowerShell\profile.ps1"
+schtasks /create /tn door-audit /tr "cmd /c echo door" /sc daily /st 03:00 /f | Out-Null`)
+	e.mustHostel("release")
+	e.waitFor("the Windows machine free", 5*time.Minute, func() bool {
+		r := s.machine("home/win")
+		if r.State == protocol.MachineBroken {
+			t.Fatalf("the Windows machine is broken: %s", r.Reason)
+		}
+		return r.State == protocol.MachineRunning && len(r.Rooms) == 1 && r.Rooms[0].State == protocol.RoomFree
+	})
+	got := machineSh(`(Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run).door
+(Get-ItemProperty HKCU:\Environment).HOSTEL_DOOR
+Test-Path "$HOME\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\door.cmd"
+if (Test-Path "$HOME\Documents\WindowsPowerShell\profile.ps1") { Select-String -Quiet door "$HOME\Documents\WindowsPowerShell\profile.ps1" }
+if (Get-ScheduledTask -TaskName door-audit -ErrorAction SilentlyContinue) { 'task door-audit' }`)
+	if strings.Contains(got, "door") || strings.Contains(got, "True") {
+		t.Fatalf("after the release (Run value, environment, Startup file, profile, task):\n%s", got)
+	}
+	var d protocol.MachineDetails
+	if code := s.get("/v1/machines/home/win", s.token, &d); code != 200 {
+		t.Fatalf("GET /v1/machines/home/win: HTTP %d", code)
+	}
+	for _, item := range []string{`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\door`, `HKCU\Environment\HOSTEL_DOOR`,
+		"~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/door.cmd", "~/Documents/WindowsPowerShell", `scheduled task \door-audit`} {
+		if !slices.ContainsFunc(d.Events, func(ev protocol.Event) bool {
+			return ev.LeaseID == lease && strings.HasPrefix(ev.Message, "removed persistence of the lease: ") && strings.Contains(ev.Message, item)
+		}) {
+			t.Fatalf("no event names %q: %+v", item, d.Events)
+		}
 	}
 }
