@@ -272,7 +272,12 @@ desktop session, so the desktop user must be `hostel` (M10h test flight,
 Windows 11 has one desktop session. A Remote Desktop or Windows App
 connection of another user disconnects the session of `hostel`, and a
 disconnected or locked desktop stops screenshots and real input. Use the
-computer only for Hostel, and do the administrator work over SSH.
+computer only for Hostel, and do the administrator work over SSH. After a
+disconnection, a lease fails at start with "the desktop session ... is not
+active", and the machine becomes `broken` (a locked desktop is not detected). To recover, restart the computer over SSH as an administrator
+(`Restart-Computer`), and repair the machine
+(`hostel config machines repair <machine>`). One restart is enough (tested
+2026-11-16).
 
 Run this as an administrator. It replaces an earlier "Hostel desktop" task and
 its `cred` file.

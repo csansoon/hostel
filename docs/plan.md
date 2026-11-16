@@ -495,8 +495,11 @@ Still to do (owner decision, 2026-11-16: merge first, do these later):
 - The 10-run CI gate (`e2e-10`), when CI runs again.
 - A real check of the audit's stops: systemd user units with a running user
   manager on Linux, and LaunchAgents of the machine user on macOS; `at` jobs.
-- The production server with the M11 build, and `--lease-users` on the machines
-  that should use it.
+- `--lease-users` on the machines that should use it.
+- Windows lease users and the cleanup audit on Windows (owner decision,
+  2026-11-16). The root step is a Hostel service that runs as SYSTEM, with a named
+  pipe that only the machine user can open, for `lease-user` only; `machine join
+  --lease-users` installs it. `windows-desktop` leases keep the desktop user.
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the

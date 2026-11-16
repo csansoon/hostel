@@ -87,7 +87,10 @@ stay, Next machine), each with a plain description (in the footer for a selectab
 - **Stability.** From M1, a milestone is done only when the whole E2E suite passes
   in 10 separate runs in CI (the label `e2e-10` on the pull request starts the
   workflow "E2E gate"), and in one local run on macOS (`make test-e2e`) when the
-  Mac has a normal load. `make test-e2e-10` runs the 10 runs locally.
+  Mac has a normal load. `make test-e2e-10` runs the 10 runs locally. When CI
+  cannot run, the local runs are the gate (owner decision, 2026-11-16): `make
+  test-e2e` before a pull request is ready, and `make test-e2e-10` when a
+  milestone ends.
 - **Shared machine.** A developer's Mac can also run other projects. Their Docker
   containers (for example `app-postgres` and `app-storage`) and local servers must
   not be touched. E2E tests label every container, network, and volume that they

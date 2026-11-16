@@ -65,6 +65,9 @@ and after CI ends, until no new comment comes.
 - A failure: read the log, fix the cause (not only the symptom), push, and
   wait again. A failure from the environment (for example a runner problem):
   run it again once, and report it.
+- When CI cannot run (its jobs end with no steps), the local runs are the gate
+  (owner decision, 2026-11-16): `make test-e2e` on the last commit, and
+  `make test-e2e-10` when a milestone ends. Report them instead of CI.
 
 ## 5. Tell the owner
 
@@ -72,7 +75,8 @@ Only when all of these are true:
 
 - the subagent's findings are fixed or explained;
 - every review thread is resolved or has a reply that explains why not;
-- all CI checks pass on the last commit (and the gate, when it applies);
+- all CI checks pass on the last commit (and the gate, when it applies), or,
+  when CI cannot run, the local runs of step 4 pass;
 - the branch merges without conflicts (`gh pr view N --json mergeable`).
 
 Then report in ASD-STE100 (`AGENTS.md`): the pull request link, the head commit,

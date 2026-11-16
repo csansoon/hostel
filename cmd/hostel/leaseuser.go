@@ -354,8 +354,10 @@ func deleteLeaseUser(name string) error {
 	}
 	tmp := []string{"/tmp", "/var/tmp", "/dev/shm"}
 	if runtime.GOOS == "darwin" {
-		// /Users/Shared: all local users can write it.
-		tmp = []string{"/private/tmp", "/private/var/tmp", "/private/var/folders", "/Users/Shared"}
+		// /Users/Shared: all local users can write it. /private/var/folders is
+		// last: a process of the user makes launchd make its directories there
+		// again.
+		tmp = []string{"/private/tmp", "/private/var/tmp", "/Users/Shared", "/private/var/folders"}
 	}
 	for _, d := range tmp {
 		if _, err := os.Stat(d); err == nil {
@@ -372,6 +374,11 @@ func deleteLeaseUser(name string) error {
 			cmd.Dir = "/"
 			_ = cmd.Run() // fails for directories of other users that it cannot read
 			cancel()
+			if d == "/private/var/folders" {
+				if err := removeDarwinUserDirs(name, u.Uid); err != nil {
+					return err
+				}
+			}
 			// Root only looks: is a file of the user left?
 			if err := checkNoFilesOf(name, d); err != nil {
 				return err
@@ -399,6 +406,94 @@ func deleteLeaseUser(name string) error {
 		}
 	} else if err := runSetup("userdel", name); err != nil {
 		return err
+	}
+	return nil
+}
+
+// removeDarwinUserDirs removes the user's files in its own directories in
+// /private/var/folders/<xx>/ (its temporary and cache directories). A process
+// of the user (also the find above) makes launchd start the user's agents,
+// which write there again, so it ends the user's domains and processes first.
+// The skeleton of these directories is protected by the system (see
+// isSystemDir) and stays, empty. Root removes only entries that the user owns
+// in a directory that root owns, and nothing behind a link (Lstat; RemoveAll
+// does not follow links). The as-user find already cleared the flags of the
+// user's files; root does not, because a hard link can be a file of another
+// user.
+func removeDarwinUserDirs(name, uid string) error {
+	for _, domain := range []string{"user/" + uid, "gui/" + uid} {
+		runQuietSetup("launchctl", "bootout", domain)
+	}
+	if err := killUser(name); err != nil {
+		return err
+	}
+	parents, err := os.ReadDir("/private/var/folders")
+	if err != nil {
+		return err
+	}
+	for _, p := range parents {
+		parent := filepath.Join("/private/var/folders", p.Name())
+		fi, err := os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+		if owner, ok := fileOwner(fi); !ok || owner != 0 || !fi.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			dir := filepath.Join(parent, e.Name())
+			fi, err := os.Lstat(dir)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if owner, ok := fileOwner(fi); !ok || strconv.FormatUint(uint64(owner), 10) != uid {
+				continue
+			}
+			if err := removeAllButSystemDirs(dir, fi); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// removeAllButSystemDirs removes path, or, for a directory that the system
+// protects, everything in it but such directories.
+func removeAllButSystemDirs(path string, fi os.FileInfo) error {
+	if !isSystemDir(path, fi) {
+		// macOS also protects entries without the flag (for example a data
+		// vault): the check after this decides about what stays.
+		if err := os.RemoveAll(path); err != nil && !errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		return nil
+	}
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, os.ErrPermission) {
+		return nil // a data vault; the check decides
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		p := filepath.Join(path, e.Name())
+		fi, err := os.Lstat(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := removeAllButSystemDirs(p, fi); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -435,13 +530,15 @@ func macGroups() []string {
 }
 
 // checkNoServices fails when a launchd domain still has services that are
-// not Apple's: print exits with 112 for a domain that does not exist.
+// not Apple's: print exits with 112 for a domain that does not exist, and with
+// 125 ("Domain does not support specified action") for the gui domain of a
+// user without a GUI session (checked on macOS 26).
 func checkNoServices(domain string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "launchctl", "print", domain).Output()
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 112 {
+	if errors.As(err, &exit) && (exit.ExitCode() == 112 || (exit.ExitCode() == 125 && strings.HasPrefix(domain, "gui/"))) {
 		return nil
 	}
 	if err != nil {
@@ -467,15 +564,23 @@ func checkNoServices(domain string) error {
 
 // checkNoFilesOf fails when a file of the user is left in dir, or when the
 // scan did not end. Directories that macOS protects also from root give
-// "Operation not permitted"; the user could not write there either.
+// "Operation not permitted"; the user could not write there either. Empty
+// directories that the system protects (isSystemDir) can stay: they hold
+// nothing of the user, because each entry in them is checked too.
 func checkNoFilesOf(name, dir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var stderr strings.Builder
-	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print", "-quit")
+	cmd := exec.CommandContext(ctx, "find", dir, "-xdev", "-user", name, "-print")
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	if left := strings.TrimSpace(string(out)); left != "" {
+	for _, left := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if left == "" {
+			continue
+		}
+		if fi, err := os.Lstat(left); err == nil && isSystemDir(left, fi) {
+			continue
+		}
 		return fmt.Errorf("a file of %s is left in %s: %s", name, dir, left)
 	}
 	if err == nil {
