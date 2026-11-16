@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,10 @@ func TestSmokeMacLeaseUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.init()
+	// The lease acquires xcode and checks xcodebuild.
+	if !slices.Contains(macSmokeTools(), "xcode") {
+		t.Fatalf("HOSTEL_SMOKE_MAC_TOOLS must contain xcode: %q", os.Getenv("HOSTEL_SMOKE_MAC_TOOLS"))
+	}
 	cfg := serverHeader() + fmt.Sprintf(`
 [providers.home]
 kind = "static"
@@ -116,8 +121,14 @@ lease_users = true
 }
 
 func macSmokeTools() []string {
+	tools := []string{"xcode"}
 	if v := os.Getenv("HOSTEL_SMOKE_MAC_TOOLS"); v != "" {
-		return strings.Split(v, ",")
+		tools = tools[:0]
+		for _, t := range strings.Split(v, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tools = append(tools, t)
+			}
+		}
 	}
-	return []string{"xcode"}
+	return tools
 }

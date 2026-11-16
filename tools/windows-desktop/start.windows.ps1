@@ -40,8 +40,23 @@ if (-not $program) {
 }
 $session = $program[0].SessionId
 # A Remote Desktop login of another user disconnects this session: the desktop
-# program still runs, but no window gets input or is drawn.
-if (-not (quser 2>$null | Where-Object { $_ -match "\s$session\s+Active\s" })) {
+# program still runs, but no window gets input or is drawn. The connect state
+# from the WTS API (0: active) does not depend on the system language, and a
+# locked session is still active (this check does not see a lock).
+Add-Type -Namespace Hostel -Name Wts -MemberDefinition @'
+[DllImport("wtsapi32.dll", SetLastError = true)]
+static extern bool WTSQuerySessionInformation(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
+[DllImport("wtsapi32.dll")]
+static extern void WTSFreeMemory(IntPtr memory);
+public static int ConnectState(int session) {
+	IntPtr buffer; int bytes;
+	if (!WTSQuerySessionInformation(IntPtr.Zero, session, 8, out buffer, out bytes)) { return -1; }
+	int state = System.Runtime.InteropServices.Marshal.ReadInt32(buffer);
+	WTSFreeMemory(buffer);
+	return state;
+}
+'@
+if ([Hostel.Wts]::ConnectState($session) -ne 0) {
 	[Console]::Error.WriteLine("the desktop session $session is not active (for example disconnected by a Remote Desktop login): restart the machine (machine-setup.md, section 4.4)")
 	exit 1
 }

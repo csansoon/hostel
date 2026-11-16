@@ -511,7 +511,8 @@ func loadedServices() (names, present []string, err error) {
 			var exit *exec.ExitError
 			// 112: no such domain; 125: the gui domain of a user without a GUI
 			// session (checked on macOS 26).
-			if errors.As(err, &exit) && (exit.ExitCode() == 112 || exit.ExitCode() == 125 || strings.Contains(string(exit.Stderr), "Could not find domain")) {
+			if errors.As(err, &exit) && (exit.ExitCode() == 112 || (exit.ExitCode() == 125 && strings.HasPrefix(domain, "gui/")) ||
+				strings.Contains(string(exit.Stderr), "Could not find domain")) {
 				continue
 			}
 			if err != nil {

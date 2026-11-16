@@ -443,7 +443,7 @@ func checkNoServices(domain string) error {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "launchctl", "print", domain).Output()
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && (exit.ExitCode() == 112 || exit.ExitCode() == 125) {
+	if errors.As(err, &exit) && (exit.ExitCode() == 112 || (exit.ExitCode() == 125 && strings.HasPrefix(domain, "gui/"))) {
 		return nil
 	}
 	if err != nil {
