@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -167,6 +168,31 @@ func TestWarmDestroy(t *testing.T) {
 	f.waitNoCloudMachines()
 	if w := wait(); !regexp.MustCompile(`^(<1 min|~[1-3] min) \(new machine\)$`).MatchString(w) {
 		t.Fatalf("estimated wait after a machine: %q, want the creation time of that machine", w)
+	}
+}
+
+// TestNoReuse (M11): with reuse = false, an on-demand machine is destroyed
+// after its lease (not after warm_running), and the next lease gets a new one.
+func TestNoReuse(t *testing.T) {
+	t.Parallel()
+	f := newExternalFixture(t, "", "warm_running = \"10m\"\nreuse = false", nil, smallTemplate)
+	f.acquire()
+	first := f.cloudMachines()[0].Name
+	f.e.mustHostel("release")
+	f.waitNoCloudMachines()
+	db, err := sql.Open("sqlite", filepath.Join(f.e.dataDir(), "hostel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	err = db.QueryRow(`SELECT count(*) FROM events WHERE message LIKE '%reuse = false: destroyed after its lease%'`).Scan(&n)
+	db.Close()
+	if err != nil || n != 1 {
+		t.Fatalf("events of the destruction for reuse = false: %d, %v", n, err)
+	}
+	f.acquire()
+	if ms := f.cloudMachines(); len(ms) != 1 || ms[0].Name == first {
+		t.Fatalf("machines of the second lease: %+v, want one new machine (not %s)", ms, first)
 	}
 }
 

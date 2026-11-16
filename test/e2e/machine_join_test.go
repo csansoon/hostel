@@ -70,7 +70,7 @@ func TestMachineJoin(t *testing.T) {
 
 	code2 := regexp.MustCompile(`machine join (hostel1-\S+)`).FindStringSubmatch(e.adminHostel("config", "machines", "add", "box2").stdout)[1]
 	join := func(c string) (string, error) {
-		return docker("exec", name, "/usr/local/bin/hostel", "machine", "join", c, "--no-service")
+		return docker("exec", name, "/usr/local/bin/hostel", "machine", "join", c, "--no-service", "--lease-users")
 	}
 	out, err := join(code)
 	if err != nil || !strings.Contains(out, "added the machine home/box2") {
@@ -92,6 +92,11 @@ func TestMachineJoin(t *testing.T) {
 	}
 	if got := rootSh("stat -c %U:%a /etc/hostel/machine-token /etc/hostel/hostel"); got != "root:600\nroot:755" {
 		t.Fatalf("machine token: %s", got)
+	}
+	// --lease-users (M11): the machine user may run only "hostel lease-user"
+	// as root.
+	if got := rootSh(`su hostel -s /bin/sh -c 'sudo -n /etc/hostel/hostel lease-user check; sudo -n /bin/true 2>/dev/null || echo refused'`); got != `{"version":2}`+"\nrefused" {
+		t.Fatalf("the sudo rule for lease users: %q", got)
 	}
 	doc := s.configDoc().Document
 	for _, want := range []string{"[providers.home.machines.box2]", `connect = true`, `os = "linux"`, `tools = ["fake-screen"]`} {

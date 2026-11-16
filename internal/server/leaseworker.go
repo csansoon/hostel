@@ -161,11 +161,19 @@ func (s *Server) openRoom(ctx context.Context, machineID int64, room string) (*m
 	if err != nil {
 		return nil, r, err
 	}
-	conn, err := s.connectAs(ctx, r, roomUser(s.config().Template(r.Provider+"/"+r.Template), room))
+	user, err := s.roomUserOf(ctx, r, room)
 	if err != nil {
 		return nil, r, err
 	}
-	return &machineops.Machine{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}, r, nil
+	conn, err := s.connectAs(ctx, r, user)
+	if err != nil {
+		return nil, r, err
+	}
+	machine := &machineops.Machine{Conn: conn, OS: r.OS, Arch: r.Arch, Home: home, Shell: r.Shell}
+	if user != "" && roomUser(s.config().Template(r.Provider+"/"+r.Template), room) == "" {
+		machine.SharedHome = r.Home
+	}
+	return machine, r, nil
 }
 
 // readyFor reports whether a machine has installed and checked each tool of a
@@ -300,6 +308,9 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err := s.store.SetRooms(ctx, l.ID, protocol.RoomPreparing); err != nil {
 		return err
 	}
+	if err := s.ensureLeaseUser(ctx, l); err != nil {
+		return err
+	}
 	machine, r, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
 		return err
@@ -404,6 +415,16 @@ func (s *Server) extendDeadline(ctx context.Context, r store.Machine, m *config.
 func (s *Server) stepCleaning(ctx context.Context, l store.Lease) error {
 	s.gateway.CloseLease(l.ID)
 	if l.BeganAt.IsZero() {
+		// A lease user that preparing created before begin goes now.
+		if u, err := s.store.RoomLeaseUser(ctx, l.MachineID, l.RoomName); err != nil {
+			return err
+		} else if u != "" {
+			// The room stays in cleaning until the user is gone: the step
+			// runs again.
+			if err := s.deleteLeaseUsers(ctx, l.MachineID, l.RoomName); err != nil {
+				return fmt.Errorf("delete the lease user %s: %w", u, err)
+			}
+		}
 		_, err := s.store.FinishCleaning(ctx, l.ID, protocol.RoomFree, "", time.Now())
 		return err
 	}
@@ -484,7 +505,7 @@ func (s *Server) cleanupData(ctx context.Context, l store.Lease) string {
 func (s *Server) cleanupLease(ctx context.Context, l store.Lease) error {
 	machine, _, err := s.openRoom(ctx, l.MachineID, l.RoomName)
 	if err != nil {
-		return err
+		return s.deleteLeaseUserInstead(ctx, l.MachineID, l.RoomName, len(l.Started), err)
 	}
 	defer machine.Conn.Close()
 	return s.runCleanup(ctx, machine, l.MachineID, l.RoomName, s.cleanupRequest(ctx, l))
@@ -538,7 +559,12 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	}
 	// Check checks the machine, whose install ran as the machine user: a
 	// room with its own user runs it as the machine user after the cleanup.
-	ownUser := roomUser(s.config().Template(r.Provider+"/"+r.Template), room) != ""
+	user, err := s.roomUserOf(ctx, r, room)
+	if err != nil {
+		return err
+	}
+	ownUser := user != ""
+	leaseUser := ownUser && roomUser(s.config().Template(r.Provider+"/"+r.Template), room) == ""
 	if !ownUser {
 		req.Check = sortedKeys(check)
 	}
@@ -550,17 +576,42 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 			err = machine.Helper(ctx, []string{"cleanup", "--room", room}, req, &resp)
 		}
 	}
+	var helperFailed error
+	if err != nil && leaseUser && !errors.Is(err, machineops.ErrUnreachable) {
+		// The lease user owns its helper and can break it; its deletion
+		// below ends and removes everything of it. The stop scripts of its
+		// tools did not run, though.
+		s.log.Warn("cleanup as the lease user failed; the user is deleted", "machine_id", machineID, "room", room, "err", err)
+		if len(req.Started) > 0 {
+			helperFailed = fmt.Errorf("cleanup as the lease user (the stop scripts did not run): %w", err)
+		}
+		resp, err = protocol.CleanupResponse{}, nil
+	}
 	if err != nil {
 		return err
 	}
 	if err := s.recordChecks(ctx, machineID, resp.Checks, check); err != nil {
 		return err
 	}
+	if len(resp.Removed) > 0 {
+		if err := s.store.AddEvent(ctx, time.Now(), req.LeaseID, machineID, "cleanup",
+			"removed persistence of the lease: "+strings.Join(resp.Removed, ", ")); err != nil {
+			s.log.Error("record removed persistence", "lease_id", req.LeaseID, "err", err)
+		}
+	}
 	var failed []string
 	for _, st := range resp.Steps {
-		if st.Error != "" {
+		// The deletion of a lease user ends all its processes and removes all
+		// its files; only the tools' stop scripts must have worked.
+		if st.Error != "" && (!leaseUser || st.Name == "stop screen tools") {
 			failed = append(failed, st.Name+": "+st.Error)
 		}
+	}
+	if err := s.deleteLeaseUsers(ctx, machineID, room); err != nil {
+		failed = append(failed, err.Error())
+	}
+	if helperFailed != nil {
+		failed = append(failed, helperFailed.Error())
 	}
 	if len(failed) > 0 {
 		return errors.New(strings.Join(failed, "; "))

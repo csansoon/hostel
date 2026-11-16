@@ -46,12 +46,15 @@ const (
 // Tool is a defined tool: a directory with tool.toml, scripts for each OS, and
 // GUIDE.md. A tool without a definition is a mise tool.
 type Tool struct {
-	Description    string              `toml:"description"`
-	Needs          []string            `toml:"needs,omitempty"`
-	Screen         bool                `toml:"screen,omitempty"`
-	Options        []string            `toml:"options,omitempty"`
-	MaxOptions     int                 `toml:"max_options,omitempty"`
-	WholeMachine   bool                `toml:"whole_machine,omitempty"`
+	Description  string   `toml:"description"`
+	Needs        []string `toml:"needs,omitempty"`
+	Screen       bool     `toml:"screen,omitempty"`
+	Options      []string `toml:"options,omitempty"`
+	MaxOptions   int      `toml:"max_options,omitempty"`
+	WholeMachine bool     `toml:"whole_machine,omitempty"`
+	// MachineUser: the tool needs the machine user's account (its desktop
+	// session or what install made there); a lease with it gets no lease user.
+	MachineUser    bool                `toml:"machine_user,omitempty"`
 	Env            map[string]string   `toml:"env,omitempty"`
 	Path           []string            `toml:"path,omitempty"`
 	ScriptTimeouts map[string]Duration `toml:"script_timeouts,omitempty"`

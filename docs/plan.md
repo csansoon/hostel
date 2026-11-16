@@ -482,17 +482,33 @@ Status: planned (`m10h-implementation.md`). Owner decisions of 2026-11-12
 Done when: the second Windows test flight runs with no manual step; the macOS
 cleanup and signing are shown on a real Mac; the E2E suite passes.
 
-## M11. Hardening against backdoors (later; not required for version 1)
+## M11. Hardening against backdoors (not required for version 1)
+
+Status: implemented (`m11-implementation.md`; pull request #11). Owner
+decisions of 2026-11-13 and 2026-11-16 (`requirements.md`, section 3).
+
+Still to do (owner decision, 2026-11-16: merge first, do these later):
+
+- The Mac smoke test of lease users (`TestSmokeMacLeaseUsers`) on the last root
+  binary (it passed on an earlier one; the last change is the launchd domain
+  check of a deleted lease user).
+- The 10-run CI gate (`e2e-10`), when CI runs again.
+- A real check of the audit's stops: systemd user units with a running user
+  manager on Linux, and LaunchAgents of the machine user on macOS; `at` jobs.
+- The production server with the M11 build, and `--lease-users` on the machines
+  that should use it.
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the
 measures.
 
-- One OS user for each lease on macOS and Linux rooms; delete it at cleanup.
-- Read-only shared caches; a writable cache for each lease.
-- Optional egress firewall on rooms.
-- A machine option to destroy on-demand rooms after each lease.
-- Cleanup audit of persistence locations.
+- One OS user for each lease on macOS and Linux machines that opt in
+  (`lease_users`); delete it at cleanup. A narrow sudo rule gives the root step.
+- Read-only shared caches; a writable cache for each lease user.
+- A template option to destroy on-demand machines after each lease (`reuse`).
+- Cleanup audit of persistence locations: remove new items, and record them.
+- Not in M11: the egress firewall (later).
+- Known limits: `m11-implementation.md`, section 12 (owner decision, 2026-11-16).
 
 E2E scenarios: a reverse-shell process without `HOSTEL_LEASE`, a crontab entry, a
 user LaunchAgent or systemd user unit, and a changed cache binary. None of them

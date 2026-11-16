@@ -30,6 +30,9 @@ type Machine struct {
 	Arch  string // Go architecture name
 	Home  string
 	Shell string // the SSH server's shell (shell.SH on macOS and Linux)
+	// SharedHome is the machine user's home when the connection is a lease
+	// user's (M11): its mise uses the machine's installs, read-only.
+	SharedHome string
 }
 
 // HelperPath returns the absolute helper path on the machine.
