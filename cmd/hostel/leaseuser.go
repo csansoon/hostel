@@ -485,8 +485,8 @@ func removeAllButSystemDirs(path string, fi os.FileInfo) error {
 	for _, e := range entries {
 		p := filepath.Join(path, e.Name())
 		fi, err := os.Lstat(p)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+			continue // gone, or a data vault that root cannot see either
 		}
 		if err != nil {
 			return err
