@@ -484,8 +484,19 @@ cleanup and signing are shown on a real Mac; the E2E suite passes.
 
 ## M11. Hardening against backdoors (not required for version 1)
 
-Status: planned (`m11-implementation.md`). Owner decisions of 2026-11-13
-(`requirements.md`, section 3).
+Status: implemented (`m11-implementation.md`; pull request #11). Owner
+decisions of 2026-11-13 and 2026-11-16 (`requirements.md`, section 3).
+
+Still to do (owner decision, 2026-11-16: merge first, do these later):
+
+- The Mac smoke test of lease users (`TestSmokeMacLeaseUsers`) on the last root
+  binary (it passed on an earlier one; the last change is the launchd domain
+  check of a deleted lease user).
+- The 10-run CI gate (`e2e-10`), when CI runs again.
+- A real check of the audit's stops: systemd user units with a running user
+  manager on Linux, and LaunchAgents of the machine user on macOS; `at` jobs.
+- The production server with the M11 build, and `--lease-users` on the machines
+  that should use it.
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the
