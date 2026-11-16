@@ -4,4 +4,4 @@ package main
 
 import "os"
 
-func isSystemDir(os.FileInfo) bool { return false }
+func isSystemDir(string, os.FileInfo) bool { return false }

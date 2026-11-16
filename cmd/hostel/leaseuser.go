@@ -467,10 +467,18 @@ func removeDarwinUserDirs(name, uid string) error {
 // removeAllButSystemDirs removes path, or, for a directory that the system
 // protects, everything in it but such directories.
 func removeAllButSystemDirs(path string, fi os.FileInfo) error {
-	if !isSystemDir(fi) {
-		return os.RemoveAll(path)
+	if !isSystemDir(path, fi) {
+		// macOS also protects entries without the flag (for example a data
+		// vault): the check after this decides about what stays.
+		if err := os.RemoveAll(path); err != nil && !errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		return nil
 	}
 	entries, err := os.ReadDir(path)
+	if errors.Is(err, os.ErrPermission) {
+		return nil // a data vault; the check decides
+	}
 	if err != nil {
 		return err
 	}
@@ -570,7 +578,7 @@ func checkNoFilesOf(name, dir string) error {
 		if left == "" {
 			continue
 		}
-		if fi, err := os.Lstat(left); err == nil && isSystemDir(fi) {
+		if fi, err := os.Lstat(left); err == nil && isSystemDir(left, fi) {
 			continue
 		}
 		return fmt.Errorf("a file of %s is left in %s: %s", name, dir, left)
