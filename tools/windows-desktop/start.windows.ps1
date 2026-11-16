@@ -39,6 +39,12 @@ if (-not $program) {
 	exit 1
 }
 $session = $program[0].SessionId
+# A Remote Desktop login of another user disconnects this session: the desktop
+# program still runs, but no window gets input or is drawn.
+if (-not (quser 2>$null | Where-Object { $_ -match "\s$session\s+Active\s" })) {
+	[Console]::Error.WriteLine("the desktop session $session is not active (for example disconnected by a Remote Desktop login): restart the machine (machine-setup.md, section 4.4)")
+	exit 1
+}
 # A process can end during the loop; then StartTime throws.
 $procs = @(Get-Process | Where-Object SessionId -eq $session | ForEach-Object {
 	try { "$($_.Id) $($_.StartTime.Ticks)" } catch {}
