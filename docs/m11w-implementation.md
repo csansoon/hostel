@@ -20,16 +20,17 @@ file in the Startup folder, or a changed PowerShell profile can survive cleanup.
 ## 3. The root step
 
 - **Service.** A Windows service `HostelLeaseUsers` (LocalSystem, automatic start)
-  runs `C:\ProgramData\hostel\hostel.exe lease-user serve`. The binary and its
-  directory are the ones that `machine join` already secures (Administrators and
-  SYSTEM only can write them).
+  runs `C:\Program Files\Hostel\hostel.exe lease-user serve`. Only SYSTEM and
+  Administrators can write that directory. It is not `C:\ProgramData\hostel`,
+  because the account of the connection (LOCAL SERVICE) can change files there and
+  updates its binary there. So, as on macOS and Linux, `machine join` installs the
+  root binary, and an update of the machine does not change it.
 - **Pipe.** `\\.\pipe\hostel-lease-user`. Its security descriptor gives SYSTEM full
   access and the machine user read and write; nobody else can open it. The service
   creates the first instance (no other process can own the name while the service
   runs) and rejects remote clients.
 - **Caller check.** The service also checks the client's token: the caller must be
-  the machine user that `machine join` recorded in
-  `C:\ProgramData\hostel\lease-users.json`. The client checks that the server end of
+  the machine user (`hostel`). The client checks that the server end of
   the pipe is a SYSTEM process, so a process that takes the name while the service
   is stopped cannot answer for it.
 - **Protocol.** One JSON request (`{"op": "create", "name": "hostel-…"}`) and one
@@ -50,7 +51,7 @@ caller.
 - **create.** A local user (NetUserAdd) with a random password that nobody keeps,
   the marker, membership of Users and of the local group `hostel-leases`. Its
   profile is made with `CreateProfile` (before its first logon, so Windows does not
-  pick another directory). The server key from `C:\ProgramData\hostel\server_key.pub`
+  pick another directory). The server key from `C:\Program Files\Hostel\server_key.pub`
   goes into `.ssh\authorized_keys`, with access for SYSTEM and the user only. Windows
   does not use a security identifier (SID) again, so a file of an earlier lease
   user never belongs to a later one.
