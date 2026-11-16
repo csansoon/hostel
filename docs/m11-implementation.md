@@ -166,6 +166,13 @@ E2E suite passes.
   gone. Found and fixed there: Remote Login that allows only some users
   (`com.apple.access_ssh`), group entries of deleted users, and BSD `find`, which
   opens the current directory.
+- The same test on 2026-11-16 (root binary v0.4.0-70) passed after three more
+  fixes. A lease user's own directory in `/private/var/folders` can stay after
+  its processes end. The user cannot remove it, because its parent belongs to
+  root. Root cannot remove its skeleton either, because the system protects it
+  (`sunlnk`, `com.apple.rootless`, SIP). A data vault in it cannot even be
+  read by root. Root now removes the user's entries there, and the check
+  accepts only the protected, empty skeleton.
 - Not tested: systemd user units and `at` jobs (the test machines have neither);
   the 10-run CI gate.
 

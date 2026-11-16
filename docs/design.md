@@ -2255,7 +2255,15 @@ Hardening (milestone M11):
      macOS also `/private/var/folders` and `/Users/Shared`; `find -delete` as the user,
      after it gives its own directories back their rights and clears its own
      macOS flags; then root only looks with `find -print`, and a file that is
-     left stops the deletion), then its home directory (after root
+     left stops the deletion). On macOS, the user's own directory in
+     `/private/var/folders/<xx>/` has a parent that root owns, and a process of
+     the user makes launchd write there again. So `/private/var/folders` is
+     last: root ends the user's domains and processes, then removes the user's
+     entries there without following links. The skeleton of that directory
+     stays, empty: the system protects it (the flag `sunlnk` or the attribute
+     `com.apple.rootless`, which a user cannot set, on the parent's device),
+     so root cannot remove it either. Entries that root cannot see (a data
+     vault) are left to the check. Then its home directory (after root
      clears the macOS flags `uchg` and `uappnd` without following links), then
      the user record. A repeated deletion that finds no user removes a home
      directory that is left. The lease user owns its helper and

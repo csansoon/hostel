@@ -489,9 +489,6 @@ decisions of 2026-11-13 and 2026-11-16 (`requirements.md`, section 3).
 
 Still to do (owner decision, 2026-11-16: merge first, do these later):
 
-- The Mac smoke test of lease users (`TestSmokeMacLeaseUsers`) on the last root
-  binary (it passed on an earlier one; the last change is the launchd domain
-  check of a deleted lease user).
 - The 10-run CI gate (`e2e-10`), when CI runs again.
 - A real check of the audit's stops: systemd user units with a running user
   manager on Linux, and LaunchAgents of the machine user on macOS; `at` jobs.
