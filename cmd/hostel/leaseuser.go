@@ -434,8 +434,8 @@ func macGroups() []string {
 	return groups
 }
 
-// checkNoServices fails when a launchd domain still has services: print
-// exits with 112 for a domain that does not exist.
+// checkNoServices fails when a launchd domain still has services that are
+// not Apple's: print exits with 112 for a domain that does not exist.
 func checkNoServices(domain string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -455,7 +455,11 @@ func checkNoServices(domain string) error {
 		case in && t == "}":
 			in = false
 		case in && t != "":
-			return fmt.Errorf("the launchd domain %s still has the service %s", domain, t)
+			// macOS starts its own agents for each user (distnoted, cfprefsd):
+			// killUser ends their processes, and the user record goes.
+			if f := strings.Fields(t); !strings.HasPrefix(f[len(f)-1], "com.apple.") {
+				return fmt.Errorf("the launchd domain %s still has the service %s", domain, t)
+			}
 		}
 	}
 	return nil

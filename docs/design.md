@@ -2248,7 +2248,8 @@ Hardening (milestone M11):
    - **Delete** (cleanup, after the helper's cleanup as the lease user): end all
      processes of the user (`launchctl bootout`, `loginctl terminate-user`,
      `pkill -KILL -u` until none is left; on macOS each launchd domain of the
-     user must have no service after `bootout`), remove its crontab, its `at` jobs (a
+     user must have no service after `bootout` but Apple's own, which macOS
+     starts for each user), remove its crontab, its `at` jobs (a
      failure stops the deletion, so the room stays blocked), and
      its files in the shared directories (`/tmp`, `/var/tmp`, `/dev/shm`; on
      macOS also `/private/var/folders` and `/Users/Shared`; `find -delete` as the user,
