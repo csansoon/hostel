@@ -497,6 +497,7 @@ measures.
 - A template option to destroy on-demand machines after each lease (`reuse`).
 - Cleanup audit of persistence locations: remove new items, and record them.
 - Not in M11: the egress firewall (later).
+- Known limits: `m11-implementation.md`, section 12 (owner decision, 2026-11-16).
 
 E2E scenarios: a reverse-shell process without `HOSTEL_LEASE`, a crontab entry, a
 user LaunchAgent or systemd user unit, and a changed cache binary. None of them

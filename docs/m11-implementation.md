@@ -168,3 +168,30 @@ E2E suite passes.
   opens the current directory.
 - Not tested: systemd user units and `at` jobs (the test machines have neither);
   the 10-run CI gate.
+
+## 12. Known limits (owner decision, 2026-11-16)
+
+The pull request had 17 Codex review rounds. Most later findings were new places
+or tighter error checks in the audit of leases on the machine user. The owner
+chose to stop there and record the limits:
+
+- **The audit of the machine user is best effort.** A guest on the machine user
+  is that user: it can change the helper, the copy in `hostel/persistence`, and
+  its shell startup files, which run before each helper call. So it can defeat
+  the audit. The audit removes what a guest leaves by mistake or with a simple
+  attack. Against a deliberate attack, use lease users on a machine without
+  `machine_user` tools, or `reuse = false`.
+- **Places that the audit does not check.** Only the locations of design section
+  17 are checked. Other places that run code later (for example other
+  configuration files of tools, `~/.local/bin`, editor or language package
+  configuration) are not. A guest on the machine user can also change the shared
+  cache that later leases run.
+- **Mixed machines.** On a machine with `lease_users` and `machine_user` tools, a
+  guest of a `machine_user` lease can change what later lease users copy and run,
+  fake the answers of the root calls that go through the machine user's shell,
+  and end lease users of other rooms.
+- **`reuse = false` changed back to `true`.** The drain of `reuse = false` and an
+  admin's drain are the same flag; an admin undrains such a machine.
+- **Not tested on real systems:** stops and checks of systemd user units with a
+  real user manager (the test machines have none), and of LaunchAgents of the
+  machine user on macOS; `at` jobs.
