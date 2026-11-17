@@ -81,7 +81,15 @@ func TestNamespaceDevbox(t *testing.T) {
 	// A first lease without tools: the on-demand machine has not installed the
 	// screen tool fake-screen yet, so cleanup does not run its check script
 	// (it needs the result of its install script).
-	f.e.mustHostel("acquire", "--task", "no tools")
+	// A new devbox can take longer than one acquire wait (exit code 75), as in
+	// fixture.acquire.
+	first := f.e.hostel("acquire", "--task", "no tools")
+	for i := 0; i < 2 && first.code == 75; i++ {
+		first = f.e.hostel("acquire", "--task", "no tools")
+	}
+	if first.code != 0 {
+		t.Fatalf("acquire without tools: %s", first)
+	}
 	f.e.mustHostel("release")
 	f.e.waitFor("room free after the lease without tools", time.Minute, func() bool {
 		rs := f.nsMachines()
