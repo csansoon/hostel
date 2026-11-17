@@ -2096,8 +2096,8 @@ failed; the result lists each step.
    the Startup folder, the PowerShell profile folders (`Documents\WindowsPowerShell`,
    `Documents\PowerShell`), the values of the registry keys `Run`, `RunOnce`,
    `Policies\Explorer\Run`, `Windows NT\CurrentVersion\Windows`, `Winlogon`,
-   `Command Processor`, and `Environment` (HKCU), and the scheduled tasks that run
-   as the machine user (their XML from `schtasks.exe`; the task scheduler's CIM
+   `Command Processor`, `Environment`, and `Explorer\User Shell Folders` (HKCU),
+   and the scheduled tasks that run as the machine user (by SID) (their XML from `schtasks.exe`; the task scheduler's CIM
    interface refuses a user over SSH). A new task is deleted, a changed or deleted
    one is created again from its XML, and a new, changed, or deleted value gets its
    copy back.
@@ -2254,11 +2254,11 @@ Hardening (milestone M11):
      answer. The rules on names, the marker, and paths are the same. `create` makes
      a local user (Users and `hostel-leases`), its profile (`CreateProfile`, before
      the first logon), and `.ssh\authorized_keys`. `delete` ends the user's processes
-     (by the SID of their token), deletes the scheduled tasks that run as it, deletes
-     its files in the shared directories (the top of the system drive,
-     `C:\ProgramData`, `C:\Users\Public`, `C:\Windows\Temp`, `Tasks`, `tracing`,
-     and the color directory of the spooler) with the backup and restore privileges,
-     without following reparse points, unloads its registry hives also when
+     (by the SID of their token; a process whose user it cannot read stops the
+     deletion), deletes the scheduled tasks that run as it, deletes its files in
+     the shared directories of the system drive (`m11w-implementation.md`, section
+     4) with the backup and restore privileges, each entry opened through the
+     handle of its directory and no junction or link followed, unloads its registry hives also when
      another process holds them (Windows Search does), then removes the profile and
      the user. Windows never gives a SID again, so a file of an earlier lease user
      never belongs to a later one. `share-cache` gives `hostel-leases` read access

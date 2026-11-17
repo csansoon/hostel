@@ -55,12 +55,20 @@ caller.
   goes into `.ssh\authorized_keys`, with access for SYSTEM and the user only. Windows
   does not use a security identifier (SID) again, so a file of an earlier lease
   user never belongs to a later one.
-- **delete.** End all processes of the user's SID and log off its sessions; remove
-  the scheduled tasks that run as the user; remove the files that the user owns in
-  the places where all users can write (`C:\ProgramData`, `C:\Users\Public`,
-  `C:\Windows\Temp`, and the top of the system drive), without following
-  junctions or links; then the profile (`DeleteProfile`, also its registry hive)
-  and the user (NetUserDel). A missing user is not an error.
+- **delete.** End all processes of the user's SID (a process whose user the
+  service cannot read stops the deletion; the service takes ownership of a token
+  whose access list leaves SYSTEM out); remove the scheduled tasks that run as the
+  user (by SID); remove the files that the user owns in the places where all users
+  can write (the top of the system drive and of `$Recycle.Bin`, `C:\ProgramData`,
+  `C:\Users\Public`, `C:\Windows\Temp`, `Tasks`, `tracing`, the spooler's
+  directories, `MachineKeys`). Each entry is opened through the handle of its
+  directory and never followed when it is a junction or a link, so a junction that
+  another user puts on the way cannot send the deletion elsewhere. Then the
+  profile (its hives unloaded by force, `DeleteProfile`, the directory, and all
+  profile directories and entries of the name) and the user (NetUserDel). A
+  missing user or a missing profile entry is not an error. One deletion has a
+  deadline of 10 minutes; the pipe's reads and writes have a deadline of 30
+  seconds, so a client that does not write cannot hold the one instance.
 - **list** and **check**: as on macOS and Linux.
 
 ## 5. Lease flow
@@ -120,3 +128,18 @@ real machine (as `TestSmokeWindows`):
 - A copy of `mise` and the tools for each lease user is slow. Mitigation: measure it
   on the real machine; use junctions for large read-only directories if necessary.
 - Antivirus scans of new profiles can slow `create`. Mitigation: measure it.
+- Limits that stay:
+  - The service scans only the system drive. A lease user's file on another
+    drive (for example a temporary disk of a cloud machine) stays after the
+    deletion.
+  - `share-cache` only adds the group's read access. A guest on the machine
+    user can give other users access to the machine user's files; this is in
+    the limit of design section 18 (a guest on the machine user controls its
+    files).
+  - The audit does not cover COM registrations (`HKCU\Software\Classes`), BITS
+    jobs, or Documents that OneDrive moved. Links and junctions in the audited
+    folders are not in the copy: a junction there is removed at cleanup.
+  - A process of the machine user can take the pipe's name while the service is
+    stopped. The client then refuses it (the owner is not SYSTEM); the service
+    ends the processes of the lease users and tries again, but not the
+    processes of the machine user.

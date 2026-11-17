@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -34,7 +35,12 @@ import (
 
 const (
 	leaseService = "HostelLeaseUsers"
-	leasePipe    = `\\.\pipe\hostel-lease-user`
+	// deleteTimeout bounds one deletion (the search of the shared
+	// directories); opTimeout, one request with a deletion and a creation.
+	deleteTimeout = 10 * time.Minute
+	opTimeout     = 15 * time.Minute
+	pipeTimeout   = 30 * time.Second
+	leasePipe     = `\\.\pipe\hostel-lease-user`
 	// leaseRootDir has the service's binary and the server key; only SYSTEM
 	// and Administrators can write it.
 	leaseRootDir = `C:\Program Files\Hostel`
@@ -51,6 +57,7 @@ var (
 	procDeleteProfile              = userenv.NewProc("DeleteProfileW")
 	procNetUserDel                 = windows.NewLazySystemDLL("netapi32.dll").NewProc("NetUserDel")
 	procNtUnloadKey2               = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtUnloadKey2")
+	procCancelSynchronousIo        = windows.NewLazySystemDLL("kernel32.dll").NewProc("CancelSynchronousIo")
 )
 
 type leaseRequest struct {
@@ -110,7 +117,7 @@ func callLeaseService(req leaseRequest) (json.RawMessage, error) {
 		return nil, err
 	}
 	// The service does one request at a time; a deletion can take minutes.
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(opTimeout)
 	var h windows.Handle
 	for {
 		// Identification only: the service learns who calls, and cannot act
@@ -142,11 +149,16 @@ func callLeaseService(req leaseRequest) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := pipeConn(h).Write(append(data, '\n')); err != nil {
+	if err := withTimeout(pipeTimeout, func() error {
+		_, err := pipeConn(h).Write(append(data, '\n'))
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("write to %s: %w", leasePipe, err)
 	}
 	var ans leaseAnswer
-	if err := json.NewDecoder(io.LimitReader(pipeConn(h), 1<<20)).Decode(&ans); err != nil {
+	if err := withTimeout(time.Until(deadline)+pipeTimeout, func() error {
+		return json.NewDecoder(io.LimitReader(pipeConn(h), 1<<20)).Decode(&ans)
+	}); err != nil {
 		return nil, fmt.Errorf("the answer of the service %s: %w", leaseService, err)
 	}
 	if ans.Error != "" {
@@ -172,12 +184,19 @@ func (leaseHandler) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc
 	s <- svc.Status{State: svc.StartPending}
 	// Backup and restore: SYSTEM reads, lists, and deletes a lease user's
 	// files also when the user's access lists leave SYSTEM out.
-	if err := enablePrivileges("SeBackupPrivilege", "SeRestorePrivilege"); err != nil {
+	// Take ownership and debug: SYSTEM reads the user of each process
+	// (processOf).
+	if err := enablePrivileges("SeBackupPrivilege", "SeRestorePrivilege", "SeTakeOwnershipPrivilege", "SeDebugPrivilege"); err != nil {
 		return true, 1
 	}
 	pipe, err := newLeasePipe()
 	if err != nil {
-		return true, 2
+		// A process of a lease user can take the name while the service
+		// is stopped (at a restart), and then nobody can delete that user.
+		endLeaseUserProcesses()
+		if pipe, err = newLeasePipe(); err != nil {
+			return true, 2
+		}
 	}
 	go servePipe(pipe)
 	s <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
@@ -228,10 +247,28 @@ func servePipe(h windows.Handle) {
 	}
 }
 
+// endLeaseUserProcesses ends the processes of all lease users.
+func endLeaseUserProcesses() {
+	users, err := leaseUsersWindows()
+	if err != nil {
+		return
+	}
+	for _, u := range users {
+		if sid, _, _, err := windows.LookupSID("", u); err == nil {
+			killUserProcesses(sid)
+		}
+	}
+}
+
 func answerLeaseRequest(h windows.Handle) {
 	out, err := func() (any, error) {
-		line, err := bufio.NewReader(io.LimitReader(pipeConn(h), 4096)).ReadBytes('\n')
-		if err != nil {
+		var line []byte
+		// One instance of the pipe: a client that does not write must not
+		// keep it.
+		if err := withTimeout(pipeTimeout, func() (err error) {
+			line, err = bufio.NewReader(io.LimitReader(pipeConn(h), 4096)).ReadBytes('\n')
+			return err
+		}); err != nil {
 			return nil, err
 		}
 		// After the read: Windows lets a server identify its client only
@@ -252,7 +289,61 @@ func answerLeaseRequest(h windows.Handle) {
 		ans.Error = err.Error()
 	}
 	data, _ := json.Marshal(ans)
-	pipeConn(h).Write(append(data, '\n'))
+	withTimeout(pipeTimeout, func() error {
+		_, err := pipeConn(h).Write(append(data, '\n'))
+		return err
+	})
+}
+
+// withTimeout runs f, whose I/O is synchronous, and cancels that I/O
+// (CancelSynchronousIo) after d, until f returns.
+func withTimeout(d time.Duration, f func() error) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	th, err := windows.OpenThread(windows.THREAD_TERMINATE, false, windows.GetCurrentThreadId())
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(th)
+	var mu sync.Mutex
+	finished := false
+	timedOut := false
+	stop := make(chan struct{})
+	go func() {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		// Again until f returns: a cancel between two calls of f cancels
+		// nothing.
+		for {
+			mu.Lock()
+			if finished {
+				mu.Unlock()
+				return
+			}
+			timedOut = true
+			procCancelSynchronousIo.Call(uintptr(th))
+			mu.Unlock()
+			select {
+			case <-stop:
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+	err = f()
+	mu.Lock()
+	finished = true
+	mu.Unlock()
+	close(stop)
+	if timedOut && err != nil {
+		return fmt.Errorf("no answer in %s: %w", d, err)
+	}
+	return err
 }
 
 // checkPipeClient checks that the client is the machine user (the pipe's
@@ -437,13 +528,14 @@ func deleteLeaseUserWindows(name string) error {
 	if err := checkLeaseUserName(name); err != nil {
 		return err
 	}
+	deadline := time.Now().Add(deleteTimeout)
 	exists, err := isLeaseUserWindows(name)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		// A deletion that stopped after the user record went.
-		return removeTree(filepath.Join(usersDir(), name))
+		return removeLeftProfiles(name, deadline)
 	}
 	sid, _, _, err := windows.LookupSID("", name)
 	if err != nil {
@@ -453,22 +545,26 @@ func deleteLeaseUserWindows(name string) error {
 		return err
 	}
 	if _, err := systemPowerShell(`$n = $env:HOSTEL_NAME; $s = $env:HOSTEL_SID
-Get-ScheduledTask | Where-Object { $u = $_.Principal.UserId; $u -and ($u -eq $n -or $u -like "*\$n" -or $u -eq $s) } |
-  Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String()); err != nil {
+Get-ScheduledTask | Where-Object {
+  $u = $_.Principal.UserId
+  if (-not $u) { return $false }
+  if ($u -eq $s) { return $true }
+  try { (New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value -eq $s } catch { $u -eq $n -or $u -like "*\$n" }
+} | Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String()); err != nil {
 		return fmt.Errorf("remove the scheduled tasks of %s: %w", name, err)
 	}
 	for _, d := range sharedDirs() {
-		if err := filesOf(sid, d.path, d.deep, true); err != nil {
+		if err := filesOf(sid, d.path, d.deep, true, deadline); err != nil {
 			return err
 		}
-		if err := filesOf(sid, d.path, d.deep, false); err != nil {
+		if err := filesOf(sid, d.path, d.deep, false, deadline); err != nil {
 			return err
 		}
 	}
 	if err := killUserProcesses(sid); err != nil {
 		return err
 	}
-	if err := deleteProfile(sid, name); err != nil {
+	if err := deleteProfile(sid, name, deadline); err != nil {
 		return err
 	}
 	n, err := windows.UTF16PtrFromString(name)
@@ -506,50 +602,80 @@ func sharedDirs() []sharedDir {
 		{filepath.Join(win, "Tasks"), true},
 		{filepath.Join(win, "tracing"), true},
 		{filepath.Join(win, `System32\spool\drivers\color`), true},
+		{filepath.Join(win, `System32\spool\PRINTERS`), true},
+		{filepath.Join(win, `System32\Microsoft\Crypto\RSA\MachineKeys`), true},
+		// The user's own recycle bin, by its SID.
+		{filepath.Join(drive, `$Recycle.Bin`), false},
 	}
 }
 
 // filesOf removes (remove) or finds the entries that sid owns in dir. It
-// does not follow junctions or links.
-func filesOf(sid *windows.SID, dir string, deep, remove bool) error {
-	entries, err := listDir(dir)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) ||
-		// A directory of another owner that the system protects also from
-		// SYSTEM: the lease user could not write there either.
-		errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+// does not follow junctions or links, and it opens each entry through the
+// handle of its directory: the lease user (or another user) can replace a
+// directory on the way with a junction while the walk runs.
+func filesOf(sid *windows.SID, dir string, deep, remove bool, deadline time.Time) error {
+	h, err := openNoFollow(dir, windows.FILE_LIST_DIRECTORY)
+	if notFound(err) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("list %s: %w", dir, err)
+		return fmt.Errorf("open %s: %w", dir, err)
+	}
+	defer windows.CloseHandle(h)
+	return filesAt(sid, h, dir, deep, remove, deadline)
+}
+
+func filesAt(sid *windows.SID, dir windows.Handle, dirPath string, deep, remove bool, deadline time.Time) error {
+	if time.Now().After(deadline) {
+		return fmt.Errorf("the search for the files of the lease user took too long (at %s)", dirPath)
+	}
+	entries, err := listDir(dir)
+	if err != nil {
+		return fmt.Errorf("list %s: %w", dirPath, err)
 	}
 	for _, e := range entries {
-		p := filepath.Join(dir, e.name)
-		owner, err := ownerOf(p)
-		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) ||
+		p := filepath.Join(dirPath, e.name)
+		h, err := openAt(dir, e.name, windows.READ_CONTROL|windows.FILE_LIST_DIRECTORY)
+		if errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			// Without FILE_LIST_DIRECTORY: a file that another process
+			// opened without read sharing.
+			h, err = openAt(dir, e.name, windows.READ_CONTROL)
+		}
+		if notFound(err) ||
 			// A file that the system holds (the page file) or protects
 			// also from SYSTEM: not a lease user's file.
 			errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("the owner of %s: %w", p, err)
+			return fmt.Errorf("open %s: %w", p, err)
 		}
-		if owner.Equals(sid) {
-			if !remove {
-				return fmt.Errorf("a file of the lease user is left: %s", p)
+		err = func() error {
+			defer windows.CloseHandle(h)
+			owner, err := ownerOf(h)
+			if err != nil {
+				return fmt.Errorf("the owner of %s: %w", p, err)
 			}
-			if err := removeTree(p); err != nil {
-				return err
+			if owner.Equals(sid) {
+				if !remove {
+					return fmt.Errorf("a file of the lease user is left: %s", p)
+				}
+				return removeAt(dir, dirPath, e.name, deadline)
 			}
-			continue
-		}
-		if deep && e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-			if err := filesOf(sid, p, true, remove); err != nil {
-				return err
+			if deep && e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+				return filesAt(sid, h, p, true, remove, deadline)
 			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func notFound(err error) bool {
+	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
 }
 
 type dirEntry struct {
@@ -558,23 +684,40 @@ type dirEntry struct {
 }
 
 // openNoFollow opens path itself (also a junction or link), with the backup
-// privilege, so that the file's access list does not matter.
+// privilege, so that the file's access list does not matter. Only for paths
+// whose directories only administrators can change.
 func openNoFollow(path string, access uint32) (windows.Handle, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return 0, err
 	}
-	return windows.CreateFile(p, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+	return windows.CreateFile(p, access|windows.SYNCHRONIZE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
 		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 }
 
-// listDir lists a directory through its handle (FILE_FULL_DIR_INFO).
-func listDir(dir string) ([]dirEntry, error) {
-	h, err := openNoFollow(dir, windows.FILE_LIST_DIRECTORY|windows.SYNCHRONIZE)
+// openAt opens the entry name of the directory dir itself (also a junction or
+// link), with the backup privilege. One name relative to a handle: no part of
+// the path can be a junction. An empty name opens dir again.
+func openAt(dir windows.Handle, name string, access uint32) (windows.Handle, error) {
+	n, err := windows.NewNTUnicodeString(name)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer windows.CloseHandle(h)
+	oa := windows.OBJECT_ATTRIBUTES{RootDirectory: dir, ObjectName: n}
+	oa.Length = uint32(unsafe.Sizeof(oa))
+	var h windows.Handle
+	var iosb windows.IO_STATUS_BLOCK
+	err = windows.NtCreateFile(&h, access|windows.SYNCHRONIZE, &oa, &iosb, nil, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_OPEN,
+		windows.FILE_OPEN_REPARSE_POINT|windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
+	if st, ok := err.(windows.NTStatus); ok {
+		return 0, st.Errno()
+	}
+	return h, err
+}
+
+// listDir lists a directory through its handle (FILE_FULL_DIR_INFO).
+func listDir(h windows.Handle) ([]dirEntry, error) {
 	var out []dirEntry
 	buf := make([]byte, 64<<10)
 	for {
@@ -607,12 +750,7 @@ func listDir(dir string) ([]dirEntry, error) {
 	}
 }
 
-func ownerOf(path string) (*windows.SID, error) {
-	h, err := openNoFollow(path, windows.READ_CONTROL)
-	if err != nil {
-		return nil, err
-	}
-	defer windows.CloseHandle(h)
+func ownerOf(h windows.Handle) (*windows.SID, error) {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return nil, err
@@ -624,11 +762,30 @@ func ownerOf(path string) (*windows.SID, error) {
 	return owner.Copy()
 }
 
-// removeTree removes path and, for a directory that is not a junction or a
-// link, everything in it. A junction or link goes itself, not its target.
-func removeTree(path string) error {
-	h, err := openNoFollow(path, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+// removeTree removes path, which must be in a directory that only
+// administrators can change, and everything in it (removeAt).
+func removeTree(path string, deadline time.Time) error {
+	dir, err := openNoFollow(filepath.Dir(path), windows.FILE_LIST_DIRECTORY)
+	if notFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open %s: %w", filepath.Dir(path), err)
+	}
+	defer windows.CloseHandle(dir)
+	return removeAt(dir, filepath.Dir(path), filepath.Base(path), deadline)
+}
+
+// removeAt removes the entry name of dir and, for a directory that is not a
+// junction or a link, everything in it, each entry through the handle of its
+// directory. A junction or link goes itself, not its target.
+func removeAt(dir windows.Handle, dirPath, name string, deadline time.Time) error {
+	path := filepath.Join(dirPath, name)
+	if time.Now().After(deadline) {
+		return fmt.Errorf("the deletion took too long (at %s)", path)
+	}
+	h, err := openAt(dir, name, windows.DELETE|windows.FILE_READ_ATTRIBUTES)
+	if notFound(err) {
 		return nil
 	}
 	if err != nil {
@@ -640,14 +797,23 @@ func removeTree(path string) error {
 		return err
 	}
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-		entries, err := listDir(path)
+		l, err := openAt(h, "", windows.FILE_LIST_DIRECTORY)
 		if err != nil {
-			return fmt.Errorf("list %s: %w", path, err)
+			return fmt.Errorf("open %s: %w", path, err)
 		}
-		for _, e := range entries {
-			if err := removeTree(filepath.Join(path, e.name)); err != nil {
-				return err
+		entries, err := listDir(l)
+		if err == nil {
+			for _, e := range entries {
+				if err = removeAt(l, path, e.name, deadline); err != nil {
+					break
+				}
 			}
+		} else {
+			err = fmt.Errorf("list %s: %w", path, err)
+		}
+		windows.CloseHandle(l)
+		if err != nil {
+			return err
 		}
 	}
 	flags := uint32(windows.FILE_DISPOSITION_DELETE | windows.FILE_DISPOSITION_POSIX_SEMANTICS | windows.FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE)
@@ -688,9 +854,11 @@ func endProcessesOf(sid *windows.SID) (bool, error) {
 		if e.ProcessID == 0 || e.ProcessID == 4 {
 			continue
 		}
-		if processOf(e.ProcessID, sid) {
-			found = true
+		ended, perr := processOf(e.ProcessID, sid)
+		if perr != nil {
+			return false, perr
 		}
+		found = found || ended
 	}
 	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
 		return false, err
@@ -699,28 +867,86 @@ func endProcessesOf(sid *windows.SID) (bool, error) {
 }
 
 // processOf ends the process pid when sid runs it, and reports whether it did.
-func processOf(pid uint32, sid *windows.SID) bool {
+// A process whose user it cannot read is an error, not another user's process:
+// the lease user owns its token and can take SYSTEM out of its access list.
+func processOf(pid uint32, sid *windows.SID) (bool, error) {
 	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE, false, pid)
 	if err != nil {
-		return false
+		// Ended, or a protected process of the system (SeDebugPrivilege
+		// opens all others).
+		return false, nil
 	}
 	defer windows.CloseHandle(p)
+	user, err := processUser(p)
+	if err != nil {
+		var code uint32
+		if windows.GetExitCodeProcess(p, &code) == nil && code != stillActive {
+			return false, nil
+		}
+		return false, fmt.Errorf("the user of process %d: %w", pid, err)
+	}
+	if !user.Equals(sid) {
+		return false, nil
+	}
+	windows.TerminateProcess(p, 1)
+	return true, nil
+}
+
+const stillActive = 259
+
+func processUser(p windows.Handle) (*windows.SID, error) {
 	var tok windows.Token
-	if err := windows.OpenProcessToken(p, windows.TOKEN_QUERY, &tok); err != nil {
-		return false
+	err := windows.OpenProcessToken(p, windows.TOKEN_QUERY, &tok)
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		if err = takeToken(p); err == nil {
+			err = windows.OpenProcessToken(p, windows.TOKEN_QUERY, &tok)
+		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	defer tok.Close()
 	u, err := tok.GetTokenUser()
-	if err != nil || !u.User.Sid.Equals(sid) {
-		return false
+	if err != nil {
+		return nil, err
 	}
-	windows.TerminateProcess(p, 1)
-	return true
+	return u.User.Sid.Copy()
+}
+
+// takeToken makes SYSTEM the owner of the process's token (the take-ownership
+// privilege) and gives SYSTEM access to it.
+func takeToken(p windows.Handle) error {
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
+	var tok windows.Token
+	if err := windows.OpenProcessToken(p, windows.WRITE_OWNER, &tok); err != nil {
+		return err
+	}
+	err = windows.SetSecurityInfo(windows.Handle(tok), windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION, system, nil, nil, nil)
+	tok.Close()
+	if err != nil {
+		return err
+	}
+	if err := windows.OpenProcessToken(p, windows.WRITE_DAC, &tok); err != nil {
+		return err
+	}
+	defer tok.Close()
+	sd, err := windows.SecurityDescriptorFromString("D:(A;;GA;;;SY)")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(windows.Handle(tok), windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
 // deleteProfile removes the user's profile directory and its entry in the
 // registry. Windows unloads the profile some seconds after the last process.
-func deleteProfile(sid *windows.SID, name string) error {
+func deleteProfile(sid *windows.SID, name string, deadline time.Time) error {
 	key := profileList + `\` + sid.String()
 	home := ""
 	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, key, registry.QUERY_VALUE); err == nil {
@@ -728,11 +954,8 @@ func deleteProfile(sid *windows.SID, name string) error {
 		k.Close()
 	}
 	// Only a profile directory of this user's name in the users' directory.
-	if home != "" && !strings.EqualFold(filepath.Dir(home), usersDir()) {
-		return fmt.Errorf("the profile of %s is %s, not in %s", name, home, usersDir())
-	}
-	if home != "" && !strings.EqualFold(filepath.Base(home), name) && !strings.HasPrefix(strings.ToLower(filepath.Base(home)), strings.ToLower(name)+".") {
-		return fmt.Errorf("the profile of %s is %s", name, home)
+	if home != "" && !profileDirOf(home, name) {
+		return fmt.Errorf("the profile of %s is %s, not %s in %s", name, home, name, usersDir())
 	}
 	// A service can keep the user's registry open after its last process
 	// (Windows Search, checked on Windows 11), and then nobody can delete
@@ -742,32 +965,80 @@ func deleteProfile(sid *windows.SID, name string) error {
 			return fmt.Errorf("unload the registry of %s: %w", name, err)
 		}
 	}
+	if home == "" {
+		// No entry (a creation or a deletion that stopped): DeleteProfile
+		// cannot find the profile.
+		return removeLeftProfiles(name, deadline)
+	}
 	s, err := windows.UTF16PtrFromString(sid.String())
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(time.Minute)
-	for {
-		r, _, derr := procDeleteProfile.Call(uintptr(unsafe.Pointer(s)), 0, 0)
-		if r != 0 {
+	// The registry entry can be gone while the directory is not: removeTree
+	// below then removes it.
+	for wait := time.Now().Add(time.Minute); time.Now().Before(wait); time.Sleep(time.Second) {
+		if r, _, _ := procDeleteProfile.Call(uintptr(unsafe.Pointer(s)), 0, 0); r != 0 {
 			break
 		}
-		if time.Now().After(deadline) {
-			// The registry entry can be gone while the directory is not.
-			if home == "" {
-				return fmt.Errorf("DeleteProfile %s: %w", name, derr)
-			}
-			break
-		}
-		time.Sleep(time.Second)
 	}
-	if home != "" {
-		if err := removeTree(home); err != nil {
-			return fmt.Errorf("remove the profile of %s: %w", name, err)
-		}
+	if err := removeTree(home, deadline); err != nil {
+		return fmt.Errorf("remove the profile of %s: %w", name, err)
 	}
 	if err := registry.DeleteKey(registry.LOCAL_MACHINE, key); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
 		return fmt.Errorf("remove the profile entry of %s: %w", name, err)
+	}
+	return removeLeftProfiles(name, deadline)
+}
+
+// profileDirOf reports whether dir is a profile directory of the user name:
+// <users>\<name> or <users>\<name>.<suffix> (Windows adds the computer's name
+// when the directory exists).
+func profileDirOf(dir, name string) bool {
+	base := strings.ToLower(filepath.Base(dir))
+	return strings.EqualFold(filepath.Dir(dir), usersDir()) &&
+		(base == strings.ToLower(name) || strings.HasPrefix(base, strings.ToLower(name)+"."))
+}
+
+// removeLeftProfiles removes the profile directories of the user name and the
+// profile entries that point to them, also after the user record went.
+func removeLeftProfiles(name string, deadline time.Time) error {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, profileList, registry.ENUMERATE_SUB_KEYS)
+	if err != nil {
+		return err
+	}
+	sids, err := k.ReadSubKeyNames(0)
+	k.Close()
+	if err != nil {
+		return err
+	}
+	for _, sid := range sids {
+		sk, err := registry.OpenKey(registry.LOCAL_MACHINE, profileList+`\`+sid, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		home, _, _ := sk.GetStringValue("ProfileImagePath")
+		sk.Close()
+		if home != "" && profileDirOf(home, name) {
+			if err := registry.DeleteKey(registry.LOCAL_MACHINE, profileList+`\`+sid); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+				return fmt.Errorf("remove the profile entry %s: %w", sid, err)
+			}
+		}
+	}
+	dir, err := openNoFollow(usersDir(), windows.FILE_LIST_DIRECTORY)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", usersDir(), err)
+	}
+	defer windows.CloseHandle(dir)
+	entries, err := listDir(dir)
+	if err != nil {
+		return fmt.Errorf("list %s: %w", usersDir(), err)
+	}
+	for _, e := range entries {
+		if profileDirOf(filepath.Join(usersDir(), e.name), name) {
+			if err := removeAt(dir, usersDir(), e.name, deadline); err != nil {
+				return fmt.Errorf("remove the profile of %s: %w", name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -826,8 +1097,13 @@ if (Test-Path $d) {
   $o = (Get-Acl $d).GetOwner([Security.Principal.SecurityIdentifier]).Value
   if ($o -notin 'S-1-5-32-544', 'S-1-5-18') { throw "$d belongs to $o, not to the administrators; remove it and run again" }
 } else { New-Item -ItemType Directory $d | Out-Null }
+# Only these entries, also on the files: no access that an earlier owner added.
 icacls $d /setowner '*S-1-5-32-544' /T /C /L | Out-Null
-icacls $d /inheritance:r /grant '*S-1-5-18:(OI)(CI)F' /grant '*S-1-5-32-544:(OI)(CI)F' /grant '*S-1-5-32-545:(OI)(CI)RX' | Out-Null`, "HOSTEL_DIR="+leaseRootDir); err != nil {
+if ($LASTEXITCODE) { throw "icacls /setowner $d failed" }
+icacls $d /reset /T /C /L | Out-Null
+if ($LASTEXITCODE) { throw "icacls /reset $d failed" }
+icacls $d /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+if ($LASTEXITCODE) { throw "icacls /grant $d failed" }`, "HOSTEL_DIR="+leaseRootDir); err != nil {
 		return err
 	}
 	m, err := mgr.Connect()

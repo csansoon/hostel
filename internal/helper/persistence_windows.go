@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -31,7 +32,13 @@ var persistenceKeys = []string{
 	`Software\Microsoft\Windows NT\CurrentVersion\Winlogon`,
 	`Software\Microsoft\Command Processor`,
 	`Environment`,
+	// Where the Startup and Documents folders are: a guest can move them
+	// out of the audited places. Not "Shell Folders": Explorer writes that
+	// cache itself.
+	`Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`,
 }
+
+var userIDRE = regexp.MustCompile(`<UserId>([^<]*)</UserId>`)
 
 var procRegSetValueEx = windows.NewLazySystemDLL("advapi32.dll").NewProc("RegSetValueExW")
 
@@ -188,8 +195,9 @@ func setRegValue(k registry.Key, name string, v regValue) error {
 	return nil
 }
 
-// userTasks returns the scheduled tasks of the machine user (its SID or name
-// in a UserId of the task), by path, with their XML. schtasks.exe, not
+// userTasks returns the scheduled tasks of the machine user (a UserId of the
+// task that names its SID or its account, in any spelling), by path, with
+// their XML. schtasks.exe, not
 // Get-ScheduledTask: CIM refuses the machine user over SSH (checked on
 // Windows 11), and its XML does not depend on the system language.
 func userTasks() (map[string]string, error) {
@@ -198,12 +206,20 @@ func userTasks() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	account, domain, _, err := u.User.Sid.LookupAccount("")
-	if err != nil {
-		return nil, err
+	me := u.User.Sid
+	known := map[string]bool{}
+	isMe := func(id string) bool {
+		id = strings.TrimSpace(id)
+		if v, ok := known[id]; ok {
+			return v
+		}
+		sid, err := windows.StringToSid(id)
+		if err != nil {
+			sid, _, _, err = windows.LookupSID("", strings.TrimPrefix(id, `.\`))
+		}
+		known[id] = err == nil && sid.Equals(me)
+		return known[id]
 	}
-	ids := []string{"<UserId>" + u.User.Sid.String() + "</UserId>", "<UserId>" + account + "</UserId>",
-		"<UserId>" + domain + `\` + account + "</UserId>"}
 	out, err := schtasks("/query", "/xml", "ONE")
 	if err != nil {
 		return nil, err
@@ -213,7 +229,7 @@ func userTasks() (map[string]string, error) {
 	var body []string
 	flush := func() {
 		x := strings.Join(body, "\n")
-		if path != "" && slices.ContainsFunc(ids, func(id string) bool { return strings.Contains(strings.ToLower(x), strings.ToLower(id)) }) {
+		if path != "" && slices.ContainsFunc(userIDRE.FindAllStringSubmatch(x, -1), func(m []string) bool { return isMe(m[1]) }) {
 			tasks[path] = x
 		}
 		path, body = "", nil
