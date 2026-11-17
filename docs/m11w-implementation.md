@@ -121,7 +121,28 @@ real machine (as `TestSmokeWindows`):
   gone, and the event log names them.
 - The whole E2E suite (Linux) in one local run, for the shared code.
 
-## 9. Risks
+## 9. Evidence (2026-11-17)
+
+On a Windows 11 Pro 25H2 virtual machine (2 cores, 8 GB), with the service
+installed:
+
+- `TestSmokeWindows`, `TestSmokeWindowsDesktop`, `TestSmokeWindowsLeaseUsers`
+  (lease ready after 58 s, with the creation of the lease user), and
+  `TestSmokeWindowsCleanupAudit` pass. The whole E2E suite (Linux) passes in one
+  local run.
+- By hand on the machine: the administrator cannot open the pipe; the service
+  refuses a user without the marker and names of another form.
+- Times: `create` 4 s, `share-cache` 1.5 s, the copy of `bin` (263 MB) 0.24 s,
+  `delete` 8 to 12 s.
+- Problems that the real machine found: Windows PowerShell 5.1 as SYSTEM without a
+  console loses its error records and throws for a missing user with
+  `-ErrorAction SilentlyContinue` (the scripts filter lists and print the error);
+  Windows Search keeps a deleted user's hive open (the service unloads it by
+  force); `NtUnloadKey2` answers "invalid parameter" for a hive that is not loaded
+  (the service checks first); the task scheduler's CIM interface refuses the
+  machine user over SSH (the audit uses `schtasks.exe`).
+
+## 10. Risks
 
 - A tool that needs the desktop or the machine user's account fails in a lease user.
   Mitigation: `machine_user = true` (already on `windows-desktop`).
