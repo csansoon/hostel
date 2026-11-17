@@ -38,7 +38,10 @@ var persistenceKeys = []string{
 	`Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`,
 }
 
-var userIDRE = regexp.MustCompile(`<UserId>([^<]*)</UserId>`)
+var (
+	principalsRE = regexp.MustCompile(`(?s)<Principals>.*?</Principals>`)
+	userIDRE     = regexp.MustCompile(`<UserId>([^<]*)</UserId>`)
+)
 
 var procRegSetValueEx = windows.NewLazySystemDLL("advapi32.dll").NewProc("RegSetValueExW")
 
@@ -206,19 +209,16 @@ func userTasks() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	me := u.User.Sid
-	known := map[string]bool{}
+	// The account of the own SID only: a lookup of another name can wait
+	// for a domain controller.
+	account, domain, _, err := u.User.Sid.LookupAccount("")
+	if err != nil {
+		return nil, err
+	}
 	isMe := func(id string) bool {
 		id = strings.TrimSpace(id)
-		if v, ok := known[id]; ok {
-			return v
-		}
-		sid, err := windows.StringToSid(id)
-		if err != nil {
-			sid, _, _, err = windows.LookupSID("", strings.TrimPrefix(id, `.\`))
-		}
-		known[id] = err == nil && sid.Equals(me)
-		return known[id]
+		return slices.ContainsFunc([]string{u.User.Sid.String(), account, `.\` + account, domain + `\` + account},
+			func(n string) bool { return strings.EqualFold(n, id) })
 	}
 	out, err := schtasks("/query", "/xml", "ONE")
 	if err != nil {
@@ -229,7 +229,8 @@ func userTasks() (map[string]string, error) {
 	var body []string
 	flush := func() {
 		x := strings.Join(body, "\n")
-		if path != "" && slices.ContainsFunc(userIDRE.FindAllStringSubmatch(x, -1), func(m []string) bool { return isMe(m[1]) }) {
+		// The UserId of the principal, not of a logon trigger.
+		if p := principalsRE.FindString(x); path != "" && slices.ContainsFunc(userIDRE.FindAllStringSubmatch(p, -1), func(m []string) bool { return isMe(m[1]) }) {
 			tasks[path] = x
 		}
 		path, body = "", nil

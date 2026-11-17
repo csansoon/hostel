@@ -38,7 +38,7 @@ const (
 	// deleteTimeout bounds one deletion (the search of the shared
 	// directories); opTimeout, one request with a deletion and a creation.
 	deleteTimeout = 10 * time.Minute
-	opTimeout     = 15 * time.Minute
+	opTimeout     = 25 * time.Minute
 	pipeTimeout   = 30 * time.Second
 	leasePipe     = `\\.\pipe\hostel-lease-user`
 	// leaseRootDir has the service's binary and the server key; only SYSTEM
@@ -117,6 +117,7 @@ func callLeaseService(req leaseRequest) (json.RawMessage, error) {
 		return nil, err
 	}
 	// The service does one request at a time; a deletion can take minutes.
+	// The wait for the pipe and the answer have their own deadlines.
 	deadline := time.Now().Add(opTimeout)
 	var h windows.Handle
 	for {
@@ -156,7 +157,7 @@ func callLeaseService(req leaseRequest) (json.RawMessage, error) {
 		return nil, fmt.Errorf("write to %s: %w", leasePipe, err)
 	}
 	var ans leaseAnswer
-	if err := withTimeout(time.Until(deadline)+pipeTimeout, func() error {
+	if err := withTimeout(opTimeout+pipeTimeout, func() error {
 		return json.NewDecoder(io.LimitReader(pipeConn(h), 1<<20)).Decode(&ans)
 	}); err != nil {
 		return nil, fmt.Errorf("the answer of the service %s: %w", leaseService, err)
@@ -190,9 +191,10 @@ func (leaseHandler) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc
 		return true, 1
 	}
 	pipe, err := newLeasePipe()
-	if err != nil {
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_PIPE_BUSY) {
 		// A process of a lease user can take the name while the service
 		// is stopped (at a restart), and then nobody can delete that user.
+		s <- svc.Status{State: svc.StartPending, WaitHint: 5 * 60 * 1000}
 		endLeaseUserProcesses()
 		if pipe, err = newLeasePipe(); err != nil {
 			return true, 2
@@ -239,7 +241,8 @@ func servePipe(h windows.Handle) {
 		err := windows.ConnectNamedPipe(h, nil)
 		if err == nil || errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
 			answerLeaseRequest(h)
-			windows.FlushFileBuffers(h)
+			// A client that does not read must not keep the one instance.
+			withTimeout(pipeTimeout, func() error { return windows.FlushFileBuffers(h) })
 		} else {
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -385,10 +388,19 @@ func runLeaseOp(req leaseRequest) (any, error) {
 	case "list":
 		users, err := leaseUsersWindows()
 		return protocol.LeaseUserList{Users: users}, err
-	case "create":
-		return createLeaseUserWindows(req.Name)
-	case "delete":
-		return struct{}{}, deleteLeaseUserWindows(req.Name)
+	case "create", "delete":
+		// Also an open that waits (an oplock of another user's file) ends
+		// at the deadline: the service does one request at a time.
+		var out any
+		err := withTimeout(opTimeout, func() (err error) {
+			if req.Op == "create" {
+				out, err = createLeaseUserWindows(req.Name)
+			} else {
+				out, err = struct{}{}, deleteLeaseUserWindows(req.Name)
+			}
+			return err
+		})
+		return out, err
 	}
 	return nil, fmt.Errorf("unknown operation %q", req.Op)
 }
@@ -535,34 +547,39 @@ func deleteLeaseUserWindows(name string) error {
 	}
 	if !exists {
 		// A deletion that stopped after the user record went.
-		return removeLeftProfiles(name, deadline)
+		return removeLeftProfiles(name, nil, deadline)
 	}
 	sid, _, _, err := windows.LookupSID("", name)
 	if err != nil {
 		return err
 	}
-	if err := killUserProcesses(sid); err != nil {
-		return err
-	}
+	// No new logon and no task of the user from here, then no process: a
+	// process that starts later could write files after the search.
 	if _, err := systemPowerShell(`$n = $env:HOSTEL_NAME; $s = $env:HOSTEL_SID
+Disable-LocalUser -SID $s
 Get-ScheduledTask | Where-Object {
   $u = $_.Principal.UserId
   if (-not $u) { return $false }
   if ($u -eq $s) { return $true }
   try { (New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value -eq $s } catch { $u -eq $n -or $u -like "*\$n" }
 } | Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String()); err != nil {
-		return fmt.Errorf("remove the scheduled tasks of %s: %w", name, err)
+		return fmt.Errorf("disable %s and remove its scheduled tasks: %w", name, err)
+	}
+	if err := killUserProcesses(sid); err != nil {
+		return err
 	}
 	for _, d := range sharedDirs() {
 		if err := filesOf(sid, d.path, d.deep, true, deadline); err != nil {
 			return err
 		}
-		if err := filesOf(sid, d.path, d.deep, false, deadline); err != nil {
-			return err
-		}
 	}
 	if err := killUserProcesses(sid); err != nil {
 		return err
+	}
+	for _, d := range sharedDirs() {
+		if err := filesOf(sid, d.path, d.deep, false, deadline); err != nil {
+			return err
+		}
 	}
 	if err := deleteProfile(sid, name, deadline); err != nil {
 		return err
@@ -602,8 +619,15 @@ func sharedDirs() []sharedDir {
 		{filepath.Join(win, "Tasks"), true},
 		{filepath.Join(win, "tracing"), true},
 		{filepath.Join(win, `System32\spool\drivers\color`), true},
-		{filepath.Join(win, `System32\spool\PRINTERS`), true},
+		{filepath.Join(win, `System32\spool\SERVERS`), true},
 		{filepath.Join(win, `System32\Microsoft\Crypto\RSA\MachineKeys`), true},
+		{filepath.Join(win, `System32\FxsTmp`), true},
+		{filepath.Join(win, `System32\com\dmp`), true},
+		{filepath.Join(win, `System32\Tasks`), true},
+		{filepath.Join(win, `SysWOW64\FxsTmp`), true},
+		{filepath.Join(win, `SysWOW64\com\dmp`), true},
+		{filepath.Join(win, `SysWOW64\Tasks`), true},
+		{filepath.Join(win, `Registration\CRMLog`), true},
 		// The user's own recycle bin, by its SID.
 		{filepath.Join(drive, `$Recycle.Bin`), false},
 	}
@@ -635,16 +659,13 @@ func filesAt(sid *windows.SID, dir windows.Handle, dirPath string, deep, remove 
 	}
 	for _, e := range entries {
 		p := filepath.Join(dirPath, e.name)
-		h, err := openAt(dir, e.name, windows.READ_CONTROL|windows.FILE_LIST_DIRECTORY)
-		if errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-			// Without FILE_LIST_DIRECTORY: a file that another process
-			// opened without read sharing.
-			h, err = openAt(dir, e.name, windows.READ_CONTROL)
-		}
+		// READ_CONTROL only: the sharing mode of other opens does not
+		// apply to it.
+		h, err := openAt(dir, e.name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES)
 		if notFound(err) ||
-			// A file that the system holds (the page file) or protects
-			// also from SYSTEM: not a lease user's file.
-			errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			// A file that the system protects also from SYSTEM: not a
+			// lease user's file.
+			errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 			continue
 		}
 		if err != nil {
@@ -662,10 +683,27 @@ func filesAt(sid *windows.SID, dir windows.Handle, dirPath string, deep, remove 
 				}
 				return removeAt(dir, dirPath, e.name, deadline)
 			}
-			if deep && e.attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && e.attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-				return filesAt(sid, h, p, true, remove, deadline)
+			// The attributes of the open entry, not of the listing:
+			// the entry can have changed between them.
+			var info windows.ByHandleFileInformation
+			if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+				return fmt.Errorf("the attributes of %s: %w", p, err)
 			}
-			return nil
+			if !deep || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+				return nil
+			}
+			l, err := openAt(h, "", windows.FILE_LIST_DIRECTORY)
+			if errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED) || notFound(err) {
+				// Another user's directory that a process holds without
+				// sharing, or that a filter protects: the lease user's
+				// files in it stay (m11w-implementation.md, limits).
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("open %s: %w", p, err)
+			}
+			defer windows.CloseHandle(l)
+			return filesAt(sid, l, p, true, remove, deadline)
 		}()
 		if err != nil {
 			return err
@@ -709,12 +747,21 @@ func openAt(dir windows.Handle, name string, access uint32) (windows.Handle, err
 	var iosb windows.IO_STATUS_BLOCK
 	err = windows.NtCreateFile(&h, access|windows.SYNCHRONIZE, &oa, &iosb, nil, 0,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_OPEN,
-		windows.FILE_OPEN_REPARSE_POINT|windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
+		windows.FILE_OPEN_REPARSE_POINT|windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_SYNCHRONOUS_IO_NONALERT|fileCompleteIfOplocked, 0, 0)
 	if st, ok := err.(windows.NTStatus); ok {
+		if st == statusOplockBreakInProgress {
+			// Open, without a wait for the holder of the oplock.
+			return h, nil
+		}
 		return 0, st.Errno()
 	}
 	return h, err
 }
+
+const (
+	fileCompleteIfOplocked      = 0x100
+	statusOplockBreakInProgress = windows.NTStatus(0x108)
+)
 
 // listDir lists a directory through its handle (FILE_FULL_DIR_INFO).
 func listDir(h windows.Handle) ([]dirEntry, error) {
@@ -879,9 +926,8 @@ func processOf(pid uint32, sid *windows.SID) (bool, error) {
 	defer windows.CloseHandle(p)
 	user, err := processUser(p)
 	if err != nil {
-		var code uint32
-		if windows.GetExitCodeProcess(p, &code) == nil && code != stillActive {
-			return false, nil
+		if ev, _ := windows.WaitForSingleObject(p, 0); ev == windows.WAIT_OBJECT_0 {
+			return false, nil // ended
 		}
 		return false, fmt.Errorf("the user of process %d: %w", pid, err)
 	}
@@ -891,8 +937,6 @@ func processOf(pid uint32, sid *windows.SID) (bool, error) {
 	windows.TerminateProcess(p, 1)
 	return true, nil
 }
-
-const stillActive = 259
 
 func processUser(p windows.Handle) (*windows.SID, error) {
 	var tok windows.Token
@@ -957,27 +1001,15 @@ func deleteProfile(sid *windows.SID, name string, deadline time.Time) error {
 	if home != "" && !profileDirOf(home, name) {
 		return fmt.Errorf("the profile of %s is %s, not %s in %s", name, home, name, usersDir())
 	}
-	// A service can keep the user's registry open after its last process
-	// (Windows Search, checked on Windows 11), and then nobody can delete
-	// the profile until a restart: unload it by force.
 	for _, hive := range []string{sid.String() + "_Classes", sid.String()} {
-		// NtUnloadKey2 answers STATUS_INVALID_PARAMETER, not "not found",
-		// for a hive that is not loaded (checked on Windows 11).
-		k, err := registry.OpenKey(registry.USERS, hive, registry.QUERY_VALUE)
-		if errors.Is(err, registry.ErrNotExist) {
-			continue
-		}
-		if err == nil {
-			k.Close()
-		}
-		if err := forceUnloadHive(`\Registry\User\` + hive); err != nil {
+		if err := unloadHive(hive); err != nil {
 			return fmt.Errorf("unload the registry of %s: %w", name, err)
 		}
 	}
 	if home == "" {
 		// No entry (a creation or a deletion that stopped): DeleteProfile
 		// cannot find the profile.
-		return removeLeftProfiles(name, deadline)
+		return removeLeftProfiles(name, sid, deadline)
 	}
 	s, err := windows.UTF16PtrFromString(sid.String())
 	if err != nil {
@@ -996,7 +1028,7 @@ func deleteProfile(sid *windows.SID, name string, deadline time.Time) error {
 	if err := registry.DeleteKey(registry.LOCAL_MACHINE, key); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
 		return fmt.Errorf("remove the profile entry of %s: %w", name, err)
 	}
-	return removeLeftProfiles(name, deadline)
+	return removeLeftProfiles(name, sid, deadline)
 }
 
 // profileDirOf reports whether dir is a profile directory of the user name:
@@ -1009,8 +1041,11 @@ func profileDirOf(dir, name string) bool {
 }
 
 // removeLeftProfiles removes the profile directories of the user name and the
-// profile entries that point to them, also after the user record went.
-func removeLeftProfiles(name string, deadline time.Time) error {
+// profile entries that point to them, also after the user record went (own is
+// then nil). An entry of another account that still exists (a domain user of
+// the same name) stays, with its directory. The hives go first and the entries
+// last, so that a failed removal can be repeated.
+func removeLeftProfiles(name string, own *windows.SID, deadline time.Time) error {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, profileList, registry.ENUMERATE_SUB_KEYS)
 	if err != nil {
 		return err
@@ -1020,18 +1055,34 @@ func removeLeftProfiles(name string, deadline time.Time) error {
 	if err != nil {
 		return err
 	}
-	for _, sid := range sids {
-		sk, err := registry.OpenKey(registry.LOCAL_MACHINE, profileList+`\`+sid, registry.QUERY_VALUE)
+	var gone []string
+	keep := map[string]bool{}
+	for _, sidText := range sids {
+		sk, err := registry.OpenKey(registry.LOCAL_MACHINE, profileList+`\`+sidText, registry.QUERY_VALUE)
 		if err != nil {
 			continue
 		}
 		home, _, _ := sk.GetStringValue("ProfileImagePath")
 		sk.Close()
-		if home != "" && profileDirOf(home, name) {
-			if err := registry.DeleteKey(registry.LOCAL_MACHINE, profileList+`\`+sid); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-				return fmt.Errorf("remove the profile entry %s: %w", sid, err)
+		if home == "" || !profileDirOf(home, name) {
+			continue
+		}
+		sid, err := windows.StringToSid(sidText)
+		if err != nil {
+			continue
+		}
+		if !(own != nil && sid.Equals(own)) {
+			if _, _, _, err := sid.LookupAccount(""); err == nil {
+				keep[strings.ToLower(filepath.Base(home))] = true
+				continue
 			}
 		}
+		for _, hive := range []string{sidText + "_Classes", sidText} {
+			if err := unloadHive(hive); err != nil {
+				return fmt.Errorf("unload the registry of %s: %w", name, err)
+			}
+		}
+		gone = append(gone, sidText)
 	}
 	dir, err := openNoFollow(usersDir(), windows.FILE_LIST_DIRECTORY)
 	if err != nil {
@@ -1043,13 +1094,35 @@ func removeLeftProfiles(name string, deadline time.Time) error {
 		return fmt.Errorf("list %s: %w", usersDir(), err)
 	}
 	for _, e := range entries {
-		if profileDirOf(filepath.Join(usersDir(), e.name), name) {
+		if profileDirOf(filepath.Join(usersDir(), e.name), name) && !keep[strings.ToLower(e.name)] {
 			if err := removeAt(dir, usersDir(), e.name, deadline); err != nil {
 				return fmt.Errorf("remove the profile of %s: %w", name, err)
 			}
 		}
 	}
+	for _, sidText := range gone {
+		if err := registry.DeleteKey(registry.LOCAL_MACHINE, profileList+`\`+sidText); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			return fmt.Errorf("remove the profile entry %s: %w", sidText, err)
+		}
+	}
 	return nil
+}
+
+// unloadHive unloads the hive HKEY_USERS\<hive> by force if it is loaded.
+// A service can keep a user's registry open after its last process (Windows
+// Search, checked on Windows 11), and then nobody can delete the profile until
+// a restart.
+func unloadHive(hive string) error {
+	// NtUnloadKey2 answers STATUS_INVALID_PARAMETER, not "not found", for a
+	// hive that is not loaded (checked on Windows 11).
+	k, err := registry.OpenKey(registry.USERS, hive, registry.QUERY_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		k.Close()
+	}
+	return forceUnloadHive(`\Registry\User\` + hive)
 }
 
 // forceUnloadHive unloads a loaded registry hive also when processes have it
@@ -1112,7 +1185,10 @@ if ($LASTEXITCODE) { throw "icacls /setowner $d failed" }
 icacls $d /reset /T /C /L | Out-Null
 if ($LASTEXITCODE) { throw "icacls /reset $d failed" }
 icacls $d /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if ($LASTEXITCODE) { throw "icacls /grant $d failed" }`, "HOSTEL_DIR="+leaseRootDir); err != nil {
+if ($LASTEXITCODE) { throw "icacls /grant $d failed" }
+# Again: a file made before the grant has another owner.
+icacls $d /setowner '*S-1-5-32-544' /T /C /L | Out-Null
+if ($LASTEXITCODE) { throw "icacls /setowner $d failed" }`, "HOSTEL_DIR="+leaseRootDir); err != nil {
 		return err
 	}
 	m, err := mgr.Connect()
