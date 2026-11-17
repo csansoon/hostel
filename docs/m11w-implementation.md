@@ -55,20 +55,26 @@ caller.
   goes into `.ssh\authorized_keys`, with access for SYSTEM and the user only. Windows
   does not use a security identifier (SID) again, so a file of an earlier lease
   user never belongs to a later one.
-- **delete.** End all processes of the user's SID (a process whose user the
-  service cannot read stops the deletion; the service takes ownership of a token
-  whose access list leaves SYSTEM out); remove the scheduled tasks that run as the
-  user (by SID); remove the files that the user owns in the places where all users
-  can write (the top of the system drive and of `$Recycle.Bin`, `C:\ProgramData`,
-  `C:\Users\Public`, `C:\Windows\Temp`, `Tasks`, `tracing`, the spooler's
-  directories, `MachineKeys`). Each entry is opened through the handle of its
-  directory and never followed when it is a junction or a link, so a junction that
-  another user puts on the way cannot send the deletion elsewhere. Then the
-  profile (its hives unloaded by force, `DeleteProfile`, the directory, and all
-  profile directories and entries of the name) and the user (NetUserDel). A
-  missing user or a missing profile entry is not an error. One deletion has a
-  deadline of 10 minutes; the pipe's reads and writes have a deadline of 30
-  seconds, so a client that does not write cannot hold the one instance.
+- **delete.** Disable the account and remove the scheduled tasks that run as the
+  user (by SID), so that no new process of the user starts. End all processes of
+  the user's SID (a process whose user the service cannot read stops the
+  deletion; the service takes ownership of a token whose access list leaves SYSTEM
+  out). Remove the files that the user owns in the places where all users can
+  write (the top of the system drive and of `$Recycle.Bin`, `C:\ProgramData`,
+  `C:\Users\Public`, `C:\Windows\Temp`, `Tasks`, `tracing`, `Registration\CRMLog`,
+  `MachineKeys`, the spooler's `color` and `SERVERS`, and `FxsTmp`, `com\dmp`, and
+  `Tasks` in `System32` and `SysWOW64`), end the processes again, and check that no
+  file of the user is left. Each entry is opened through the handle of its
+  directory, with `READ_CONTROL` only (another open's sharing mode does not apply),
+  and never followed when it is a junction or a link, so a junction that another
+  user puts on the way cannot send the deletion elsewhere. Then the profile (its
+  hives unloaded by force, `DeleteProfile`, the directory, and the profile
+  directories and entries of the name whose account is gone) and the user
+  (NetUserDel). A missing user or a missing profile entry is not an error. One
+  deletion has a deadline of 10 minutes and one request a deadline of 25 minutes,
+  also for an open that waits (an oplock of another user's file). The pipe's
+  reads, writes, and flush have a deadline of 30 seconds, so a client that does
+  not write or read cannot hold the one instance.
 - **list** and **check**: as on macOS and Linux.
 
 ## 5. Lease flow
@@ -160,6 +166,11 @@ installed:
   - The audit does not cover COM registrations (`HKCU\Software\Classes`), BITS
     jobs, or Documents that OneDrive moved. Links and junctions in the audited
     folders are not in the copy: a junction there is removed at cleanup.
+  - The search skips a directory that another process holds without sharing, or
+    that a filter protects also from SYSTEM; a lease user's file in it stays.
+  - When the service cannot read the user of a process, it takes ownership of the
+    process's token and gives SYSTEM access to it; it does not restore the token's
+    earlier access list.
   - A process of the machine user can take the pipe's name while the service is
     stopped. The client then refuses it (the owner is not SYSTEM); the service
     ends the processes of the lease users and tries again, but not the
