@@ -145,7 +145,8 @@ installed:
   `-ErrorAction SilentlyContinue` (the scripts filter lists and print the error);
   Windows Search keeps a deleted user's hive open (the service unloads it by
   force); `NtUnloadKey2` answers "invalid parameter" for a hive that is not loaded
-  (the service checks first); the task scheduler's CIM interface refuses the
+  (the service checks first); a paging file refuses every open, also one with
+  `READ_CONTROL` only (the search skips it); the task scheduler's CIM interface refuses the
   machine user over SSH (the audit uses `schtasks.exe`).
 
 ## 10. Risks

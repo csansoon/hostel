@@ -663,9 +663,10 @@ func filesAt(sid *windows.SID, dir windows.Handle, dirPath string, deep, remove 
 		// apply to it.
 		h, err := openAt(dir, e.name, windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES)
 		if notFound(err) ||
-			// A file that the system protects also from SYSTEM: not a
-			// lease user's file.
-			errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			// A file that the system protects also from SYSTEM, or a
+			// paging file (no open at all, also with READ_CONTROL only):
+			// not a lease user's file.
+			errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 			continue
 		}
 		if err != nil {
