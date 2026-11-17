@@ -961,6 +961,15 @@ func deleteProfile(sid *windows.SID, name string, deadline time.Time) error {
 	// (Windows Search, checked on Windows 11), and then nobody can delete
 	// the profile until a restart: unload it by force.
 	for _, hive := range []string{sid.String() + "_Classes", sid.String()} {
+		// NtUnloadKey2 answers STATUS_INVALID_PARAMETER, not "not found",
+		// for a hive that is not loaded (checked on Windows 11).
+		k, err := registry.OpenKey(registry.USERS, hive, registry.QUERY_VALUE)
+		if errors.Is(err, registry.ErrNotExist) {
+			continue
+		}
+		if err == nil {
+			k.Close()
+		}
 		if err := forceUnloadHive(`\Registry\User\` + hive); err != nil {
 			return fmt.Errorf("unload the registry of %s: %w", name, err)
 		}
