@@ -130,7 +130,7 @@ schtasks /create /tn door-audit /tr "cmd /c echo door" /sc daily /st 03:00 /f | 
 (Get-ItemProperty HKCU:\Environment).HOSTEL_DOOR
 Test-Path "$HOME\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\door.cmd"
 if (Test-Path "$HOME\Documents\WindowsPowerShell\profile.ps1") { Select-String -Quiet door "$HOME\Documents\WindowsPowerShell\profile.ps1" }
-if (Get-ScheduledTask -TaskName door-audit -ErrorAction SilentlyContinue) { 'task door-audit' }`)
+schtasks.exe /query /tn door-audit 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { 'task door-audit' }`)
 	if strings.Contains(got, "door") || strings.Contains(got, "True") {
 		t.Fatalf("after the release (Run value, environment, Startup file, profile, task):\n%s", got)
 	}

@@ -2092,7 +2092,15 @@ failed; the result lists each step.
    (Linux), `~/Library/LaunchAgents` (macOS), the shell startup files of sh,
    bash, zsh, and fish (with `~/.config/fish/conf.d` and `functions`) (and `.bash_aliases`), the git
    configuration (`core.fsmonitor` and hooks run commands), `~/.ssh/rc`, and
-   `~/.ssh/environment`.
+   `~/.ssh/environment`. On Windows (M11w): the git configuration, `.ssh\rc`,
+   the Startup folder, the PowerShell profile folders (`Documents\WindowsPowerShell`,
+   `Documents\PowerShell`), the values of the registry keys `Run`, `RunOnce`,
+   `Policies\Explorer\Run`, `Windows NT\CurrentVersion\Windows`, `Winlogon`,
+   `Command Processor`, and `Environment` (HKCU), and the scheduled tasks that run
+   as the machine user (their XML from `schtasks.exe`; the task scheduler's CIM
+   interface refuses a user over SSH). A new task is deleted, a changed or deleted
+   one is created again from its XML, and a new, changed, or deleted value gets its
+   copy back.
    A new or changed entry is stopped first (`systemctl --user disable --now`;
    for a drop-in, its parent unit;
    `launchctl bootout` of the plist's label, by the name in the audited
@@ -2218,8 +2226,8 @@ What a guest can still do in version 1 (on a lease without a lease user):
 
 Hardening (milestone M11):
 
-1. **One OS user for each lease** (`lease_users = true` on a macOS or Linux
-   machine). A lease whose tools have no `machine_user` key gets the user
+1. **One OS user for each lease** (`lease_users = true`; macOS, Linux, and
+   Windows). A lease whose tools have no `machine_user` key gets the user
    `hostel-<first 12 characters of the lease ID>`.
    - **Root step.** `hostel machine join --lease-users` writes
      `/etc/sudoers.d/hostel` (the machine user may run only
@@ -2231,6 +2239,31 @@ Hardening (milestone M11):
      user controls: it writes only into a home directory that it has just made
      (through `os.Root`). `check` prints its version; the server checks it at
      provisioning (a missing step makes the machine `broken` with a message).
+   - **Root step on Windows** (M11w). Windows has no sudo. `machine join
+     --lease-users` installs the service `HostelLeaseUsers` (LocalSystem, automatic
+     start), which runs `C:\Program Files\Hostel\hostel.exe lease-user serve`; that
+     directory, with `server_key.pub`, only SYSTEM and Administrators can write (not
+     `C:\ProgramData\hostel`, which the connection's account can change). The service
+     serves the named pipe `\\.\pipe\hostel-lease-user`: its access list lets only
+     SYSTEM and the machine user open it, it owns the first instance, and it refuses
+     remote clients. It reads one JSON request (`{"op", "name"}`), then impersonates
+     the client and refuses every user but the machine user, and writes one JSON
+     answer, the same output as `lease-user` on macOS and Linux. The machine user's
+     own `hostel.exe lease-user ...` is the client; it checks that SYSTEM owns the
+     server end, so a process that takes the name while the service is stopped cannot
+     answer. The rules on names, the marker, and paths are the same. `create` makes
+     a local user (Users and `hostel-leases`), its profile (`CreateProfile`, before
+     the first logon), and `.ssh\authorized_keys`. `delete` ends the user's processes
+     (by the SID of their token), deletes the scheduled tasks that run as it, deletes
+     its files in the shared directories (the top of the system drive,
+     `C:\ProgramData`, `C:\Users\Public`, `C:\Windows\Temp`, `Tasks`, `tracing`,
+     and the color directory of the spooler) with the backup and restore privileges,
+     without following reparse points, unloads its registry hives also when
+     another process holds them (Windows Search does), then removes the profile and
+     the user. Windows never gives a SID again, so a file of an earlier lease user
+     never belongs to a later one. `share-cache` gives `hostel-leases` read access
+     (`icacls`) to `hostel\bin`, `tools`, `mise`, and `cache`, and the lease user
+     fills its home with PowerShell (copies, and junctions to the cache entries).
    - **Create** (preparing, before `begin`): the server records the name, then
      runs `create` as the machine user through sudo: an existing lease user of
      that name goes first; the new user gets a user ID that was never used

@@ -80,11 +80,14 @@ Snapshot at `begin` and repair at cleanup, as in design section 17:
 
 | Location | Repair |
 |---|---|
-| `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` and `RunOnce` | restore the values |
-| `HKCU\Software\Microsoft\Command Processor` `AutoRun` | restore the value |
+| The values (not the subkeys) of the HKCU keys `Run`, `RunOnce`, `Policies\Explorer\Run`, `Windows NT\CurrentVersion\Windows`, `Winlogon`, `Command Processor`, `Environment` | delete new values, restore changed and deleted ones |
 | The user's Startup folder | delete new files, restore changed ones |
 | PowerShell profiles (`Documents\WindowsPowerShell`, `Documents\PowerShell`), `.gitconfig`, `.ssh\rc` | restore the snapshot copy, or delete a new file |
-| Scheduled tasks that run as the machine user | unregister new tasks |
+| Scheduled tasks that run as the machine user (XML from `schtasks.exe /query /xml`) | delete new tasks, create changed and deleted ones again from their XML |
+
+The task scheduler's CIM interface (`Get-ScheduledTask`) refuses the machine user
+over SSH ("Access denied"), so the helper uses `schtasks.exe`. The machine lock
+(`hostel\machine.lock`) uses `LockFileEx`.
 
 ## 7. Phases
 
