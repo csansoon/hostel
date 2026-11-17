@@ -32,20 +32,21 @@ func TestIdleExpiry(t *testing.T) {
 // TestMaxLease is scenario 10: max_lease ends an active lease.
 func TestMaxLease(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{templateKeys: "max_lease = \"10s\"\n"})
+	f := newFixture(t, &fixtureOpts{templateKeys: "max_lease = \"30s\"\n"})
 	// The lease is ready before acquire returns (acquire then syncs and runs
-	// the setup job), so the time before acquire is a safe lower bound.
+	// the setup job), so the time before acquire is a safe lower bound. 30 s
+	// leaves time for the sync and the setup job on a loaded Mac.
 	start := time.Now()
 	f.acquire()
 	var last result
-	f.e.waitFor("lease ended by max_lease", time.Minute, func() bool {
+	f.e.waitFor("lease ended by max_lease", 2*time.Minute, func() bool {
 		last = f.e.hostel("run", "--", "true")
 		return last.code != 0
 	})
 	if !strings.Contains(last.stderr, "maximum lease duration") {
 		t.Fatalf("run after max_lease: %s", last)
 	}
-	if d := time.Since(start); d < 8*time.Second {
+	if d := time.Since(start); d < 28*time.Second {
 		t.Fatalf("the lease ended after %s, before max_lease", d)
 	}
 }

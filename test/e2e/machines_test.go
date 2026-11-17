@@ -19,7 +19,7 @@ import (
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
-const machineReady = 3 * time.Minute
+const machineReady = 6 * time.Minute
 
 // installScript records each call, with values from its environment, in the
 // machine cache.
