@@ -223,6 +223,10 @@ type portProc struct {
 	log  *log.Logger
 	stop context.CancelFunc
 
+	// listenMu runs one listenTunnel at a time: the reconnect loop and a
+	// tunnel request can ask for the same machine port together, and the
+	// machine refuses the second listen.
+	listenMu sync.Mutex
 	mu       sync.Mutex
 	tunnels  map[string]*TunnelConfig
 	state    map[string]*tunnelStatus
@@ -411,6 +415,8 @@ func (p *portProc) waitConn(ctx context.Context, d time.Duration) {
 // listenTunnel asks the gateway for the remote forward of a tunnel. A refusal
 // (for example a machine service uses the port) is recorded in the tunnel state.
 func (p *portProc) listenTunnel(name string) error {
+	p.listenMu.Lock()
+	defer p.listenMu.Unlock()
 	p.mu.Lock()
 	cfg, conn := p.tunnels[name], p.conn
 	if old := p.tunLn[name]; old != nil {
