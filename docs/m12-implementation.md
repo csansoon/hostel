@@ -1,6 +1,6 @@
 # M12. Azure provider (plan)
 
-Status: plan, waiting for owner decisions (section 7).
+Status: plan. Owner decisions of 2026-11-18 (section 7: the recommended option of each).
 
 ## 1. Goal
 
@@ -29,7 +29,7 @@ vm = "/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/vir
 os = "windows"
 connect = true
 tools = ["windows-desktop"]
-warm_running = "30m"   # idle time before Hostel deallocates the machine
+warm_running = "30m"   # idle time before Hostel deallocates the machine (default)
 ```
 
 - `vm` is the resource ID of the machine (Azure portal, the machine's "JSON view").
@@ -133,8 +133,8 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
    Other options: a certificate instead of a secret; the `az` CLI logged in on the
    server (one more tool on the server); a managed identity (only when the Hostel
    server runs in Azure).
-3. **Idle time.** The default for `warm_running` on an Azure machine. Proposal:
-   30 minutes. A start of a Windows machine takes about 1 to 3 minutes, plus the
+3. **Idle time.** The default for `warm_running` on an Azure machine: 30
+   minutes. A start of a Windows machine takes about 1 to 3 minutes, plus the
    probe.
 4. **Backstop.** Recommended: the owner sets an Azure auto-shutdown schedule on
    the machine (for example each night), so that the machine stops also when the
