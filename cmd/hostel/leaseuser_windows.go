@@ -556,28 +556,34 @@ func deleteLeaseUserWindows(name string) error {
 	}
 	// No new logon and no task of the user from here, then no process: a
 	// process that starts later could write files after the search. The tasks
-	// go again after the processes, for a task that a process made between.
-	disable := func() error {
+	// go again after the processes, for a task that a process made between;
+	// only then does a task that stays stop the deletion (before, a process
+	// that makes tasks again would block it).
+	disable := func(check string) error {
 		_, err := systemPowerShell(`$n = $env:HOSTEL_NAME; $s = $env:HOSTEL_SID
 Disable-LocalUser -SID $s
-Get-ScheduledTask | Where-Object {
+$mine = {
   $u = $_.Principal.UserId
   if (-not $u) { return $false }
   if ($u -eq $s) { return $true }
   try { (New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value -eq $s } catch { $u -eq $n -or $u -like "*\$n" }
-} | Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String())
+}
+Get-ScheduledTask | Where-Object $mine | Unregister-ScheduledTask -Confirm:$false
+$left = @(Get-ScheduledTask | Where-Object $mine)
+if ($env:HOSTEL_CHECK -and $left.Count) { throw "scheduled tasks of the user stay: $(($left | ForEach-Object { $_.TaskPath + $_.TaskName }) -join ', ')" }`,
+			"HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String(), "HOSTEL_CHECK="+check)
 		if err != nil {
 			return fmt.Errorf("disable %s and remove its scheduled tasks: %w", name, err)
 		}
 		return nil
 	}
-	if err := disable(); err != nil {
+	if err := disable(""); err != nil {
 		return err
 	}
 	if err := killUserProcesses(sid); err != nil {
 		return err
 	}
-	if err := disable(); err != nil {
+	if err := disable("1"); err != nil {
 		return err
 	}
 	for _, d := range sharedDirs() {

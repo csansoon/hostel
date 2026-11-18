@@ -59,7 +59,7 @@ caller.
 - **delete.** Disable the account and remove the scheduled tasks that run as the
   user (by SID), so that no new process of the user starts. End all processes of
   the user's SID, and remove the tasks again (for a task that a process made in
-  between) (a process whose user the service cannot read stops the
+  between; a task that stays stops the deletion) (a process whose user the service cannot read stops the
   deletion; the service takes ownership of a token whose access list leaves SYSTEM
   out). Remove the files that the user owns in the places where all users can
   write (the top of the system drive and of `$Recycle.Bin`, the whole tree of each
