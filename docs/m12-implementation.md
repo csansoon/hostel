@@ -1,0 +1,141 @@
+# M12. Azure provider (plan)
+
+Status: plan, waiting for owner decisions (section 7).
+
+## 1. Goal
+
+An owner has a virtual machine in Azure (for example a Windows desktop). The machine
+costs money while it runs. Hostel starts it when a lease needs it and deallocates
+it when it has been idle for a set time. The owner keeps the machine in the Azure
+portal: its image, disk, network, and the Hostel setup on it (`hostel machine
+join`). Hostel does not create or delete Azure machines in this milestone.
+
+## 2. Configuration
+
+A new provider kind `azure`. Its entries are existing machines, as for `static`:
+each entry under `machines` is one machine, with the same keys (`os`, `tools`,
+`rooms`, `env`, `address` or `connect = true`, `lease_users`, ...), and these
+keys:
+
+```toml
+[providers.cloud]
+kind = "azure"
+label = "Azure"
+tenant = "<directory (tenant) ID>"
+client_id = "<application (client) ID>"
+
+[providers.cloud.machines.win]
+vm = "/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>"
+os = "windows"
+connect = true
+tools = ["windows-desktop"]
+warm_running = "30m"   # idle time before Hostel deallocates the machine
+```
+
+- `vm` is the resource ID of the machine (Azure portal, the machine's "JSON view").
+- `tenant` and `client_id` are not secret. The client secret is not in the
+  configuration document (members can read the document). It is on the server
+  only: `hostel config providers login <provider>` asks for it and sends it to the
+  server, which keeps it in `data_dir` with access for the server's user only. It
+  never goes to a client, a log, or an event.
+- `warm_running` exists already for on-demand templates (design, section 9). M12
+  also allows it on an Azure machine: the idle time before the deallocation.
+  `warm_stopped` does not apply (section 3).
+
+## 3. Behaviour
+
+- **States.** The machine uses the existing states `stopping`, `stopped`, and
+  `resuming`. A stopped Azure machine is not destroyed after `warm_stopped`
+  (Hostel did not create it); it stays `stopped` until a lease needs it.
+- **Start.** When the scheduler assigns a lease to a stopped Azure machine (the
+  lease needs its tools, and no running machine is free), the machine goes to
+  `resuming`. Hostel calls `start` and waits for the Azure operation. Then the
+  machine connects to the server (`connect = true`) or answers on SSH
+  (`address`), and the normal provisioning runs (probe, helper, tools). The
+  lease is `provisioning` (design, section 4: "the machine is in creation or
+  resume").
+- **Stop.** A running machine with no lease for `warm_running` goes to
+  `stopping`: Hostel calls `deallocate` (not `powerOff`: a stopped machine that
+  is not deallocated is still billed) and waits for the operation.
+- **At server start and reconcile.** Hostel reads the power state of each Azure
+  machine (`instanceView`). A machine that someone started in the portal is
+  probed and used. A machine that someone deallocated in the portal is
+  `stopped`. A lease on a machine that went away is queued again, as for a static
+  machine that becomes unreachable.
+- **Drain.** A drained Azure machine takes no new lease. A drained stopped
+  machine is not started.
+- **Failures.** A failed start or stop is an event with the Azure error code and
+  message (no secret). After a failed start, the machine is `broken` (reason
+  "start failed"); `hostel config machines repair` tries again. A failed stop is
+  tried again at the next pass (a machine that keeps running costs money).
+
+## 4. Azure API
+
+Pure Go, with `net/http` (no Azure SDK, no `az` CLI on the server):
+
+- Token: `POST https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`,
+  client credentials, scope `https://management.azure.com/.default`. The token
+  is kept until shortly before it expires.
+- `POST <vm>/start`, `POST <vm>/deallocate`, `GET <vm>/instanceView`, on
+  `https://management.azure.com`, with a pinned `api-version`. A start or a
+  deallocate answers `202` with an `Azure-AsyncOperation` URL; Hostel polls it
+  until it ends.
+- Deadlines: 30 s for each HTTP request, 10 minutes for a start or a deallocate.
+  Retries only for `429` and `5xx`, with backoff and the `Retry-After` header,
+  inside the deadline.
+- The base addresses can be changed in the provider (`login_url`,
+  `management_url`), for the E2E tests and for national clouds.
+
+## 5. Permissions (machine guide)
+
+The guide (`machine-setup.md`, "Azure") tells the owner to:
+
+1. Register an application in Microsoft Entra ID and make a client secret.
+2. Give the application a custom role on the machine only (not on the
+   subscription), with these actions: `Microsoft.Compute/virtualMachines/read`,
+   `Microsoft.Compute/virtualMachines/start/action`,
+   `Microsoft.Compute/virtualMachines/deallocate/action`, and
+   `Microsoft.Compute/locations/operations/read`.
+3. Add the provider and the machine to the configuration, and run `hostel config
+   providers login <provider>`.
+4. Optional, recommended: an Azure auto-shutdown schedule on the machine, as a
+   limit when the Hostel server is down.
+
+## 6. Tests
+
+- E2E (the gate): a fake Azure API, an HTTP server in the test harness (the
+  adapter boundary: `AGENTS.md` lets tests mock third-party services). The
+  provider uses it through `login_url` and `management_url`, and the machine is
+  a Docker machine that the fake "starts" and "deallocates" (start and stop of
+  the container). Scenarios:
+  - a lease starts a deallocated machine and runs on it;
+  - after `warm_running` without a lease, the machine is deallocated;
+  - a second lease starts it again, and the tools are not installed again when
+    nothing changed;
+  - a machine that someone started outside Hostel is used, and one that someone
+    deallocated is `stopped`;
+  - a failed start makes the machine `broken`, with the Azure message in the
+    events and no secret;
+  - the secret is not in the configuration document, `hostel config`, the
+    events, or the server log;
+  - a drained stopped machine is not started.
+- Smoke test (opt-in, costs money, `HOSTEL_SMOKE_AZURE=1`): against a real
+  Azure machine: start, a lease, deallocation after a short `warm_running`.
+
+## 7. Owner decisions
+
+1. **Scope.** Recommended: start and deallocate existing machines only (this
+   plan). Creating machines from an image (on demand, with `max_machines`) is a
+   later milestone: it needs networks, disks, a prepared image with Hostel
+   already joined, and a provider-side cost bound.
+2. **Authentication.** Recommended: an application (service principal) with a
+   client secret, kept on the server, and a custom role on the machine only.
+   Other options: a certificate instead of a secret; the `az` CLI logged in on the
+   server (one more tool on the server); a managed identity (only when the Hostel
+   server runs in Azure).
+3. **Idle time.** The default for `warm_running` on an Azure machine. Proposal:
+   30 minutes. A start of a Windows machine takes about 1 to 3 minutes, plus the
+   probe.
+4. **Backstop.** Recommended: the owner sets an Azure auto-shutdown schedule on
+   the machine (for example each night), so that the machine stops also when the
+   Hostel server is down. Hostel does not manage the schedule.
