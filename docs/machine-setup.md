@@ -443,7 +443,8 @@ A guest then cannot leave a backdoor on the machine. It needs a root step:
 
 On Windows, `--lease-users` installs the service `HostelLeaseUsers` (it runs as
 SYSTEM) and `C:\Program Files\Hostel\`; the join command must run as an
-administrator. Only the machine user can call the service. An update of the
+administrator, and it cannot go with `--no-service`. Only the machine user can
+call the service. An update of the
 machine does not change that binary: run the join command again to update it.
 
 Leases with `macos-desktop`, `ios-simulator`, `android-emulator`, or

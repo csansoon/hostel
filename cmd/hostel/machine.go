@@ -110,6 +110,10 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, templateUsage)
 		return 2
 	}
+	if runtime.GOOS == "windows" && *noService && *leaseUsers {
+		fmt.Fprintln(stderr, "hostel: on Windows, --lease-users installs a SYSTEM service; it cannot go with --no-service")
+		return 2
+	}
 	code, err := invite.Decode(pos[0])
 	if err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
