@@ -71,21 +71,25 @@ try { Get-ChildItem C:\Users\hostel\hostel\rooms -ErrorAction Stop | Out-Null; '
 		defer cancel()
 		exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-i", keyFile, addr, `Remove-Item -Recurse -Force C:\hostel-smoke-shared`).Run()
 	})
-	r := e.mustHostel("run", "--", `$u = $env:USERNAME
+	e.mustHostel("run", "--", `$u = $env:USERNAME
 'x' | Set-Content "C:\ProgramData\door-$u.txt"
 'x' | Set-Content "C:\hostel-smoke-shared\door-$u.txt"
 New-Item -ItemType Directory "C:\door-$u" | Out-Null
 schtasks /create /tn "door-$u" /tr "cmd /c echo door" /sc daily /st 03:00 /f | Out-Null
-Set-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run door 'cmd /c echo door'
-(Start-Process -PassThru -WindowStyle Hidden powershell -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 1005').Id`)
-	pid := strings.TrimSpace(r.stdout)
-	// The machine user sees the process (Get-Process lists all users) and
-	// reads the task through its file in System32\Tasks (Test-Path needs no
-	// list access to the folder).
-	alive := `if (Get-Process -Id ` + pid + ` -ErrorAction SilentlyContinue) { 'process alive' }
-if (Test-Path 'C:\Windows\System32\Tasks\door-` + user + `') { 'task exists' }`
-	if got := machineSh(alive); !strings.Contains(got, "process alive") || !strings.Contains(got, "task exists") {
-		t.Fatalf("the machine user does not see the process and the task of the lease before the release: %q", got)
+Set-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run door 'cmd /c echo door'`)
+	// The machine user cannot see the task (it is the lease user's); the
+	// deletion fails if a task of the user stays, so the release checks it.
+	// A detached job stays until the release; the machine user sees its process
+	// (Get-Process lists the processes of all users).
+	e.mustHostel("run", "--detach", "--", `$PID | Set-Content $HOME\door.pid; Start-Sleep 1005`)
+	var pid string
+	e.waitFor("the detached job's process", time.Minute, func() bool {
+		pid = strings.TrimSpace(e.hostel("run", "--", `if (Test-Path $HOME\door.pid) { Get-Content $HOME\door.pid }`).stdout)
+		return pid != ""
+	})
+	alive := `if (Get-Process -Id ` + pid + ` -ErrorAction SilentlyContinue) { 'process alive' }`
+	if got := machineSh(alive); got != "process alive" {
+		t.Fatalf("the machine user does not see the process of the lease before the release: %q", got)
 	}
 	e.mustHostel("release")
 	e.waitFor("the Windows machine free", 5*time.Minute, func() bool {
@@ -100,7 +104,7 @@ if (Get-LocalUser | Where-Object Name -eq '` + user + `') { 'user exists' }
 Test-Path 'C:\Users\` + user + `', 'C:\ProgramData\door-` + user + `.txt', 'C:\door-` + user + `', 'C:\hostel-smoke-shared\door-` + user + `.txt'
 & C:\Users\hostel\hostel\bin\hostel.exe lease-user list`)
 	if strings.Contains(got, "alive") || strings.Contains(got, "exists") || strings.Contains(got, "True") || !strings.Contains(got, `{"users":null}`) {
-		t.Fatalf("after the release (process, task, user, profile, files, lease users):\n%s", got)
+		t.Fatalf("after the release (process, user, profile, files, lease users):\n%s", got)
 	}
 }
 

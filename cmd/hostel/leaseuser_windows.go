@@ -560,12 +560,15 @@ func deleteLeaseUserWindows(name string) error {
 	disable := func() error {
 		_, err := systemPowerShell(`$n = $env:HOSTEL_NAME; $s = $env:HOSTEL_SID
 Disable-LocalUser -SID $s
-Get-ScheduledTask | Where-Object {
+$mine = {
   $u = $_.Principal.UserId
   if (-not $u) { return $false }
   if ($u -eq $s) { return $true }
   try { (New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value -eq $s } catch { $u -eq $n -or $u -like "*\$n" }
-} | Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String())
+}
+Get-ScheduledTask | Where-Object $mine | Unregister-ScheduledTask -Confirm:$false
+$left = @(Get-ScheduledTask | Where-Object $mine)
+if ($left.Count) { throw "scheduled tasks of the user stay: $($left.TaskName -join ', ')" }`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String())
 		if err != nil {
 			return fmt.Errorf("disable %s and remove its scheduled tasks: %w", name, err)
 		}
