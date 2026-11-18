@@ -63,5 +63,7 @@ test-smoke-namespace: dist
 
 # Against a real Windows machine (docs/m6-implementation.md): HOSTEL_SMOKE_WINDOWS
 # (user@host) and HOSTEL_SMOKE_WINDOWS_KEY (a key that the machine user accepts).
+# Optional: HOSTEL_SMOKE_WINDOWS_ADMIN (an administrator's SSH destination) for
+# the checks that only an administrator can make.
 test-smoke-windows: dist
 	$(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeWindows(Desktop|LeaseUsers|CleanupAudit)?$$' -v ./test/e2e/...

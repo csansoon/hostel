@@ -26,7 +26,10 @@ import (
 // C:\ProgramData, at the top of the system drive, and in a folder there that
 // another account made, a process) are gone after
 // the release, with the user and its profile. The Run value goes with the
-// profile's hive.
+// profile's hive. The machine user cannot see the lease user's task: with
+// HOSTEL_SMOKE_WINDOWS_ADMIN (an SSH destination of an administrator whose
+// shell is PowerShell, with keys from the SSH agent or config), the test
+// checks the task by its name before and after the release.
 func TestSmokeWindowsLeaseUsers(t *testing.T) {
 	e, s := windowsSmoke(t, true, "tools = [\"windows-desktop\"]\nlease_users = true\n", func(int) map[string]string {
 		return map[string]string{"a.txt": "one\n"}
@@ -77,20 +80,37 @@ try { Get-ChildItem C:\Users\hostel\hostel\rooms -ErrorAction Stop | Out-Null; '
 New-Item -ItemType Directory "C:\door-$u" | Out-Null
 schtasks /create /tn "door-$u" /tr "cmd /c echo door" /sc daily /st 03:00 /f | Out-Null
 Set-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run door 'cmd /c echo door'`)
-	// The machine user cannot see the task (it is the lease user's); the
-	// deletion fails if a task of the user stays, so the release checks it.
+	adminAddr := os.Getenv("HOSTEL_SMOKE_WINDOWS_ADMIN")
+	taskExists := func() bool {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", adminAddr,
+			`schtasks /query /tn "door-`+user+`" 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { 'task-exists' } else { 'no-task' }; exit 0`).CombinedOutput()
+		if err != nil {
+			t.Fatalf("query the task as the administrator: %v\n%s", err, out)
+		}
+		return strings.Contains(string(out), "task-exists")
+	}
+	if adminAddr == "" {
+		t.Log("HOSTEL_SMOKE_WINDOWS_ADMIN is not set: the task is checked only by the deletion")
+	} else if !taskExists() {
+		t.Fatalf("the administrator does not see the task door-%s before the release", user)
+	}
 	// A detached job stays until the release; the machine user sees its process
-	// (Get-Process lists the processes of all users).
+	// (Get-Process lists the processes of all users), and its name guards
+	// against a PID that Windows gives again after the release.
 	e.mustHostel("run", "--detach", "--", `$PID | Set-Content $HOME\door.pid; Start-Sleep 1005`)
 	var pid string
 	e.waitFor("the detached job's process", time.Minute, func() bool {
 		pid = strings.TrimSpace(e.hostel("run", "--", `if (Test-Path $HOME\door.pid) { Get-Content $HOME\door.pid }`).stdout)
 		return pid != ""
 	})
-	alive := `if (Get-Process -Id ` + pid + ` -ErrorAction SilentlyContinue) { 'process alive' }`
-	if got := machineSh(alive); got != "process alive" {
-		t.Fatalf("the machine user does not see the process of the lease before the release: %q", got)
+	procName := machineSh(`(Get-Process -Id ` + pid + ` -ErrorAction SilentlyContinue).ProcessName`)
+	if procName == "" {
+		t.Fatalf("the machine user does not see the process %s of the lease before the release", pid)
 	}
+	alive := `if (Get-Process -Id ` + pid + ` -ErrorAction SilentlyContinue | Where-Object ProcessName -eq '` + procName + `') { 'process alive' }`
 	e.mustHostel("release")
 	e.waitFor("the Windows machine free", 5*time.Minute, func() bool {
 		r := s.machine("home/win")
@@ -105,6 +125,9 @@ Test-Path 'C:\Users\` + user + `', 'C:\ProgramData\door-` + user + `.txt', 'C:\d
 & C:\Users\hostel\hostel\bin\hostel.exe lease-user list`)
 	if strings.Contains(got, "alive") || strings.Contains(got, "exists") || strings.Contains(got, "True") || !strings.Contains(got, `{"users":null}`) {
 		t.Fatalf("after the release (process, user, profile, files, lease users):\n%s", got)
+	}
+	if adminAddr != "" && taskExists() {
+		t.Fatalf("the task door-%s is still there after the release", user)
 	}
 }
 
