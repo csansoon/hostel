@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"slices"
@@ -22,8 +23,10 @@ import (
 //
 // A lease runs as its own user and cannot write the machine user's cache or
 // read its rooms; its backdoors (a scheduled task, a Run value, files in
-// C:\ProgramData and at the top of the system drive, a process) are gone after
-// the release, with the user and its profile.
+// C:\ProgramData, at the top of the system drive, and in a folder there that
+// another account made, a process) are gone after
+// the release, with the user and its profile. The Run value goes with the
+// profile's hive.
 func TestSmokeWindowsLeaseUsers(t *testing.T) {
 	e, s := windowsSmoke(t, true, "tools = [\"windows-desktop\"]\nlease_users = true\n", func(int) map[string]string {
 		return map[string]string{"a.txt": "one\n"}
@@ -60,12 +63,30 @@ func TestSmokeWindowsLeaseUsers(t *testing.T) {
 try { Get-ChildItem C:\Users\hostel\hostel\rooms -ErrorAction Stop | Out-Null; 'seen' } catch { 'hidden' }`); strings.Fields(r.stdout)[0] != "refused" || strings.Fields(r.stdout)[1] != "hidden" {
 		t.Fatalf("machine cache and rooms seen by the lease user: %q", r.stdout)
 	}
-	e.mustHostel("run", "--", `$u = $env:USERNAME
+	// A folder at the top of the system drive that another account made: the
+	// drive's access list lets all users write in it.
+	machineSh(`New-Item -ItemType Directory -Force C:\hostel-smoke-shared | Out-Null`)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-i", keyFile, addr, `Remove-Item -Recurse -Force C:\hostel-smoke-shared`).Run()
+	})
+	r := e.mustHostel("run", "--", `$u = $env:USERNAME
 'x' | Set-Content "C:\ProgramData\door-$u.txt"
+'x' | Set-Content "C:\hostel-smoke-shared\door-$u.txt"
 New-Item -ItemType Directory "C:\door-$u" | Out-Null
 schtasks /create /tn "door-$u" /tr "cmd /c echo door" /sc daily /st 03:00 /f | Out-Null
 Set-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run door 'cmd /c echo door'
-Start-Process -WindowStyle Hidden powershell -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 1005'`)
+(Start-Process -PassThru -WindowStyle Hidden powershell -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 1005').Id`)
+	pid := strings.TrimSpace(r.stdout)
+	// The machine user sees the process (Get-Process lists all users) and
+	// reads the task through its file in System32\Tasks (Test-Path needs no
+	// list access to the folder).
+	alive := `if (Get-Process -Id ` + pid + ` -ErrorAction SilentlyContinue) { 'process alive' }
+if (Test-Path 'C:\Windows\System32\Tasks\door-` + user + `') { 'task exists' }`
+	if got := machineSh(alive); !strings.Contains(got, "process alive") || !strings.Contains(got, "task exists") {
+		t.Fatalf("the machine user does not see the process and the task of the lease before the release: %q", got)
+	}
 	e.mustHostel("release")
 	e.waitFor("the Windows machine free", 5*time.Minute, func() bool {
 		r := s.machine("home/win")
@@ -74,11 +95,12 @@ Start-Process -WindowStyle Hidden powershell -ArgumentList '-NoProfile', '-Comma
 		}
 		return r.State == protocol.MachineRunning && len(r.Rooms) == 1 && r.Rooms[0].State == protocol.RoomFree
 	})
-	got := machineSh(`if (Get-LocalUser | Where-Object Name -eq '` + user + `') { 'user exists' }
-Test-Path 'C:\Users\` + user + `', 'C:\ProgramData\door-` + user + `.txt', 'C:\door-` + user + `'
+	got := machineSh(alive + `
+if (Get-LocalUser | Where-Object Name -eq '` + user + `') { 'user exists' }
+Test-Path 'C:\Users\` + user + `', 'C:\ProgramData\door-` + user + `.txt', 'C:\door-` + user + `', 'C:\hostel-smoke-shared\door-` + user + `.txt'
 & C:\Users\hostel\hostel\bin\hostel.exe lease-user list`)
-	if strings.Contains(got, "exists") || strings.Contains(got, "True") || !strings.Contains(got, `{"users":null}`) {
-		t.Fatalf("after the release (user, profile, files, lease users):\n%s", got)
+	if strings.Contains(got, "alive") || strings.Contains(got, "exists") || strings.Contains(got, "True") || !strings.Contains(got, `{"users":null}`) {
+		t.Fatalf("after the release (process, task, user, profile, files, lease users):\n%s", got)
 	}
 }
 

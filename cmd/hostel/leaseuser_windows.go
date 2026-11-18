@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -554,18 +555,29 @@ func deleteLeaseUserWindows(name string) error {
 		return err
 	}
 	// No new logon and no task of the user from here, then no process: a
-	// process that starts later could write files after the search.
-	if _, err := systemPowerShell(`$n = $env:HOSTEL_NAME; $s = $env:HOSTEL_SID
+	// process that starts later could write files after the search. The tasks
+	// go again after the processes, for a task that a process made between.
+	disable := func() error {
+		_, err := systemPowerShell(`$n = $env:HOSTEL_NAME; $s = $env:HOSTEL_SID
 Disable-LocalUser -SID $s
 Get-ScheduledTask | Where-Object {
   $u = $_.Principal.UserId
   if (-not $u) { return $false }
   if ($u -eq $s) { return $true }
   try { (New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value -eq $s } catch { $u -eq $n -or $u -like "*\$n" }
-} | Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String()); err != nil {
-		return fmt.Errorf("disable %s and remove its scheduled tasks: %w", name, err)
+} | Unregister-ScheduledTask -Confirm:$false`, "HOSTEL_NAME="+name, "HOSTEL_SID="+sid.String())
+		if err != nil {
+			return fmt.Errorf("disable %s and remove its scheduled tasks: %w", name, err)
+		}
+		return nil
+	}
+	if err := disable(); err != nil {
+		return err
 	}
 	if err := killUserProcesses(sid); err != nil {
+		return err
+	}
+	if err := disable(); err != nil {
 		return err
 	}
 	for _, d := range sharedDirs() {
@@ -601,8 +613,7 @@ func usersDir() string {
 
 type sharedDir struct {
 	path string
-	// deep: the whole tree; else only the entries at the top (the system
-	// drive, where users can only make new folders).
+	// deep: the whole tree; else only the entries at the top.
 	deep bool
 }
 
@@ -611,7 +622,7 @@ type sharedDir struct {
 func sharedDirs() []sharedDir {
 	win, _ := windows.GetWindowsDirectory()
 	drive := filepath.VolumeName(win) + `\`
-	return []sharedDir{
+	dirs := []sharedDir{
 		{drive, false},
 		{filepath.Join(drive, "ProgramData"), true},
 		{filepath.Join(drive, `Users\Public`), true},
@@ -628,9 +639,23 @@ func sharedDirs() []sharedDir {
 		{filepath.Join(win, `SysWOW64\com\dmp`), true},
 		{filepath.Join(win, `SysWOW64\Tasks`), true},
 		{filepath.Join(win, `Registration\CRMLog`), true},
+		{filepath.Join(win, `System32\Tasks_Migrated`), true},
 		// The user's own recycle bin, by its SID.
 		{filepath.Join(drive, `$Recycle.Bin`), false},
 	}
+	// The access list of the drive's top gives Authenticated Users write
+	// access to the folders that others make there (for example an installer's
+	// C:\tools), so these get the whole search. Windows, Users, ProgramData,
+	// and the recycle bin have their own entries above.
+	skip := map[string]bool{"windows": true, "users": true, "programdata": true, "$recycle.bin": true,
+		"program files": true, "program files (x86)": true, "system volume information": true, "recovery": true}
+	entries, _ := os.ReadDir(drive)
+	for _, e := range entries {
+		if e.Type() == fs.ModeDir && !skip[strings.ToLower(e.Name())] {
+			dirs = append(dirs, sharedDir{filepath.Join(drive, e.Name()), true})
+		}
+	}
+	return dirs
 }
 
 // filesOf removes (remove) or finds the entries that sid owns in dir. It
@@ -1016,16 +1041,22 @@ func deleteProfile(sid *windows.SID, name string, deadline time.Time) error {
 	if err != nil {
 		return err
 	}
-	// The registry entry can be gone while the directory is not: removeTree
-	// below then removes it.
-	for wait := time.Now().Add(time.Minute); time.Now().Before(wait); time.Sleep(time.Second) {
-		if r, _, _ := procDeleteProfile.Call(uintptr(unsafe.Pointer(s)), 0, 0); r != 0 {
+	// The directory goes first, through removeTree, which follows no link:
+	// the user controlled the profile, and DeleteProfile does not document
+	// what it does with a junction. A file in use for a short time (a process
+	// that is ending) gets more attempts.
+	var rmErr error
+	for wait := time.Now().Add(time.Minute); ; time.Sleep(time.Second) {
+		if rmErr = removeTree(home, deadline); rmErr == nil || time.Now().After(wait) {
 			break
 		}
 	}
-	if err := removeTree(home, deadline); err != nil {
-		return fmt.Errorf("remove the profile of %s: %w", name, err)
+	if rmErr != nil {
+		return fmt.Errorf("remove the profile of %s: %w", name, rmErr)
 	}
+	// DeleteProfile then removes what Windows keeps of the profile beside the
+	// directory. Its result does not matter: the entry goes below in any case.
+	procDeleteProfile.Call(uintptr(unsafe.Pointer(s)), 0, 0)
 	if err := registry.DeleteKey(registry.LOCAL_MACHINE, key); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
 		return fmt.Errorf("remove the profile entry of %s: %w", name, err)
 	}

@@ -2255,12 +2255,13 @@ Hardening (milestone M11):
      a local user (Users and `hostel-leases`), its profile (`CreateProfile`, before
      the first logon), and `.ssh\authorized_keys`. `delete` ends the user's processes
      (by the SID of their token; a process whose user it cannot read stops the
-     deletion), deletes the scheduled tasks that run as it, deletes its files in
+     deletion), deletes the scheduled tasks that run as it (before and after the
+     processes), deletes its files in
      the shared directories of the system drive (`m11w-implementation.md`, section
      4) with the backup and restore privileges, each entry opened through the
      handle of its directory and no junction or link followed, unloads its registry hives also when
-     another process holds them (Windows Search does), then removes the profile and
-     the user. Windows never gives a SID again, so a file of an earlier lease user
+     another process holds them (Windows Search does), then removes the profile
+     directory in the same way before `DeleteProfile`, and the user. Windows never gives a SID again, so a file of an earlier lease user
      never belongs to a later one. `share-cache` gives `hostel-leases` read access
      (`icacls`) to `hostel\bin`, `tools`, `mise`, and `cache`, and the lease user
      fills its home with PowerShell (copies, and junctions to the cache entries).

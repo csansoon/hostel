@@ -198,6 +198,9 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "   Lease users: the sudo rule for \"hostel lease-user\".")
 		}
 		if err := installLeaseUserRule(osName, bin, st.ServerPublicKey); err != nil {
+			if osName == config.OSWindows {
+				return fail("install the service of lease users", err)
+			}
 			return fail("install the sudo rule for lease users", err)
 		}
 	}
