@@ -740,6 +740,8 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 	p.tunnels = next
 	p.mu.Unlock()
 	if req.Op == "tunnel_remove" {
+		// After a listen of the reconnect loop that read the old list.
+		p.listenMu.Lock()
 		p.mu.Lock()
 		if ln := p.tunLn[req.Name]; ln != nil {
 			ln.Close()
@@ -747,6 +749,7 @@ func (p *portProc) changeTunnel(ctx context.Context, req portRequest) (portRespo
 		}
 		delete(p.state, req.Name)
 		p.mu.Unlock()
+		p.listenMu.Unlock()
 	} else if needRegister {
 		// The port process can be in a reconnect (a lost gateway connection,
 		// a busy server): the tunnel waits for it.
