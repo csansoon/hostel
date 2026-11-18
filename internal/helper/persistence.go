@@ -35,6 +35,9 @@ func persistenceDirs() []string {
 			".config/environment.d", ".config/autostart", ".config/fish/conf.d", ".config/fish/functions"}
 	case "darwin":
 		return []string{"Library/LaunchAgents", ".config/fish/conf.d", ".config/fish/functions"}
+	case "windows":
+		return []string{"AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+			"Documents/WindowsPowerShell", "Documents/PowerShell"}
 	}
 	return nil
 }
@@ -63,9 +66,6 @@ func fileExists(p string) bool {
 // snapshotPersistence copies the persistence locations and the crontab. The
 // file "complete" marks a full copy.
 func (h *helper) snapshotPersistence() error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
 	home := h.home()
 	base := h.persistenceBase()
 	if err := os.RemoveAll(base); err != nil {
@@ -117,6 +117,9 @@ func (h *helper) snapshotPersistence() error {
 		if err := os.WriteFile(filepath.Join(base, "crontab"), tab, 0o600); err != nil {
 			return err
 		}
+	}
+	if err := snapshotPlatform(base); err != nil {
+		return err
 	}
 	return os.WriteFile(filepath.Join(base, "complete"), nil, 0o600)
 }
@@ -277,6 +280,11 @@ func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
 		failed = append(failed, "crontab: "+err.Error())
 	} else if item != "" {
 		items = append(items, item)
+	}
+	platform, err := restorePlatform(base)
+	items = append(items, platform...)
+	if err != nil {
+		failed = append(failed, err.Error())
 	}
 	sort.Strings(items)
 	if len(failed) > 0 {

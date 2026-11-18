@@ -425,7 +425,7 @@ all the given criteria".
    (usually the group `kvm`: `sudo usermod -aG kvm hostel`). A virtual machine
    needs nested virtualization.
 
-### Lease users (macOS and Linux, optional)
+### Lease users (optional)
 
 With `lease_users = true` in the machine's settings, each lease gets its own OS
 user, which cleanup deletes with all its processes and files (design, section 18).
@@ -441,8 +441,14 @@ A guest then cannot leave a backdoor on the machine. It needs a root step:
   hostel ALL=(root) NOPASSWD: /etc/hostel/hostel lease-user *
   ```
 
-Leases with `macos-desktop`, `ios-simulator`, or `android-emulator` keep the
-machine user. Repository tools that the machine does not have are installed again
+On Windows, `--lease-users` installs the service `HostelLeaseUsers` (it runs as
+SYSTEM) and `C:\Program Files\Hostel\`; the join command must run as an
+administrator, and it cannot go with `--no-service`. Only the machine user can
+call the service. An update of the
+machine does not change that binary: run the join command again to update it.
+
+Leases with `macos-desktop`, `ios-simulator`, `android-emulator`, or
+`windows-desktop` keep the machine user. Repository tools that the machine does not have are installed again
 for each lease: add them to the machine's tools. Test your own tools: a tool that
 writes into the machine's cache during a lease needs `machine_user = true`.
 

@@ -2,5 +2,5 @@ package main
 
 import "os/exec"
 
-// asUser is not used on Windows (lease users are for macOS and Linux).
+// asUser is not used on Windows (the lease user service deletes files as SYSTEM).
 func asUser(*exec.Cmd, int, int) {}

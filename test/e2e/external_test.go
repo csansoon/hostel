@@ -378,7 +378,9 @@ func TestReconcile(t *testing.T) {
 		sid = strings.Split(r.Name, "-")[1]
 	}
 	unknown := fmt.Sprintf("hostel-%s-999", sid)
-	if _, err := docker("run", "-d", "--name", unknown, "--label", dockerLabel+"="+f.e.runID, "--label", "hostel-fake=1", machineImage); err != nil {
+	// The server's reconcile can remove the container between its creation
+	// and its start; that is the result that the test waits for.
+	if _, err := docker("run", "-d", "--name", unknown, "--label", dockerLabel+"="+f.e.runID, "--label", "hostel-fake=1", machineImage); err != nil && !strings.Contains(err.Error(), "marked for removal") {
 		t.Fatal(err)
 	}
 	f.e.waitFor("unknown machine destroyed", time.Minute, func() bool { return !slices.Contains(f.e.fakeMachines(), unknown) })
