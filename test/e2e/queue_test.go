@@ -213,7 +213,8 @@ func TestPollTimeout(t *testing.T) {
 // ready, the same command continues it, and the keeper stops.
 func TestAcquireBackground(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{serverKeys: "poll_timeout = \"6s\"\n"})
+	// 12 s: the keeper must poll within it also on a loaded Mac.
+	f := newFixture(t, &fixtureOpts{serverKeys: "poll_timeout = \"12s\"\n"})
 	f.acquire()
 
 	f.e.newRepoNamed("repo2", defaultRepoFiles())
@@ -225,7 +226,7 @@ func TestAcquireBackground(t *testing.T) {
 
 	f.e.newRepoNamed("repo3", defaultRepoFiles())
 	r = f.e.hostel("acquire", "fake-screen", "--task", "without polls", "--wait", "2s")
-	if r.code != 75 || !strings.Contains(r.stderr, "the server keeps the place of lease") || !strings.Contains(r.stderr, "for 6 s without this command") {
+	if r.code != 75 || !strings.Contains(r.stderr, "the server keeps the place of lease") || !strings.Contains(r.stderr, "for 12 s without this command") {
 		t.Fatalf("acquire of a waiting lease: %s", r)
 	}
 	dropped := createdID(t, r)
@@ -249,7 +250,7 @@ func TestAcquireBackground(t *testing.T) {
 
 	// The kept lease outlives 3 poll timeouts without an acquire of its own.
 	start := time.Now()
-	f.e.waitFor("3 poll timeouts", time.Minute, func() bool { return time.Since(start) > 18*time.Second })
+	f.e.waitFor("3 poll timeouts", time.Minute, func() bool { return time.Since(start) > 36*time.Second })
 	if st := f.lease(kept).State; st != protocol.LeaseQueued {
 		t.Fatalf("the kept lease after 3 poll timeouts: %s, want queued", st)
 	}
