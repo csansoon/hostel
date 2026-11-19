@@ -236,6 +236,14 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 			}
 		}
 	}
+	// The client secret of a removed azure provider goes with it.
+	for name, p := range old.cfg.Providers {
+		if np := cfg.Providers[name]; p.Kind == config.ProviderAzure && (np == nil || np.Kind != config.ProviderAzure) {
+			if err := os.Remove(providerSecretFile(cfg.DataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.log.Error("remove the client secret of a removed provider", "provider", name, "err", err)
+			}
+		}
+	}
 	// The loop adds the machines of new static machines (refreshMachines).
 	s.kickScheduler()
 	return rev, nil
@@ -370,6 +378,13 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 			errs = append(errs, fmt.Sprintf("%s.spec.product: stays while the machine %s exists; remove the template, and add it again with the new product when its machines are destroyed", entryKey(r), r.Name))
 			continue
 		}
+		// An azure machine is removed, or gets another vm, only when it is
+		// deallocated: else its virtual machine would run on without Hostel.
+		if om, nm := s.config().Template(key), cfg.Template(key); om != nil && om.PowerManaged() && (nm == nil || nm.PowerManaged() && nm.VM != om.VM) &&
+			r.State != protocol.MachineStopped && !(r.State == protocol.MachineBroken && powerDeallocated(r.BrokenReason)) {
+			errs = append(errs, fmt.Sprintf("%s: the azure machine %s is %s; remove it or change its vm when it is stopped (drain it, and wait for warm_running without a lease)", entryKey(r), r.Name, r.State))
+			continue
+		}
 		if nm := cfg.Template(key); nm != nil {
 			// Cleanup runs as the room's user: the rooms of a machine with a
 			// lease must not change under it.
@@ -427,7 +442,8 @@ func templateHash(lc *liveConfig, m *config.Template) string {
 		Rooms       []config.Room
 		Mise        *config.Mise
 		Hashes      map[string]string
-	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Rooms, lc.cfg.Mise, hashes})
+		VM          string `json:",omitempty"`
+	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Rooms, lc.cfg.Mise, hashes, m.VM})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
@@ -476,6 +492,15 @@ func (s *Server) refreshMachines(ctx context.Context) error {
 			// A machine from before M9 (also a stopped one, which can resume):
 			// its settings are the current ones at the first pass.
 			err = s.store.SetConfigSHA256(ctx, r.ID, templateHash(lc, m))
+		case r.State == protocol.MachineStopped && !m.PowerManaged() && static:
+			// An azure machine that became static: it cannot be started, so
+			// it is probed (it runs, or it is unreachable).
+			_, err = s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopped}, protocol.MachineProvisioning, "provider no longer azure", now)
+		case r.State == protocol.MachineStopped && m.PowerManaged() && r.ConfigSHA256 != templateHash(lc, m):
+			// Its rooms follow now; the rest at its next start.
+			if err = s.store.EnsureRooms(ctx, r.ID, roomNames(m)); err == nil {
+				err = s.store.RemoveFreeRooms(ctx, r.ID, roomNames(m))
+			}
 		case r.State != protocol.MachineRunning:
 		case r.ConfigSHA256 != templateHash(lc, m) && static:
 			if err = s.store.EnsureRooms(ctx, r.ID, roomNames(m)); err == nil {

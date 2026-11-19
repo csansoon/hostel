@@ -25,12 +25,14 @@ const azureAPIVersion = "2024-07-01"
 // azureRequestTimeout bounds one HTTP request to Azure.
 const azureRequestTimeout = 30 * time.Second
 
-// Power states that List reports for Azure machines.
+// Power states that List reports for Azure machines ("" when Azure has no
+// such machine).
 const (
 	PowerRunning  = "running"
 	PowerStopped  = "stopped"  // deallocated
 	PowerStarting = "starting" // also a machine that is stopped but not deallocated
 	PowerStopping = "stopping"
+	PowerOff      = "off" // stopped but not deallocated: still billed
 )
 
 // Azure starts and deallocates existing Azure machines (M12). Access is the
@@ -105,7 +107,14 @@ func (a *Azure) List(ctx context.Context, _ string) ([]MachineRef, error) {
 				Code string `json:"code"`
 			} `json:"statuses"`
 		}
-		if _, err := a.call(ctx, http.MethodGet, a.management+m.VM+"/instanceView?api-version="+azureAPIVersion, &view); err != nil {
+		_, err := a.call(ctx, http.MethodGet, a.management+m.VM+"/instanceView?api-version="+azureAPIVersion, &view)
+		if errors.Is(err, ErrNotFound) {
+			// One wrong vm does not stop the reconcile of the others; its
+			// start fails with the Azure message.
+			out = append(out, MachineRef{Name: mn, Template: mn})
+			continue
+		}
+		if err != nil {
 			return nil, fmt.Errorf("machine %s: %w", mn, err)
 		}
 		state := ""
@@ -116,8 +125,10 @@ func (a *Azure) List(ctx context.Context, _ string) ([]MachineRef, error) {
 					state = PowerRunning
 				case "deallocated":
 					state = PowerStopped
-				case "starting", "stopped":
+				case "starting":
 					state = PowerStarting
+				case "stopped":
+					state = PowerOff
 				case "deallocating", "stopping":
 					state = PowerStopping
 				}

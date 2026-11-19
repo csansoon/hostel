@@ -548,7 +548,7 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 		}
 	} else {
 		if len(p.Templates) > 0 {
-			el.add(key+".templates", "a %s provider has existing machines: use [%s.machines.<name>]", p.Kind, key)
+			el.add(key+".templates", "a %s provider has real machines: use [%s.machines.<name>]", p.Kind, key)
 		}
 		p.Templates, p.Machines = p.Machines, nil
 	}
@@ -560,6 +560,10 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 		el.add(key+".kind", "unknown kind %q; use %q, %q, %q, or %q", p.Kind, ProviderStatic, ProviderNamespace, ProviderExternal, ProviderAzure)
 	}
 	if p.Kind == ProviderAzure {
+		if pn == "namespace" {
+			// "hostel config providers login namespace" is the Namespace login.
+			el.add(key, "an azure provider cannot be named namespace")
+		}
 		if !uuidRE.MatchString(p.Tenant) {
 			el.add(key+".tenant", "required for an azure provider: the directory (tenant) ID, a GUID")
 		}

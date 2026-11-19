@@ -97,7 +97,25 @@ const reasonUnreachable = "unreachable"
 const (
 	reasonStartFailed = "start failed"
 	reasonStopFailed  = "stop failed"
+	// A broken machine for another reason is deallocated but stays broken
+	// until a repair: "keep broken: <reason>" while it stops, then
+	// "deallocated: <reason>".
+	reasonKeepBroken  = "keep broken: "
+	reasonDeallocated = "deallocated: "
 )
+
+// powerRecoverable reports whether a broken power-managed machine becomes
+// stopped (usable) when it is deallocated: its fault was only that it did not
+// answer or did not stop.
+func powerRecoverable(reason string) bool {
+	return reason == reasonUnreachable || strings.HasPrefix(reason, reasonStopFailed)
+}
+
+// powerDeallocated reports whether a broken power-managed machine is known to
+// be deallocated (it did not start, or Hostel deallocated it).
+func powerDeallocated(reason string) bool {
+	return strings.HasPrefix(reason, reasonStartFailed) || strings.HasPrefix(reason, reasonDeallocated)
+}
 
 // reasonHostKeyChanged: the machine answered with another SSH host key; an
 // admin repairs it and accepts the new key.

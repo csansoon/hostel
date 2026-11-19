@@ -154,6 +154,16 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
   would start it again without end. `hostel config machines repair` makes it
   `stopped`. When Azure reports it running (for example a start in the portal),
   the reconcile probes it.
+- **Broken for another reason** (cleanup failed, host key changed, another OS):
+  deallocated after `warm_running`, and still `broken` ("deallocated: ...")
+  until a repair.
+- **Review fixes (2026-11-19).** A deallocated machine with changed settings is
+  not stale (it provisions at its next start); one with a dirty room is started
+  when leases wait; a running azure machine is not removed and its `vm` does not
+  change; Azure "stopped" (still billed) is deallocated at once; a `vm` that
+  Azure does not find is a failed start; the reconcile has a 1 minute deadline
+  and one wrong `vm` does not stop it for the others; the secret goes with its
+  provider; the fake API ends a start before SSH answers, as Azure does.
 - **Failed stop.** The machine is `broken` ("stop failed: ..."): it takes no
   lease, and `warm_running` tries the deallocation again.
 - **Unreachable idle machine.** A `broken` ("unreachable") machine without a

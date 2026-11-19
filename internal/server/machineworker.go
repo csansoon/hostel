@@ -302,14 +302,18 @@ func (s *Server) stepResuming(ctx context.Context, r store.Machine) {
 	case ctx.Err() != nil:
 	case err == nil:
 		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineResuming}, protocol.MachineProvisioning, "", time.Now())
-	case errors.Is(err, provider.ErrNotFound):
-		s.markLost(ctx, r, "the provider no longer has the machine")
 	default:
-		s.log.Warn("resume failed", "machine_id", r.ID, "err", err)
 		m, terr := s.templateOf(r)
 		if terr != nil {
 			return
 		}
+		// A power-managed machine that Azure does not find (a wrong vm) is
+		// not lost: it is broken, with the Azure message.
+		if errors.Is(err, provider.ErrNotFound) && m.OnDemand() {
+			s.markLost(ctx, r, "the provider no longer has the machine")
+			return
+		}
+		s.log.Warn("resume failed", "machine_id", r.ID, "err", err)
 		if m.PowerManaged() {
 			err = fmt.Errorf("%s: %w", reasonStartFailed, err)
 		}
@@ -324,7 +328,10 @@ func (s *Server) stepStopping(ctx context.Context, r store.Machine, m *config.Te
 	switch {
 	case ctx.Err() != nil:
 	case err == nil:
-		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineStopped, "", time.Now()); ok && m.OnDemand() {
+		if m.PowerManaged() && strings.HasPrefix(r.BrokenReason, reasonKeepBroken) {
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineBroken,
+				reasonDeallocated+strings.TrimPrefix(r.BrokenReason, reasonKeepBroken), time.Now())
+		} else if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineStopped, "", time.Now()); ok && m.OnDemand() {
 			s.store.SetWarmUntil(ctx, r.ID, time.Now().Add(m.WarmStopped.D()))
 		}
 	case errors.Is(err, provider.ErrNotFound) && m.OnDemand():

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,10 +224,27 @@ func (s *Server) warm(ctx context.Context) error {
 			busy[sl.MachineID] = true
 		}
 	}
+	dirty := map[int64]bool{}
+	for _, sl := range rooms {
+		if sl.State == protocol.RoomDirty {
+			dirty[sl.MachineID] = true
+		}
+	}
+	leases, err := s.store.ActiveLeases(ctx)
+	if err != nil {
+		return err
+	}
+	waiting := slices.ContainsFunc(leases, func(l store.Lease) bool { return l.State == protocol.LeaseQueued })
 	now := time.Now()
 	for _, r := range machines {
 		m := s.config().Template(r.Provider + "/" + r.Template)
 		if m != nil && m.PowerManaged() {
+			// A deallocated machine with a dirty room takes no lease until the
+			// cleanup ran on it: start it when leases wait.
+			if r.State == protocol.MachineStopped && dirty[r.ID] && waiting && !r.Drained {
+				s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopped}, protocol.MachineResuming, "started to clean a dirty room", now)
+				continue
+			}
 			s.warmPowerManaged(ctx, r, m, busy[r.ID], now)
 			continue
 		}
@@ -260,17 +278,22 @@ func (s *Server) warm(ctx context.Context) error {
 	return nil
 }
 
-// warmPowerManaged stops a machine that Hostel did not create (azure) after
-// warm_running without a lease: a running one, and a broken one (it takes no
-// lease and still costs money; a failed stop is tried again this way). It
-// never destroys the machine, and a stopped one stays stopped.
+// warmPowerManaged deallocates a machine that Hostel did not create (azure)
+// after warm_running without a lease: a running one, and a broken one (it
+// takes no lease and still costs money; a failed stop is tried again this
+// way). A machine broken for another reason than unreachable or a failed stop
+// stays broken after the deallocation, until a repair. It never destroys the
+// machine.
 func (s *Server) warmPowerManaged(ctx context.Context, r store.Machine, m *config.Template, busy bool, now time.Time) {
-	// A machine that did not start stays broken until a repair (else it would
-	// be stopped, and started again for the next lease); the reconcile probes
-	// it when Azure reports it running.
-	if r.State != protocol.MachineRunning && r.State != protocol.MachineBroken ||
-		strings.HasPrefix(r.BrokenReason, reasonStartFailed) {
+	if r.State != protocol.MachineRunning && r.State != protocol.MachineBroken {
 		return
+	}
+	reason := "idle for warm_running"
+	if r.State == protocol.MachineBroken && !powerRecoverable(r.BrokenReason) {
+		if powerDeallocated(r.BrokenReason) {
+			return
+		}
+		reason = reasonKeepBroken + r.BrokenReason
 	}
 	switch {
 	case busy:
@@ -280,7 +303,7 @@ func (s *Server) warmPowerManaged(ctx context.Context, r store.Machine, m *confi
 	case r.WarmUntil.IsZero():
 		s.store.SetWarmUntil(ctx, r.ID, now.Add(m.WarmRunning.D()))
 	case now.After(r.WarmUntil):
-		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopping, "idle for warm_running", now); ok {
+		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopping, reason, now); ok {
 			s.store.SetWarmUntil(ctx, r.ID, time.Time{})
 		}
 	}
@@ -291,7 +314,8 @@ func (s *Server) warmPowerManaged(ctx context.Context, r store.Machine, m *confi
 // machine that runs is probed, and a deallocated one without a lease is
 // stopped. Rows in a transitional state belong to their worker.
 func (s *Server) reconcilePower(ctx context.Context, name string, p provider.Provider, machines []store.Machine) {
-	lctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
+	// The reconcile runs in the loop pass: a short deadline.
+	lctx, cancel := context.WithTimeout(ctx, time.Minute)
 	listed, err := p.List(lctx, "")
 	cancel()
 	if err != nil {
@@ -318,15 +342,25 @@ func (s *Server) reconcilePower(ctx context.Context, name string, p provider.Pro
 		if r.Provider != name {
 			continue
 		}
+		broken := r.State == protocol.MachineBroken
 		switch state := power[r.Template]; {
-		case state == provider.PowerRunning && (r.State == protocol.MachineStopped ||
-			r.State == protocol.MachineBroken && strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
+		case state == provider.PowerRunning && (r.State == protocol.MachineStopped || broken && strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
 			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", now)
-		case state == provider.PowerStopped && !busy[r.ID] && (r.State == protocol.MachineRunning ||
-			r.State == protocol.MachineBroken && !strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
+		case state == provider.PowerRunning && broken && strings.HasPrefix(r.BrokenReason, reasonDeallocated):
+			// Started outside Hostel while broken: warm_running deallocates it again.
+			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineBroken, strings.TrimPrefix(r.BrokenReason, reasonDeallocated), now)
+		case state == provider.PowerStopped && !busy[r.ID] && (r.State == protocol.MachineRunning || broken && powerRecoverable(r.BrokenReason)):
 			if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopped, "deallocated outside Hostel", now); ok {
 				s.store.SetWarmUntil(ctx, r.ID, time.Time{})
 			}
+		case state == provider.PowerOff && !busy[r.ID] && (r.State == protocol.MachineStopped || r.State == protocol.MachineRunning || broken):
+			// Stopped but not deallocated (for example shut down inside the
+			// OS): Azure still bills it.
+			reason := "stopped in Azure but not deallocated"
+			if broken && !powerRecoverable(r.BrokenReason) {
+				reason = reasonKeepBroken + strings.TrimPrefix(r.BrokenReason, reasonDeallocated)
+			}
+			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopping, reason, now)
 		}
 	}
 }

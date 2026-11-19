@@ -639,24 +639,41 @@ signs in again once.
   log, an event, or an answer.
 - **States.** A machine row exists from server start, as for `static`. A machine
   without a lease for `warm_running` (also a `broken` one: it costs money) goes
-  `stopping` → `stopped`; a failed deallocation makes it `broken` ("stop
-  failed"), and the next `warm_running` tries again. A stopped machine is never
-  destroyed. The scheduler starts it (`resuming`) when a lease needs its tools
-  and no running machine is free; then it provisions as a static machine (the
-  probe, and the tool install only when the tools changed). A failed start makes
-  it `broken` ("start failed: <Azure code and message>"); it is not started
-  again until `hostel config machines repair`, which makes it `stopped`.
-- **Reconcile.** Each pass reads the power state of each machine. A machine that
-  runs while its row is `stopped` (started in the portal), or `broken` after a
-  failed start, is probed (`provisioning`). A deallocated machine without an
-  active room whose row is `running` or `broken` (not "start failed") becomes
-  `stopped` ("deallocated outside Hostel").
-- **Change of kind.** A `static` provider can become `azure` in place (add
-  `tenant`, `client_id`, and each machine's `vm`): the rows and machine tokens
-  stay.
-- **Limits.** Hostel does not create Azure machines or manage the auto-shutdown
-  schedule. A machine that stops inside the OS (Azure "stopped", still billed) is
-  unreachable, so it is `broken` and deallocated after `warm_running`.
+  `stopping` → `stopped`. A machine that is `broken` for another reason than
+  "unreachable" or a failed stop is deallocated too, but stays `broken`
+  ("deallocated: <reason>") until `hostel config machines repair`. A failed
+  deallocation makes it `broken` ("stop failed"), and the next `warm_running`
+  tries again. A stopped machine is never destroyed. The scheduler starts it
+  (`resuming`) when a lease needs its tools and no running machine is free; then
+  it provisions as a static machine (the probe; the tool install only when the
+  settings changed; the cleanup of dirty rooms). A start ends before the machine
+  boots: a first probe that cannot connect makes it `broken` ("unreachable")
+  until the presence check or its `machine connect` finds it. A failed start
+  makes it `broken` ("start failed: <Azure code and message>"); it is not started
+  again until a repair, which makes it `stopped`. A `vm` that Azure does not
+  find is a failed start, not a lost machine.
+- **Settings.** A deallocated machine whose settings changed is not stale: it
+  provisions with them at its next start. A deallocated machine with a `dirty`
+  room (deallocated during a lease) is started when leases wait, so that its
+  cleanup runs.
+- **Reconcile.** Each pass reads the power state of each machine (1 minute
+  deadline; a `vm` that Azure does not find has no state). A machine that runs
+  while its row is `stopped` (started in the portal), or `broken` after a failed
+  start, is probed (`provisioning`). A deallocated machine without an active
+  room whose row is `running`, or `broken` for "unreachable" or a failed stop,
+  becomes `stopped` ("deallocated outside Hostel"). A machine that is stopped
+  but not deallocated (Azure `PowerState/stopped`, for example a shutdown inside
+  the OS; Azure still bills it) is deallocated at once.
+- **Change of kind, removal, `vm`.** A `static` provider can become `azure` in
+  place (add `tenant`, `client_id`, and each machine's `vm`): the rows and
+  machine tokens stay. An azure machine is removed, or gets another `vm`, only
+  while it is deallocated; else its virtual machine would run on without Hostel.
+  A `stopped` row of a provider that becomes `static` is probed. The client
+  secret of a removed azure provider is deleted. An azure provider cannot be
+  named `namespace` (the name of the Namespace login).
+- **Limits.** Hostel does not create Azure machines or manage the
+  auto-shutdown schedule. A ready lease on a machine that was deallocated outside
+  Hostel ends as on an unreachable static machine.
 
 ### Deadlines
 

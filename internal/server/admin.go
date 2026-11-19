@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
@@ -85,8 +84,8 @@ func (s *Server) handleMachineRepair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	to := protocol.MachineProvisioning
-	if m.PowerManaged() && strings.HasPrefix(machine.BrokenReason, reasonStartFailed) {
-		// Not started: the scheduler starts it when a lease needs it.
+	if m.PowerManaged() && powerDeallocated(machine.BrokenReason) {
+		// Deallocated: the scheduler starts it when a lease needs it.
 		to = protocol.MachineStopped
 	}
 	if _, err := s.store.SetMachineState(ctx, machine.ID, []string{protocol.MachineBroken}, to, "", time.Now()); err != nil {

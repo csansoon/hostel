@@ -5,8 +5,6 @@ package e2e
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,6 +34,7 @@ type fakeAzure struct {
 
 	mu          sync.Mutex
 	failStart   bool
+	off         bool // a stopped container is "stopped" (shut down inside, still billed), not "deallocated"
 	starts      int
 	deallocates int
 	views       int               // instanceView requests
@@ -65,6 +64,18 @@ func (f *fakeAzure) viewCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.views
+}
+
+func (f *fakeAzure) isOff() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.off
+}
+
+func (f *fakeAzure) setOff(v bool) {
+	f.mu.Lock()
+	f.off = v
+	f.mu.Unlock()
 }
 
 func (f *fakeAzure) setFailStart(v bool) {
@@ -116,6 +127,8 @@ func (f *fakeAzure) serve(w http.ResponseWriter, r *http.Request) {
 			state = "deallocated"
 			if f.running() {
 				state = "running"
+			} else if f.isOff() {
+				state = "stopped"
 			}
 		}
 		azureJSON(w, http.StatusOK, map[string]any{"statuses": []map[string]string{
@@ -156,15 +169,15 @@ func (f *fakeAzure) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// run does an operation: the container starts (and its SSH server answers)
-// or stops.
+// run does an operation: the container starts or stops. As in Azure, a start
+// ends before the SSH server answers (the machine still boots).
 func (f *fakeAzure) run(id string, start, fail bool) {
 	status := "Succeeded"
 	switch {
 	case fail:
 		status = "Failed"
 	case start:
-		if _, err := docker("start", f.c.name); err != nil || !sshAnswers(f.c.port, time.Minute) {
+		if _, err := docker("start", f.c.name); err != nil {
 			status = "Failed"
 		}
 	default:
@@ -174,30 +187,15 @@ func (f *fakeAzure) run(id string, start, fail bool) {
 	}
 	f.mu.Lock()
 	f.ops[id], f.busy = status, ""
+	if !start && !fail {
+		f.off = false
+	}
 	f.mu.Unlock()
 }
 
 func (f *fakeAzure) running() bool {
 	out, err := docker("inspect", "-f", "{{.State.Running}}", f.c.name)
 	return err == nil && out == "true"
-}
-
-// sshAnswers waits until the SSH server on the port sends its banner.
-func sshAnswers(port int, timeout time.Duration) bool {
-	for end := time.Now().Add(timeout); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
-		if err != nil {
-			continue
-		}
-		conn.SetDeadline(time.Now().Add(2 * time.Second))
-		buf := make([]byte, 4)
-		_, err = io.ReadFull(conn, buf)
-		conn.Close()
-		if err == nil && string(buf) == "SSH-" {
-			return true
-		}
-	}
-	return false
 }
 
 func azureConfig(f *fakeAzure, warm string) string {
@@ -323,6 +321,13 @@ func TestAzure(t *testing.T) {
 	e.mustHostel("release")
 	s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
 
+	// A change of the machine while it is deallocated: the next start
+	// provisions with it (below, after the repair).
+	doc := s.configDoc().Document
+	if r := e.applyDoc(strings.Replace(doc, "[providers.cloud.machines.box]\n", "[providers.cloud.machines.box]\nenv = { CHANGED = \"1\" }\n", 1)); r.code != 0 {
+		t.Fatalf("change the machine: %s", r)
+	}
+
 	// A failed start: broken, with the Azure message; no new start until repair.
 	az.setFailStart(true)
 	e.newRepoNamed("fail", defaultRepoFiles())
@@ -350,6 +355,9 @@ func TestAzure(t *testing.T) {
 	e.mustHostel("config", "machines", "repair", "cloud/box")
 	e.vars["HOSTEL_TOKEN"] = saved
 	f.acquire("probe")
+	if r := e.mustHostel("run", "--", "printenv", "CHANGED"); strings.TrimSpace(r.stdout) != "1" {
+		t.Fatalf("the changed env after the start: %s", r)
+	}
 	e.mustHostel("release")
 	s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
 
@@ -396,7 +404,7 @@ func TestAzure(t *testing.T) {
 	}
 
 	// The secret is on the server only.
-	doc := s.configDoc().Document
+	doc = s.configDoc().Document
 	cfg := e.adminHostel("config")
 	events := s.machineEvents("cloud/box")
 	for what, text := range map[string]string{"document": doc, "hostel config": cfg.stdout + cfg.stderr, "events": events, "server log": s.log.String()} {
@@ -434,25 +442,57 @@ tools = ["probe"]
 		t.Fatalf("apply the azure provider: %s", r)
 	}
 	azureLogin(t, e)
-	if m := s.machine("cloud/box"); m.ID != id || m.State != protocol.MachineRunning {
-		t.Fatalf("machine after the change to azure: %+v, want ID %d and running", m, id)
+	// vm is a machine setting: the machine provisions again (no new install).
+	if m := s.waitMachine("cloud/box", protocol.MachineRunning, machineReady); m.ID != id {
+		t.Fatalf("machine after the change to azure: %+v, want ID %d", m, id)
 	}
 
-	c.stop() // deallocated in the portal
-	m := s.waitMachine("cloud/box", protocol.MachineStopped, time.Minute)
-	if m.ID != id {
-		t.Fatalf("machine ID %d, want %d", m.ID, id)
+	// A running azure machine is not removed (its VM would run on).
+	if r := e.adminHostel("config", "machines", "remove", "cloud/box"); r.code == 0 || !strings.Contains(r.stderr, "the azure machine cloud/box is running; remove it or change its vm when it is stopped") {
+		t.Fatalf("remove a running azure machine: %s", r)
 	}
+
+	// Shut down inside the OS: Azure still bills it, so Hostel deallocates it.
+	az.setOff(true)
+	c.stop()
+	m := s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
+	if _, deallocates := az.counts(); m.ID != id || deallocates != 1 || az.isOff() {
+		t.Fatalf("after a shutdown inside: machine %+v, deallocates %d, off %t", m, deallocates, az.isOff())
+	}
+
+	c.start() // started in the portal
+	s.waitMachine("cloud/box", protocol.MachineRunning, machineReady)
+	c.stop() // deallocated in the portal
+	s.waitMachine("cloud/box", protocol.MachineStopped, time.Minute)
 	if ev := s.machineEvents("cloud/box"); !strings.Contains(ev, "deallocated outside Hostel") {
 		t.Fatalf("machine events:\n%s", ev)
 	}
-	c.start() // started in the portal
+	c.start()
 	s.waitMachine("cloud/box", protocol.MachineRunning, machineReady)
-	if starts, deallocates := az.counts(); starts != 0 || deallocates != 0 {
-		t.Fatalf("Hostel called start %d and deallocate %d times, want 0", starts, deallocates)
+	if starts, deallocates := az.counts(); starts != 0 || deallocates != 1 {
+		t.Fatalf("Hostel called start %d and deallocate %d times, want 0 and 1", starts, deallocates)
 	}
+
+	// Deallocated during a lease (for example an auto-shutdown): the room is
+	// dirty. The next lease starts the machine, which cleans the room first.
 	e.useGuestToken()
 	e.newRepo(defaultRepoFiles())
-	(&fixture{e: e, s: s, c: c}).acquire("probe")
+	f := &fixture{e: e, s: s, c: c}
+	f.acquire("probe")
+	e.mustHostel("run", "--", "touch", "left-by-the-first-lease")
+	c.stop()
+	e.hostel("release") // the cleanup cannot reach the machine
+	e.waitFor("the room is dirty and the machine stopped", 2*time.Minute, func() bool {
+		m := s.machine("cloud/box")
+		return m.State == protocol.MachineStopped && len(m.Rooms) == 1 && m.Rooms[0].State == protocol.RoomDirty
+	})
+	e.newRepoNamed("after", defaultRepoFiles())
+	f.acquire("probe")
+	if starts, _ := az.counts(); starts != 1 {
+		t.Fatalf("starts for the dirty room: %d, want 1", starts)
+	}
+	if out := c.sh("find /home/hostel -name left-by-the-first-lease"); out != "" {
+		t.Fatalf("a file of the first lease is left: %s", out)
+	}
 	e.mustHostel("release")
 }
