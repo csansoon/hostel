@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/provider"
+	"github.com/csansoon/hostel/internal/store"
 )
 
 // workers makes sure that each transitional row has exactly one worker
@@ -143,7 +145,11 @@ func (s *Server) reconcile(ctx context.Context) error {
 	}
 	prefix := "hostel-" + lc.cfg.ServerID + "-"
 	for _, name := range lc.cfg.ProviderOrder {
-		if lc.cfg.Providers[name].Kind == config.ProviderStatic {
+		switch lc.cfg.Providers[name].Kind {
+		case config.ProviderStatic:
+			continue
+		case config.ProviderAzure:
+			s.reconcilePower(ctx, name, lc.providers[name], machines)
 			continue
 		}
 		p := lc.providers[name]
@@ -220,6 +226,10 @@ func (s *Server) warm(ctx context.Context) error {
 	now := time.Now()
 	for _, r := range machines {
 		m := s.config().Template(r.Provider + "/" + r.Template)
+		if m != nil && m.PowerManaged() {
+			s.warmPowerManaged(ctx, r, m, busy[r.ID], now)
+			continue
+		}
 		if m == nil || !m.OnDemand() {
 			continue
 		}
@@ -248,4 +258,70 @@ func (s *Server) warm(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// warmPowerManaged stops a machine that Hostel did not create (azure) after
+// warm_running without a lease: a running one, and a broken one (it takes no
+// lease and still costs money; a failed stop is tried again this way). It
+// never destroys the machine, and a stopped one stays stopped.
+func (s *Server) warmPowerManaged(ctx context.Context, r store.Machine, m *config.Template, busy bool, now time.Time) {
+	if r.State != protocol.MachineRunning && r.State != protocol.MachineBroken {
+		return
+	}
+	switch {
+	case busy:
+		if !r.WarmUntil.IsZero() {
+			s.store.SetWarmUntil(ctx, r.ID, time.Time{})
+		}
+	case r.WarmUntil.IsZero():
+		s.store.SetWarmUntil(ctx, r.ID, now.Add(m.WarmRunning.D()))
+	case now.After(r.WarmUntil):
+		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopping, "idle for warm_running", now); ok {
+			s.store.SetWarmUntil(ctx, r.ID, time.Time{})
+		}
+	}
+}
+
+// reconcilePower follows the power state of the machines of a provider that
+// Hostel did not create (azure), when someone changed it outside Hostel: a
+// machine that runs is probed, and a deallocated one without a lease is
+// stopped. Rows in a transitional state belong to their worker.
+func (s *Server) reconcilePower(ctx context.Context, name string, p provider.Provider, machines []store.Machine) {
+	lctx, cancel := context.WithTimeout(ctx, providerCallTimeout)
+	listed, err := p.List(lctx, "")
+	cancel()
+	if err != nil {
+		s.log.Warn("reconcile: read the power state", "provider", name, "err", err)
+		return
+	}
+	power := map[string]string{}
+	for _, ref := range listed {
+		power[ref.Template] = ref.State
+	}
+	rooms, err := s.store.Rooms(ctx)
+	if err != nil {
+		return
+	}
+	busy := map[int64]bool{}
+	for _, sl := range rooms {
+		switch sl.State {
+		case protocol.RoomAssigned, protocol.RoomPreparing, protocol.RoomLeased, protocol.RoomCleaning:
+			busy[sl.MachineID] = true
+		}
+	}
+	now := time.Now()
+	for _, r := range machines {
+		if r.Provider != name {
+			continue
+		}
+		switch state := power[r.Template]; {
+		case state == provider.PowerRunning && (r.State == protocol.MachineStopped ||
+			r.State == protocol.MachineBroken && strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
+			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", now)
+		case state == provider.PowerStopped && !busy[r.ID] && (r.State == protocol.MachineRunning || r.State == protocol.MachineBroken):
+			if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopped, "deallocated outside Hostel", now); ok {
+				s.store.SetWarmUntil(ctx, r.ID, time.Time{})
+			}
+		}
+	}
 }

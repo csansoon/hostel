@@ -356,11 +356,11 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 		// A machine keeps its provider's reference: the provider's kind must not
 		// change under it.
 		if op, np := s.config().Providers[r.Provider], cfg.Providers[r.Provider]; op != nil && np != nil &&
-			(op.Kind != np.Kind || !slices.Equal(op.Command, np.Command) || !maps.Equal(op.CommandEnv, np.CommandEnv)) {
+			(op.Kind != np.Kind && !(config.Fixed(op.Kind) && config.Fixed(np.Kind)) || !slices.Equal(op.Command, np.Command) || !maps.Equal(op.CommandEnv, np.CommandEnv)) {
 			errs = append(errs, fmt.Sprintf("providers.%s: kind, command, and command_env stay while the provider has the machine %s (its machines belong to that backend); remove its machines, and change them when its machines are destroyed or retired", r.Provider, r.Name))
 			continue
 		}
-		if p := cfg.Providers[r.Provider]; p == nil && s.config().Providers[r.Provider] != nil && s.config().Providers[r.Provider].Kind != config.ProviderStatic {
+		if p := cfg.Providers[r.Provider]; p == nil && s.config().Providers[r.Provider] != nil && !config.Fixed(s.config().Providers[r.Provider].Kind) {
 			errs = append(errs, fmt.Sprintf("providers.%s: has the machine %s; remove its machines first, and remove the provider when its machines are destroyed", r.Provider, r.Name))
 			continue
 		}
@@ -462,7 +462,7 @@ func (s *Server) refreshMachines(ctx context.Context) error {
 		}
 		m := lc.cfg.Template(r.Provider + "/" + r.Template)
 		p := lc.cfg.Providers[r.Provider]
-		static := p != nil && p.Kind == config.ProviderStatic
+		static := p != nil && config.Fixed(p.Kind)
 		switch {
 		case m == nil && (p == nil || static):
 			if r.State != protocol.MachineRetired {

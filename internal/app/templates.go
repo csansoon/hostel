@@ -183,7 +183,7 @@ func templateState(st protocol.Status, m protocol.TemplateStatus, now time.Time)
 		}
 		return s
 	}
-	if m.Kind == "static" && len(machines) == 0 {
+	if (m.Kind == "static" || m.Kind == "azure") && len(machines) == 0 {
 		if m.Connect {
 			return state{"Not connected", colMuted, "the machine has not connected to the server yet"}
 		}

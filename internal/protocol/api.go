@@ -517,6 +517,7 @@ type MachineInviteRequest struct {
 	Name     string   `json:"name"`
 	Provider string   `json:"provider,omitempty"`
 	Tools    []string `json:"tools,omitempty"`
+	VM       string   `json:"vm,omitempty"` // the resource ID, for an azure provider
 }
 
 // MachineInviteResponse has the code and the commands to run on the machine.
@@ -553,6 +554,18 @@ type Login struct {
 	Error string `json:"error,omitempty"`
 	// Already: the CLI was logged in; no login ran.
 	Already bool `json:"already,omitempty"`
+}
+
+// ProviderSecret sets the client secret of an azure provider on the server
+// (M12). The server never returns it.
+type ProviderSecret struct {
+	Secret string `json:"secret"`
+}
+
+// ProviderSecretResult: the server stored the secret and tried it (a sign-in
+// and a read of each machine's power state); Error is the failure of the try.
+type ProviderSecretResult struct {
+	Error string `json:"error,omitempty"`
 }
 
 // Login states.

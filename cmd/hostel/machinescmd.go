@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/client"
@@ -18,7 +22,7 @@ import (
 
 const machinesUsage = `hostel: usage:
   hostel config machines                                the machines and their machines
-  hostel config machines add <name> [--tool t] [--provider p]
+  hostel config machines add <name> [--tool t] [--provider p] [--vm <Azure resource ID>]
                                                      a code for "hostel machine join" on the new machine
   hostel config machines set <machine> <key>=<value> ...  for example tools=xcode,ios-simulator,jdk:21
   hostel config machines remove <machine>
@@ -34,7 +38,8 @@ func machinesCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	fs := cli.NewFlagSet("hostel config machines "+sub, stderr)
 	accept := fs.Bool("accept-host-key", false, "with repair: accept a changed host key of the machine")
-	provider := fs.String("provider", "", "with add: the static provider (default home)")
+	provider := fs.String("provider", "", "with add: the static or azure provider (default home)")
+	vm := fs.String("vm", "", "with add, for an azure provider: the resource ID of the virtual machine")
 	var tools cli.StringList
 	fs.Var(&tools, "tool", "with add: a tool of the machine, name or name:option (more than once for several)")
 	pos, err := cli.Parse(fs, args)
@@ -45,7 +50,7 @@ func machinesCmd(args []string, stdout, stderr io.Writer) int {
 	case sub == "" && len(pos) == 0:
 		return machinesList(stdout, stderr)
 	case sub == "add" && len(pos) == 1:
-		return machinesAdd(protocol.MachineInviteRequest{Name: pos[0], Provider: *provider, Tools: tools}, stdout, stderr)
+		return machinesAdd(protocol.MachineInviteRequest{Name: pos[0], Provider: *provider, Tools: tools, VM: *vm}, stdout, stderr)
 	case sub == "set" && len(pos) >= 2:
 		return machinesSet(pos[0], pos[1:], stdout, stderr)
 	case sub == "remove" && len(pos) == 1:
@@ -266,8 +271,11 @@ func machineAction(action, name string, accept bool, stdout, stderr io.Writer) i
 const providersUsage = `hostel: usage:
   hostel config providers                                       the providers
   hostel config providers add <name> --kind static|namespace|external
+  hostel config providers add <name> --kind azure --tenant <ID> --client-id <ID>
   hostel config providers remove <name>                         no on-demand machines may be left
-  hostel config providers login namespace [--cli devbox|nsc]    log the server in to Namespace`
+  hostel config providers login namespace [--cli devbox|nsc]    log the server in to Namespace
+  hostel config providers login <azure provider>                give the server the client secret
+                                                                (asked, or one line on stdin)`
 
 func providersCmd(args []string, stdout, stderr io.Writer) int {
 	sub := ""
@@ -275,7 +283,9 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 		sub, args = args[0], args[1:]
 	}
 	fs := cli.NewFlagSet("hostel config providers "+sub, stderr)
-	kind := fs.String("kind", "", "with add: static, namespace, or external")
+	kind := fs.String("kind", "", "with add: static, namespace, external, or azure")
+	tenant := fs.String("tenant", "", "with add --kind azure: the directory (tenant) ID")
+	clientID := fs.String("client-id", "", "with add --kind azure: the application (client) ID")
 	only := fs.String("cli", "", "with login: only this CLI (devbox or nsc)")
 	pos, err := cli.Parse(fs, args)
 	if err != nil {
@@ -321,9 +331,20 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 					return nil, fmt.Errorf("the provider %s exists already", name)
 				}
 			}
-			return config.SetKey(doc, []string{"providers", name, "kind"}, fmt.Sprintf("%q", *kind))
+			keys := [][2]string{{"kind", *kind}}
+			if *kind == config.ProviderAzure {
+				keys = append(keys, [2]string{"tenant", *tenant}, [2]string{"client_id", *clientID})
+			}
+			for _, kv := range keys {
+				if doc, err = config.SetKey(doc, []string{"providers", name, kv[0]}, fmt.Sprintf("%q", kv[1])); err != nil {
+					return nil, err
+				}
+			}
+			return doc, nil
 		})
-		if code == 0 {
+		if code == 0 && *kind == config.ProviderAzure {
+			fmt.Fprintf(stdout, "Added the provider %[1]s. Give the server its client secret with \"hostel config providers login %[1]s\",\nthen add each machine with \"hostel config machines add <name> --provider %[1]s --vm <resource ID>\".\n", name)
+		} else if code == 0 {
 			fmt.Fprintf(stdout, "Added the provider %s. Add machines with \"hostel config edit\".\n", name)
 		}
 		return code
@@ -333,6 +354,8 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 			clis = []string{*only}
 		}
 		return providerLogin(clis, stdout, stderr)
+	case sub == "login" && len(pos) == 1:
+		return providerSecret(pos[0], os.Stdin, stdout, stderr)
 	case sub == "remove" && len(pos) == 1:
 		return changeConfig(stdout, stderr, func(doc []byte) ([]byte, error) {
 			out, ok, err := config.RemoveTable(doc, []string{"providers", pos[0]})
@@ -344,6 +367,50 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stderr, providersUsage)
 	return 2
+}
+
+// providerSecret sends the client secret of an Azure provider to the server,
+// which keeps it in its data directory and checks it with Azure.
+func providerSecret(name string, stdin *os.File, stdout, stderr io.Writer) int {
+	var secret string
+	if term.IsTerminal(int(stdin.Fd())) {
+		fmt.Fprintf(stderr, "Client secret of %s (not shown): ", name)
+		b, err := term.ReadPassword(int(stdin.Fd()))
+		fmt.Fprintln(stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, "hostel: read the secret:", err)
+			return 1
+		}
+		secret = string(b)
+	} else {
+		in := bufio.NewScanner(io.LimitReader(stdin, 4096))
+		in.Scan()
+		secret = in.Text()
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		fmt.Fprintln(stderr, "hostel: no secret given")
+		return 2
+	}
+	c, err := apiClient()
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var res protocol.ProviderSecretResult
+	if err := c.Do(ctx, "PUT", "/v1/providers/"+url.PathEscape(name)+"/secret", protocol.ProviderSecret{Secret: secret}, &res); err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Stored the client secret of %s on the server.\n", name)
+	if res.Error != "" {
+		fmt.Fprintf(stderr, "hostel: the check with Azure failed: %s\n", res.Error)
+		return 1
+	}
+	fmt.Fprintln(stdout, "Azure accepted it: the server can read the power state of each machine.")
+	return 0
 }
 
 // providerLogin logs the server's provider CLIs in: the server runs the

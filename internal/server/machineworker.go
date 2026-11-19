@@ -235,7 +235,7 @@ func (s *Server) idleMachines(ctx context.Context, machines []store.Machine) (ma
 	out := map[int64]bool{}
 	for _, r := range machines {
 		m := s.config().Template(r.Provider + "/" + r.Template)
-		if m == nil || !m.OnDemand() || busy[r.ID] {
+		if m == nil || !m.OnDemand() && !m.PowerManaged() || busy[r.ID] {
 			continue
 		}
 		if r.State == protocol.MachineStopped || r.State == protocol.MachineRunning {
@@ -306,7 +306,13 @@ func (s *Server) stepResuming(ctx context.Context, r store.Machine) {
 		s.markLost(ctx, r, "the provider no longer has the machine")
 	default:
 		s.log.Warn("resume failed", "machine_id", r.ID, "err", err)
-		m, _ := s.templateOf(r)
+		m, terr := s.templateOf(r)
+		if terr != nil {
+			return
+		}
+		if m.PowerManaged() {
+			err = fmt.Errorf("%s: %w", reasonStartFailed, err)
+		}
 		s.machineFailed(ctx, r, m, err)
 	}
 }
@@ -318,11 +324,16 @@ func (s *Server) stepStopping(ctx context.Context, r store.Machine, m *config.Te
 	switch {
 	case ctx.Err() != nil:
 	case err == nil:
-		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineStopped, "", time.Now()); ok {
+		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineStopped, "", time.Now()); ok && m.OnDemand() {
 			s.store.SetWarmUntil(ctx, r.ID, time.Now().Add(m.WarmStopped.D()))
 		}
-	case errors.Is(err, provider.ErrNotFound):
+	case errors.Is(err, provider.ErrNotFound) && m.OnDemand():
 		s.markLost(ctx, r, "the provider no longer has the machine")
+	case m.PowerManaged():
+		// Hostel did not create the machine, so it is not destroyed. Broken, it
+		// takes no lease, and warm tries the stop again after warm_running.
+		s.log.Warn("stop failed", "machine_id", r.ID, "err", err)
+		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineBroken, reasonStopFailed+": "+err.Error(), time.Now())
 	default:
 		s.log.Warn("stop failed; destroy the machine", "machine_id", r.ID, "err", err)
 		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineDestroying, "stop failed: "+err.Error(), time.Now())

@@ -232,8 +232,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := s.config().Template(req.Template)
-	if m == nil || m.Kind != config.ProviderStatic {
-		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a machine token needs machine = <provider>/<machine> of a static machine; %q is not one", req.Template))
+	if m == nil || !config.Fixed(m.Kind) {
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a machine token needs machine = <provider>/<machine> of a static or azure machine; %q is not one", req.Template))
 		return
 	}
 	tok, secret, err := s.store.CreateMachineToken(r.Context(), req.Name, req.Template, time.Now())

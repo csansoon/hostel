@@ -24,7 +24,19 @@ const (
 	ProviderStatic    = "static"
 	ProviderNamespace = "namespace"
 	ProviderExternal  = "external"
+	// ProviderAzure has existing Azure machines that Hostel starts and
+	// deallocates (M12); it does not create them.
+	ProviderAzure = "azure"
 )
+
+// Fixed reports whether the entries of a provider kind are existing machines
+// ([providers.<name>.machines]), not templates of machines that it creates.
+func Fixed(kind string) bool { return kind == ProviderStatic || kind == ProviderAzure }
+
+var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// azureVMRE is the resource ID of an Azure virtual machine.
+var azureVMRE = regexp.MustCompile(`^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Compute/virtualMachines/[A-Za-z0-9._-]+$`)
 
 var (
 	nameRE     = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -35,6 +47,9 @@ var (
 // ValidName reports whether s is a valid provider, machine, tool, option,
 // room, or tunnel name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
+
+// ValidAzureVM reports whether s is the resource ID of an Azure virtual machine.
+func ValidAzureVM(s string) bool { return azureVMRE.MatchString(s) }
 
 // TLSProblem describes what is wrong with a tls value, or returns "".
 func TLSProblem(mode string) string {
@@ -134,22 +149,30 @@ type Mise struct {
 type Provider struct {
 	Kind string `toml:"kind"`
 	// Label is the name that people see ("Office"); default: the key.
-	Label       string               `toml:"label,omitempty"`
-	MaxMachines *int                 `toml:"max_machines,omitempty"`
-	Limits      []Limit              `toml:"limits,omitempty"`
-	MaxLifetime *Duration            `toml:"max_lifetime,omitempty"`
-	Tools       []string             `toml:"tools,omitempty"`
-	Env         map[string]string    `toml:"env,omitempty"`
-	MaxLease    *Duration            `toml:"max_lease"`
-	WarmRunning *Duration            `toml:"warm_running,omitempty"`
-	WarmStopped *Duration            `toml:"warm_stopped,omitempty"`
-	Reuse       *bool                `toml:"reuse,omitempty"`
-	Command     []string             `toml:"command,omitempty"`
-	CommandEnv  map[string]string    `toml:"command_env,omitempty"`
-	Timeouts    *Timeouts            `toml:"timeouts,omitempty"`
-	Templates   map[string]*Template `toml:"templates"`
-	// Machines are the real hosts of a static provider; resolve moves them
-	// to Templates, which describes each machine for the rest of the server.
+	Label       string            `toml:"label,omitempty"`
+	MaxMachines *int              `toml:"max_machines,omitempty"`
+	Limits      []Limit           `toml:"limits,omitempty"`
+	MaxLifetime *Duration         `toml:"max_lifetime,omitempty"`
+	Tools       []string          `toml:"tools,omitempty"`
+	Env         map[string]string `toml:"env,omitempty"`
+	MaxLease    *Duration         `toml:"max_lease"`
+	WarmRunning *Duration         `toml:"warm_running,omitempty"`
+	WarmStopped *Duration         `toml:"warm_stopped,omitempty"`
+	Reuse       *bool             `toml:"reuse,omitempty"`
+	Command     []string          `toml:"command,omitempty"`
+	CommandEnv  map[string]string `toml:"command_env,omitempty"`
+	Timeouts    *Timeouts         `toml:"timeouts,omitempty"`
+	// Tenant and ClientID are the Azure sign-in (azure); the client secret is
+	// on the server, not in the configuration. LoginURL and ManagementURL
+	// replace the public Azure addresses (national clouds, tests).
+	Tenant        string               `toml:"tenant,omitempty"`
+	ClientID      string               `toml:"client_id,omitempty"`
+	LoginURL      string               `toml:"login_url,omitempty"`
+	ManagementURL string               `toml:"management_url,omitempty"`
+	Templates     map[string]*Template `toml:"templates"`
+	// Machines are the real hosts of a static or azure provider; resolve
+	// moves them to Templates, which describes each machine for the rest of
+	// the server.
 	Machines map[string]*Template `toml:"machines"`
 
 	Name          string   `toml:"-"`
@@ -169,6 +192,8 @@ type Timeouts struct {
 type Template struct {
 	Address string `toml:"address,omitempty"`
 	Connect bool   `toml:"connect,omitempty"`
+	// VM is the resource ID of an Azure machine (azure).
+	VM string `toml:"vm,omitempty"`
 	// LeaseUsers gives each lease its own OS user (M11, macOS and Linux).
 	LeaseUsers bool           `toml:"lease_users,omitempty"`
 	OS         string         `toml:"os"`
@@ -207,7 +232,7 @@ func (p *Provider) templatesKey() string { return TemplatesKey(p.Kind) }
 
 // TemplatesKey is the configuration table of a provider kind.
 func TemplatesKey(kind string) string {
-	if kind == ProviderStatic {
+	if Fixed(kind) {
 		return "machines"
 	}
 	return "templates"
@@ -217,7 +242,7 @@ func TemplatesKey(kind string) string {
 func (m *Template) Key() string { return m.Provider + "/" + m.Name }
 
 // OnDemand reports whether the provider creates machines of this machine when needed.
-func (m *Template) OnDemand() bool { return m.Kind != ProviderStatic }
+func (m *Template) OnDemand() bool { return !Fixed(m.Kind) }
 
 // DeclaredSize is the CPU and memory (in GB) that the machine's spec states
 // ("<os>/<arch>:<cpu>x<mem>"); zero when it states none.
@@ -243,7 +268,7 @@ func (s *Server) Effective() ([]byte, error) {
 	out.Providers = make(map[string]*Provider, len(s.Providers))
 	for name, p := range s.Providers {
 		c := *p
-		if p.Kind == ProviderStatic {
+		if Fixed(p.Kind) {
 			c.Machines, c.Templates = make(map[string]*Template, len(p.Templates)), nil
 			for mn, m := range p.Templates {
 				e := *m
@@ -516,23 +541,40 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 	if !nameRE.MatchString(pn) {
 		el.add(key, "provider name must match %s", nameRE)
 	}
-	onDemand := p.Kind != ProviderStatic
+	onDemand := !Fixed(p.Kind)
 	if onDemand {
 		if len(p.Machines) > 0 {
 			el.add(key+".machines", "provider kind %q creates machines: use [%s.templates.<name>]", p.Kind, key)
 		}
 	} else {
 		if len(p.Templates) > 0 {
-			el.add(key+".templates", "a static provider has real machines: use [%s.machines.<name>]", key)
+			el.add(key+".templates", "a %s provider has existing machines: use [%s.machines.<name>]", p.Kind, key)
 		}
 		p.Templates, p.Machines = p.Machines, nil
 	}
 	switch p.Kind {
-	case ProviderStatic, ProviderNamespace, ProviderExternal:
+	case ProviderStatic, ProviderNamespace, ProviderExternal, ProviderAzure:
 	case "":
-		el.add(key+".kind", "required: %q, %q, or %q", ProviderStatic, ProviderNamespace, ProviderExternal)
+		el.add(key+".kind", "required: %q, %q, %q, or %q", ProviderStatic, ProviderNamespace, ProviderExternal, ProviderAzure)
 	default:
-		el.add(key+".kind", "unknown kind %q; use %q, %q, or %q", p.Kind, ProviderStatic, ProviderNamespace, ProviderExternal)
+		el.add(key+".kind", "unknown kind %q; use %q, %q, %q, or %q", p.Kind, ProviderStatic, ProviderNamespace, ProviderExternal, ProviderAzure)
+	}
+	if p.Kind == ProviderAzure {
+		if !uuidRE.MatchString(p.Tenant) {
+			el.add(key+".tenant", "required for an azure provider: the directory (tenant) ID, a GUID")
+		}
+		if !uuidRE.MatchString(p.ClientID) {
+			el.add(key+".client_id", "required for an azure provider: the application (client) ID, a GUID")
+		}
+		for _, u := range []struct{ name, v string }{{"login_url", p.LoginURL}, {"management_url", p.ManagementURL}} {
+			if u.v != "" {
+				if pu, err := url.Parse(u.v); err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" || pu.Path != "" && pu.Path != "/" {
+					el.add(key+"."+u.name, "must be a base address such as https://host")
+				}
+			}
+		}
+	} else if p.Tenant != "" || p.ClientID != "" || p.LoginURL != "" || p.ManagementURL != "" {
+		el.add(key, "tenant, client_id, login_url, and management_url are only for azure providers")
 	}
 	if p.Kind == ProviderExternal {
 		if len(p.Command) == 0 {
@@ -548,11 +590,17 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 			el.add(key, "command, command_env, and timeouts are only for external providers")
 		}
 	}
-	if !onDemand {
+	switch {
+	case p.Kind == ProviderAzure:
+		if p.MaxMachines != nil || len(p.Limits) > 0 || p.MaxLifetime != nil || p.WarmStopped != nil || p.Reuse != nil {
+			el.add(key, "max_machines, limits, max_lifetime, warm_stopped, and reuse are only for on-demand providers")
+		}
+		setDur(&p.WarmRunning, 30*time.Minute)
+	case !onDemand:
 		if p.MaxMachines != nil || len(p.Limits) > 0 || p.MaxLifetime != nil || p.WarmRunning != nil || p.WarmStopped != nil || p.Reuse != nil {
 			el.add(key, "max_machines, limits, max_lifetime, warm_running, warm_stopped, and reuse are only for on-demand providers")
 		}
-	} else {
+	default:
 		setDur(&p.WarmRunning, 5*time.Minute)
 		setDur(&p.WarmStopped, 24*time.Hour)
 	}
@@ -590,23 +638,33 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 	onDemand := m.OnDemand()
 
 	switch p.Kind {
-	case ProviderStatic:
+	case ProviderStatic, ProviderAzure:
 		if m.Address == "" {
-			el.add(key+".address", "required for a static machine, for example \"hostel@macbook.local\"")
+			el.add(key+".address", "required for a %s machine, for example \"hostel@macbook.local\"", p.Kind)
 		} else if _, _, _, err := ParseAddress(m.Address); err != nil {
 			el.add(key+".address", "%v", err)
 		}
 		if m.Spec != nil {
-			el.add(key+".spec", "a static machine has no spec")
+			el.add(key+".spec", "a %s machine has no spec", p.Kind)
 		}
-		if m.MaxMachines != nil || m.MaxLifetime != nil || m.WarmRunning != nil || m.WarmStopped != nil || m.Reuse != nil {
-			el.add(key, "max_machines, max_lifetime, warm_running, warm_stopped, and reuse are only for on-demand machines")
+		warm := m.WarmRunning != nil && p.Kind == ProviderStatic
+		if m.MaxMachines != nil || m.MaxLifetime != nil || warm || m.WarmStopped != nil || m.Reuse != nil {
+			el.add(key, "max_machines, max_lifetime, warm_running, warm_stopped, and reuse are only for on-demand machines (warm_running also for azure machines)")
+		}
+		switch {
+		case p.Kind == ProviderAzure && !azureVMRE.MatchString(m.VM):
+			el.add(key+".vm", "required for an azure machine: its resource ID, /subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>")
+		case p.Kind == ProviderStatic && m.VM != "":
+			el.add(key+".vm", "only for azure machines")
 		}
 		one := 1
 		m.MaxMachines = &one
 	default:
 		if m.Address != "" || m.Connect {
-			el.add(key, "address and connect are only for static machines")
+			el.add(key, "address and connect are only for static and azure machines")
+		}
+		if m.VM != "" {
+			el.add(key+".vm", "only for azure machines")
 		}
 		if m.Spec == nil {
 			el.add(key+".spec", "required for an on-demand machine")
@@ -620,7 +678,7 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 	}
 
 	switch p.Kind {
-	case ProviderStatic, ProviderExternal:
+	case ProviderStatic, ProviderExternal, ProviderAzure:
 		if m.OS == "" {
 			el.add(key+".os", "required for %s machines: %s", p.Kind, strings.Join(OSNames, ", "))
 		} else if !isOS(m.OS) {
@@ -643,6 +701,9 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 	}
 	m.Env = mergeMap(p.Env, m.Env)
 	inherit(&m.MaxLease, p.MaxLease)
+	if p.Kind == ProviderAzure {
+		inherit(&m.WarmRunning, p.WarmRunning)
+	}
 	if onDemand {
 		inherit(&m.MaxLifetime, p.MaxLifetime)
 		inherit(&m.WarmRunning, p.WarmRunning)
@@ -680,8 +741,8 @@ func (s *Server) resolveTemplate(el *errList, p *Provider, mn string, m *Templat
 		names[sl.Name] = true
 		if sl.User != "" {
 			switch {
-			case m.Kind != ProviderStatic:
-				el.add(sk+".user", "a room user is only for static machines")
+			case !Fixed(m.Kind):
+				el.add(sk+".user", "a room user is only for static and azure machines")
 			case !userRE.MatchString(sl.User):
 				el.add(sk+".user", "user %q must match %s", sl.User, userRE)
 			case users[sl.User]:
@@ -876,7 +937,7 @@ func checkOldKeys(file string, data []byte, doc string) error {
 			add(path, "removed in M10e: the default tools are in the binary, and own tools are in the database (hostel config tools); delete the key")
 		case len(path) == 1 && path[0] == "platforms":
 			add(path, "removed in M10e: tools replace platforms; a tool is a directory with tool.toml (hostel config tools); delete the table")
-		case len(path) == 3 && path[0] == "providers" && path[2] == "machines" && kinds.Providers[path[1]].Kind != ProviderStatic:
+		case len(path) == 3 && path[0] == "providers" && path[2] == "machines" && !Fixed(kinds.Providers[path[1]].Kind):
 			add(path, "changed in M10g: a provider that creates machines has [providers.<name>.templates.<template>]")
 		case !isTemplateOrProvider(path[:len(path)-1]):
 		case path[len(path)-1] == "slots":
@@ -926,7 +987,7 @@ func UpgradeWords(doc []byte) []byte {
 		}
 		entries := n == 5 && (path[2] == "machines" || path[2] == "templates")
 		switch {
-		case n == 3 && last == "machines" && kinds.Providers[path[1]].Kind != ProviderStatic,
+		case n == 3 && last == "machines" && !Fixed(kinds.Providers[path[1]].Kind),
 			n == 4 && path[2] == "limits" && last == "machines":
 			return "templates"
 		case last == "max_rooms" && (n == 3 || n == 4 && path[2] == "limits" || entries):
@@ -1032,6 +1093,11 @@ func setDur(p **Duration, v time.Duration) {
 // Reused reports whether a machine of the template can have more than one
 // lease (reuse, default true).
 func (m *Template) Reused() bool { return m.Reuse == nil || *m.Reuse }
+
+// PowerManaged reports whether Hostel starts the machine when a lease needs
+// it and stops it after warm_running (an existing machine that it did not
+// create: azure).
+func (m *Template) PowerManaged() bool { return m.Kind == ProviderAzure }
 
 func inherit(dst **Duration, src *Duration) {
 	if *dst == nil && src != nil {

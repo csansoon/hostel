@@ -244,7 +244,7 @@ func DocumentProviders(data []byte) ([]DocProvider, error) {
 		p := raw.Providers[pn]
 		dp := DocProvider{Name: pn, Kind: p.Kind}
 		entries := p.Templates
-		if p.Kind == ProviderStatic {
+		if Fixed(p.Kind) {
 			entries = p.Machines
 		}
 		for _, mn := range childOrder(order, "providers", pn, TemplatesKey(p.Kind)) {
