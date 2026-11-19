@@ -188,3 +188,16 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
 - **Not done.** Creating machines from an image; a certificate or a managed
   identity instead of a client secret; the auto-shutdown schedule (the owner
   sets it in the portal).
+
+## 9. Evidence (2026-11-19)
+
+- `make lint` passes.
+- `TestAzure` and `TestAzureOutside` (fake Azure API) pass.
+- The 10-run gate (local, `make test-e2e-10` in a detached loop): 10 of 10
+  passed, 397 s to 654 s each. Two earlier tries stopped on tests that M12
+  did not change, at load averages of 30 to 66 (`TestTrafficActivity`, idle
+  timeout; `TestStaticOffline`, an SSH `EOF` that is not counted as
+  unreachable). `TestAcquireBackground` now uses `poll_timeout = "12s"` (its
+  keeper missed 6 s at a load average of 34).
+- The smoke test against a real Azure machine did not run: it needs the
+  owner's application and client secret.
