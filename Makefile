@@ -9,7 +9,7 @@ TARGETS = darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 window
 
 export CGO_ENABLED = 0
 
-.PHONY: build dist release mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace test-smoke-windows
+.PHONY: build dist release mise mise-linux lint test-unit test-e2e test-e2e-10 test-smoke-namespace test-smoke-windows test-smoke-azure
 
 build:
 	$(GO) build $(GOFLAGS_BUILD) -o dist/hostel ./cmd/hostel
@@ -67,3 +67,7 @@ test-smoke-namespace: dist
 # the checks that only an administrator can make.
 test-smoke-windows: dist
 	$(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeWindows(Desktop|LeaseUsers|CleanupAudit)?$$' -v ./test/e2e/...
+
+# Against a real Azure machine: it costs money (test/e2e/smoke_azure_test.go).
+test-smoke-azure: dist
+	HOSTEL_SMOKE_AZURE=1 $(GO) test -tags e2e -count=1 -timeout 40m -run '^TestSmokeAzure$$' -v ./test/e2e/...

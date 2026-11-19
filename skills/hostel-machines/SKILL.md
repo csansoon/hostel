@@ -1,6 +1,6 @@
 ---
 name: hostel-machines
-description: Add, change, or remove the machines of Hostel - a static host over SSH, a machine behind NAT that joins the server, Namespace on-demand machines, or your own external provider. Use it when the user says "add a Mac", "add a Windows machine", "add my Linux box", "the machine is behind NAT", "use Namespace", "more machines", "drain/remove/repair a machine", or "destroy a machine".
+description: Add, change, or remove the machines of Hostel - a static host over SSH, a machine behind NAT that joins the server, Namespace on-demand machines, an existing Azure virtual machine that Hostel starts and deallocates, or your own external provider. Use it when the user says "add a Mac", "add a Windows machine", "add my Linux box", "the machine is behind NAT", "use Namespace", "add an Azure VM", "stop the VM when it is idle", "more machines", "drain/remove/repair a machine", or "destroy a machine".
 ---
 
 # Add and manage machines
@@ -184,6 +184,37 @@ Cost and limits (check the current plan at Namespace):
   reached" error marks the template full for `limit_retry` (2 minutes).
 - Only `linux` instance types are supported. Android on Namespace uses Linux.
 - A login lasts days. When it ends, provider calls fail: log in again.
+
+## An Azure virtual machine (started when needed)
+
+`kind = "azure"` keeps an existing Azure virtual machine deallocated until a
+lease needs it, and deallocates it again after `warm_running` (default 30
+minutes) without a lease. Hostel does not create or delete Azure machines.
+`docs/machine-setup.md`, section 9, has the Azure portal steps: an application
+with a client secret, and a custom role on the machine only (`read`,
+`start/action`, `deallocate/action`, `locations/operations/read`).
+
+```sh
+hostel config providers add cloud --kind azure --tenant <tenant ID> --client-id <client ID>
+hostel config providers login cloud          # the client secret; it stays on the server
+hostel config machines add win --provider cloud --vm <resource ID> --tool windows-desktop
+```
+
+```toml
+[providers.cloud.machines.win]
+vm = "/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>"
+os = "windows"
+connect = true
+tools = ["windows-desktop"]
+warm_running = "30m"
+```
+
+- A static machine can become an Azure machine in place: change its provider
+  to `kind = "azure"` with `tenant` and `client_id`, and add `vm`.
+- A failed start makes the machine `broken` with the Azure message; `hostel
+  config machines repair` lets the next lease try again.
+- Recommend an Azure auto-shutdown schedule on the machine: Hostel deallocates
+  only while the server runs.
 
 ## The external provider (your own command)
 

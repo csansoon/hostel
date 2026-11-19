@@ -516,7 +516,7 @@ survives cleanup or reaches the next lease.
 
 ## M12. Azure provider
 
-Status: planned (`m12-implementation.md`; owner decisions of 2026-11-18).
+Status: implemented (`m12-implementation.md`; owner decisions of 2026-11-18). Waiting for the owner's approval.
 
 Goal: an existing Azure machine runs only when leases need it. The `azure`
 provider starts it for a lease and deallocates it after `warm_running` without a

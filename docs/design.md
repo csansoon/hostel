@@ -171,6 +171,11 @@ The guest sees only tools.
 - A `static` provider is a named group of real hosts: each entry under
   `machines` is one machine. Its `label` is the name that people see, for example
   "Office" or "Lab".
+- An `azure` provider (M12) is like a `static` provider: each entry under
+  `machines` is one existing Azure virtual machine (its `vm` resource ID). Hostel
+  starts the machine when a lease needs it and deallocates it after
+  `warm_running` without a lease (section 7, "Azure machines"). Hostel does not
+  create or delete Azure machines.
 - An on-demand provider (`namespace`, `external`) has **templates**. A template
   gives up to its `max_machines` machines at the same time. The provider creates
   them when a lease needs one.
@@ -308,9 +313,9 @@ Rules:
 | `creating` | The row exists; the provider call runs. |
 | `provisioning` | The server probes the machine, uploads the helper, mise, and the tool directories, installs the mise tools, runs the `install` and `check` scripts, and writes the inventory. |
 | `running` | Usable. Rooms have their own states. |
-| `stopping`, `stopped`, `resuming` | Warm stop and resume (providers that can stop). |
+| `stopping`, `stopped`, `resuming` | Warm stop and resume (providers that can stop), and the deallocation and start of an Azure machine. |
 | `destroying`, `destroyed` | Removal. |
-| `broken` | Not usable until repaired (static) or destroyed (on-demand). |
+| `broken` | Not usable until repaired (static, azure) or destroyed (on-demand). |
 | `retired` | A static machine that was removed from the configuration. It takes no new lease. |
 
 `drained` is a flag, not a state: a drained machine takes no new lease.
@@ -537,6 +542,7 @@ type MachineAccess struct {
 | `namespace`, `spec.product = "devbox"` | templates | `devbox create --name <Name> --ephemeral ...`; a devbox with the name that another call made (for example before a restart) is taken when it accepts SSH | proxy command `devbox ssh-proxy <Name>`, user `main_user` | no (ephemeral: a stop deletes it) | idle stop (it deletes the devbox); plan maximum duration (3 h on the Developer plan) |
 | `namespace`, `spec.product = "instance"` (Linux) | templates | `nsc create --bare --machine_type ... --duration ... --ssh_key <file> --label hostel.name=<Name> --label hostel.machine=<template>`, then `nsc ssh <id> -- docker run ... <spec.image>`: the machine container (below). Idempotent: an instance with the label and an existing container are taken; the machine is ready when its SSH server accepts the server key | `nsc instance port-forward <id> --target_port 2222` for each connection; user `hostel`, server key | no | `--duration`; `nsc instance extend-duration --ensure_minimum` |
 | `external` | templates | the configured command | from the command's response | if the command declares it | the command must apply it |
+| `azure` | existing virtual machines (`vm`, plus `address` or `connect`) | Not called. Each entry is a machine from server start. `start` when a lease needs a stopped machine | as `static` | `deallocate` after `warm_running` (default 30 m) | `warm_running`; an Azure auto-shutdown schedule as a backstop (owner) |
 
 **Namespace instances** (M4, 2026-10-27). The SSH server of an instance (the
 Namespace agent) refuses remote forwards, which tunnels need. So the machine is a
@@ -610,6 +616,47 @@ can mix devbox and instance machines.
   uses the machine (option 2 in section 5); the inventory then lists them all.
 - A change of the configuration or of a tool directory applies at once (M9,
   `hostel config`): a free machine whose tools changed installs again.
+
+### Azure machines
+
+M12, `m12-implementation.md`. The provider calls the Azure Resource Manager REST
+API with `net/http` (no SDK, no `az` CLI): a client-credentials token from
+`<login_url>/<tenant>/oauth2/v2.0/token`, then `POST <vm>/start`, `POST
+<vm>/deallocate`, and `GET <vm>/instanceView` on `management_url`, with a pinned
+`api-version`. A start or a deallocation answers `202`; the provider polls the
+`Azure-AsyncOperation` (or `Location`) address, which must be on the
+management host (the token goes with each poll), and honours `Retry-After`. Each
+HTTP request has a 30 s deadline, and the whole call the provider call deadline.
+`429` and `5xx` are tried again (at most 5 times, inside the deadline); a `401`
+signs in again once.
+
+- **Client secret.** Not in the configuration document (members can read it).
+  `hostel config providers login <provider>` sends it to `PUT
+  /v1/providers/{name}/secret` (admin); the server writes
+  `<data_dir>/provider-secrets/<provider>` (file `0600`, directory `0700`),
+  adds the event "client secret of provider X set" (no value), and tries it with
+  `List`. The provider reads the file at each sign-in. The value is never in a
+  log, an event, or an answer.
+- **States.** A machine row exists from server start, as for `static`. A machine
+  without a lease for `warm_running` (also a `broken` one: it costs money) goes
+  `stopping` → `stopped`; a failed deallocation makes it `broken` ("stop
+  failed"), and the next `warm_running` tries again. A stopped machine is never
+  destroyed. The scheduler starts it (`resuming`) when a lease needs its tools
+  and no running machine is free; then it provisions as a static machine (the
+  probe, and the tool install only when the tools changed). A failed start makes
+  it `broken` ("start failed: <Azure code and message>"); it is not started
+  again until `hostel config machines repair`, which makes it `stopped`.
+- **Reconcile.** Each pass reads the power state of each machine. A machine that
+  runs while its row is `stopped` (started in the portal), or `broken` after a
+  failed start, is probed (`provisioning`). A deallocated machine without an
+  active room whose row is `running` or `broken` (not "start failed") becomes
+  `stopped` ("deallocated outside Hostel").
+- **Change of kind.** A `static` provider can become `azure` in place (add
+  `tenant`, `client_id`, and each machine's `vm`): the rows and machine tokens
+  stay.
+- **Limits.** Hostel does not create Azure machines or manage the auto-shutdown
+  schedule. A machine that stops inside the OS (Azure "stopped", still billed) is
+  unreachable, so it is `broken` and deallocated after `warm_running`.
 
 ### Deadlines
 
@@ -1099,19 +1146,22 @@ not inherited: on a provider it is a limit for all machines together.
 
 | Key | Where | Default |
 |---|---|---|
-| `kind` | provider | required: `static`, `namespace`, `external` |
+| `kind` | provider | required: `static`, `namespace`, `external`, `azure` |
+| `tenant`, `client_id` | azure provider | required: the directory (tenant) ID and the application (client) ID, GUIDs. The client secret is not here (section 7, "Azure machines") |
+| `login_url`, `management_url` | azure provider | `https://login.microsoftonline.com`, `https://management.azure.com` (other clouds; `http://` only on loopback, for tests) |
+| `vm` | azure machine | required: `/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>` |
 | `label` | provider | the provider's key; the name that people see (a heading in Rooms) |
 | `max_machines` | provider: limit for all its machines; template: its own limit | provider: none; template: 1 |
 | `limits` | provider | `[]`; each entry `{ templates = [...], max_machines = N }` |
 | `max_lifetime` | provider, machine, template | none (the provider's maximum machine lifetime) |
-| `address`, `connect` | static machine | `connect = false` (true: the host is behind NAT; section 13) |
-| `os` | machine, template | required for `static` and `external`; from `spec` for `namespace` |
+| `address`, `connect` | static and azure machine | `connect = false` (true: the host is behind NAT; section 13) |
+| `os` | machine, template | required for `static`, `azure`, and `external`; from `spec` for `namespace` |
 | `spec` | template | required |
 | `tools` | provider, machine, template | `[]` (no tools; the machine still takes leases that ask for no tools). Entries: a defined tool (`android-emulator`, `android-emulator:pixel-9` to give only that option), or a mise tool with its version (`jdk:21`, `node:22`; several versions of one tool are allowed) |
 | `rooms` | machine, template | one room `a`; room `n` (from 0) gets ports `7500 + 10n` to `7509 + 10n` |
 | `env` | provider, machine, template, room | `{}` |
 | `max_lease` | provider, machine, template | `2h` |
-| `warm_running`, `warm_stopped` | provider, template | `5m`, `24h` (on-demand only) |
+| `warm_running`, `warm_stopped` | provider, template | `5m`, `24h` (on-demand only); `warm_running` also on an azure provider and machine (default `30m`) |
 | `reuse` | provider, template | `true` (on-demand only); `false`: one lease for each machine (M11) |
 | `lease_users` | machine, template | `false`; `true`: an OS user for each lease (macOS and Linux, M11, section 18) |
 | `command`, `command_env`, `timeouts` | external provider | `command` required; `timeouts = { provision = "5m", default = "1m" }` |
@@ -1659,7 +1709,8 @@ have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 | `POST /v1/machines/invites` (admin), `POST /v1/machines/join` (the code, no token), `GET /v1/install.sh`, `GET /v1/download/hostel-<os>-<arch>[.exe]` (no token) | A machine code with the commands to run; the join (adds the machine, returns a machine token and the server's SSH key); the install script and the binaries of `helper_dir` (M9) |
 | `POST /v1/logins/{cli}`, `GET /v1/logins/{cli}[?wait=1]` (admin; `cli` is `devbox` or `nsc`) | Starts a provider CLI login on the server and returns its address (or `already`); the state (`waiting`, `done`, `failed`) (M9) |
 | `POST /v1/invites` | `{"role", "name"}` (admin) or `{"self": true}` (a code for the caller's other computer); returns the code, the key fingerprint, and the expiry (24 hours). |
-| `POST /v1/machines/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Machine control. `repair` takes `{"accept_host_key": bool}` and is for broken static machines; `destroy` is for on-demand machines without a lease. |
+| `PUT /v1/providers/{name}/secret` (admin) | The client secret of an azure provider: `{"secret": "..."}`; the answer `{"error": "..."}` says whether Azure accepted it (M12). |
+| `POST /v1/machines/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Machine control. `repair` takes `{"accept_host_key": bool}` and is for broken static and azure machines; `destroy` is for on-demand machines without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "template"}` (`template` = `<provider>/<machine>`, only for the role `machine`). A new token is returned once. |
 
 A `ready` lease includes the access data and the lease facts: gateway address,
@@ -2380,6 +2431,10 @@ Privilege escalation to root on a machine stays out of scope.
   (`FAKE_CAN_STOP`), and access through a proxy command (`FAKE_PROXY`). A lock
   file for each name makes `provision` idempotent when a killed server's call
   still runs.
+- The `azure` provider (M12) uses a fake Azure API in the harness
+  (`test/e2e/azure_test.go`, through `login_url` and `management_url`): its
+  `start` and `deallocate` start and stop a static machine container, and its
+  `instanceView` reports the container's state.
 - The harness gives a test server the test tools at its first start: it
   starts the server with the local keys of `server.toml`, pushes the tools
   (`hostel config tools push`), and then applies the providers and machines

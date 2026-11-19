@@ -1,6 +1,7 @@
 # M12. Azure provider (plan)
 
-Status: plan. Owner decisions of 2026-11-18 (section 7: the recommended option of each).
+Status: implemented. Owner decisions of 2026-11-18 (section 7: the recommended option of each).
+Section 8 has what changed from the plan, and the limits.
 
 ## 1. Goal
 
@@ -139,3 +140,33 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
 4. **Backstop.** Recommended: the owner sets an Azure auto-shutdown schedule on
    the machine (for example each night), so that the machine stops also when the
    Hostel server is down. Hostel does not manage the schedule.
+
+## 8. Implementation notes and limits
+
+- **Join.** A new Azure machine joins with a code, as a static machine:
+  `hostel config providers add <name> --kind azure --tenant <ID> --client-id
+  <ID>`, `hostel config providers login <name>`, then `hostel config machines
+  add <machine> --provider <name> --vm <resource ID>`. A `static` provider can
+  also become `azure` in place (add the keys): the machine rows and machine
+  tokens stay.
+- **Failed start.** The machine stays `broken` ("start failed: ...") and is not
+  deallocated by `warm_running`: else it would be `stopped` and the next lease
+  would start it again without end. `hostel config machines repair` makes it
+  `stopped`. When Azure reports it running (for example a start in the portal),
+  the reconcile probes it.
+- **Failed stop.** The machine is `broken` ("stop failed: ..."): it takes no
+  lease, and `warm_running` tries the deallocation again.
+- **Unreachable idle machine.** A `broken` ("unreachable") machine without a
+  lease is also deallocated after `warm_running`: a machine that stopped inside
+  the OS is still billed.
+- **Login check.** `providers login` stores the secret first, then tries it
+  (`List`); the command fails with the Azure message (its first line only) when
+  Azure refuses it.
+- **Base addresses.** `login_url` and `management_url` take `http://` only on a
+  loopback host (the E2E fake); the client secret goes to `login_url`.
+- **Smoke test.** `make test-smoke-azure` (`test/e2e/smoke_azure_test.go`):
+  the environment variables are in the test comment. The machine must be
+  deallocated at the start; the test deallocates it also when it fails.
+- **Not done.** Creating machines from an image; a certificate or a managed
+  identity instead of a client secret; the auto-shutdown schedule (the owner
+  sets it in the portal).
