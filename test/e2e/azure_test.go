@@ -38,7 +38,7 @@ type fakeAzure struct {
 	failStart   bool
 	starts      int
 	deallocates int
-	views       int // instanceView requests
+	views       int               // instanceView requests
 	busy        string            // "starting" or "deallocating" while an operation runs
 	ops         map[string]string // operation ID → InProgress, Succeeded, Failed
 	tokens      map[string]bool
