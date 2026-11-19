@@ -35,6 +35,7 @@ type fakeAzure struct {
 	mu          sync.Mutex
 	failStart   bool
 	off         bool // a stopped container is "stopped" (shut down inside, still billed), not "deallocated"
+	hung        bool // "running" while the container is stopped (it runs but does not answer)
 	starts      int
 	deallocates int
 	views       int               // instanceView requests
@@ -75,6 +76,12 @@ func (f *fakeAzure) isOff() bool {
 func (f *fakeAzure) setOff(v bool) {
 	f.mu.Lock()
 	f.off = v
+	f.mu.Unlock()
+}
+
+func (f *fakeAzure) setHung(v bool) {
+	f.mu.Lock()
+	f.hung = v
 	f.mu.Unlock()
 }
 
@@ -125,7 +132,7 @@ func (f *fakeAzure) serve(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		if state == "" {
 			state = "deallocated"
-			if f.running() {
+			if f.running() || f.hung {
 				state = "running"
 			} else if f.isOff() {
 				state = "stopped"
@@ -188,7 +195,7 @@ func (f *fakeAzure) run(id string, start, fail bool) {
 	f.mu.Lock()
 	f.ops[id], f.busy = status, ""
 	if !start && !fail {
-		f.off = false
+		f.off, f.hung = false, false
 	}
 	f.mu.Unlock()
 }
@@ -275,8 +282,11 @@ func (s *serverProc) machineEvents(key string) string {
 // and after warm_running without a lease Hostel deallocates it; the next
 // lease starts it again without a new install. A failed start makes the
 // machine broken with the Azure message and is not tried again until repair.
-// A drained stopped machine is not started. The secret is not in the
-// configuration, the events, or the server log.
+// A change of the machine while it is deallocated applies at its next start.
+// A drained stopped machine is not started. A machine that runs in Azure but
+// does not answer is deallocated after warm_running and stays broken until a
+// repair. The secret is not in the configuration, the events, or the server
+// log.
 func TestAzure(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -403,6 +413,30 @@ func TestAzure(t *testing.T) {
 		t.Fatalf("providers remove cloud2: %s", r)
 	}
 
+	// Runs in Azure but does not answer: after warm_running it is
+	// deallocated and stays broken (a waiting lease does not start it again)
+	// until a repair.
+	e.adminHostel("config", "machines", "undrain", "cloud/box")
+	az.setHung(true)
+	m = s.waitMachine("cloud/box", protocol.MachineBroken, 2*time.Minute)
+	e.waitFor("deallocated and still broken", 2*time.Minute, func() bool {
+		m = s.machine("cloud/box")
+		return m.State == protocol.MachineBroken && m.Reason == "deallocated: unreachable"
+	})
+	before, _ = az.counts()
+	e.newRepoNamed("hung", defaultRepoFiles())
+	if r := e.hostel("acquire", "probe", "--task", "hung", "--wait", "5s"); r.code != 75 {
+		t.Fatalf("acquire with the machine broken: %s, want exit code 75", r)
+	}
+	if starts, _ := az.counts(); starts != before || s.machine("cloud/box").State != protocol.MachineBroken {
+		t.Fatalf("a machine that did not answer was started again: starts %d (before %d), %+v", starts, before, s.machine("cloud/box"))
+	}
+	e.vars["HOSTEL_TOKEN"], saved = e.admin, e.vars["HOSTEL_TOKEN"]
+	e.mustHostel("config", "machines", "repair", "cloud/box")
+	e.vars["HOSTEL_TOKEN"] = saved
+	f.acquire("probe")
+	e.mustHostel("release")
+
 	// The secret is on the server only.
 	doc = s.configDoc().Document
 	cfg := e.adminHostel("config")
@@ -443,6 +477,9 @@ tools = ["probe"]
 	}
 	azureLogin(t, e)
 	// vm is a machine setting: the machine provisions again (no new install).
+	e.waitFor("the machine provisions for the vm change", time.Minute, func() bool {
+		return strings.Contains(s.machineEvents("cloud/box"), "running → provisioning: configuration changed")
+	})
 	if m := s.waitMachine("cloud/box", protocol.MachineRunning, machineReady); m.ID != id {
 		t.Fatalf("machine after the change to azure: %+v, want ID %d", m, id)
 	}

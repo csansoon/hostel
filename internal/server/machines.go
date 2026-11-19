@@ -105,10 +105,26 @@ const (
 )
 
 // powerRecoverable reports whether a broken power-managed machine becomes
-// stopped (usable) when it is deallocated: its fault was only that it did not
-// answer or did not stop.
+// stopped (usable) when it is deallocated outside Hostel: its fault was only
+// that it did not answer or did not stop.
 func powerRecoverable(reason string) bool {
-	return reason == reasonUnreachable || strings.HasPrefix(reason, reasonStopFailed)
+	return reason == reasonUnreachable || strings.HasPrefix(reason, reasonUnreachable+" ("+reasonStopFailed) ||
+		strings.HasPrefix(reason, reasonStopFailed)
+}
+
+// unreachableReason reports whether a broken machine did not answer (also
+// after a failed stop of it).
+func unreachableReason(reason string) bool {
+	return reason == reasonUnreachable || strings.HasPrefix(reason, reasonUnreachable+" (")
+}
+
+// powerRetryStop reports whether warm_running deallocates a broken
+// power-managed machine and makes it stopped (usable): only after a failed
+// stop. A machine that Azure still reports running but that stayed
+// unreachable for warm_running stays broken after the deallocation (else
+// each waiting lease would start it again).
+func powerRetryStop(reason string) bool {
+	return strings.HasPrefix(reason, reasonStopFailed)
 }
 
 // powerDeallocated reports whether a broken power-managed machine is known to

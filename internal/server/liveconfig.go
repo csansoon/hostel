@@ -381,7 +381,7 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 		// An azure machine is removed, or gets another vm, only when it is
 		// deallocated: else its virtual machine would run on without Hostel.
 		if om, nm := s.config().Template(key), cfg.Template(key); om != nil && om.PowerManaged() && (nm == nil || nm.PowerManaged() && nm.VM != om.VM) &&
-			r.State != protocol.MachineStopped && !(r.State == protocol.MachineBroken && powerDeallocated(r.BrokenReason)) {
+			r.State != protocol.MachineStopped && !(r.State == protocol.MachineBroken && strings.HasPrefix(r.BrokenReason, reasonDeallocated)) {
 			errs = append(errs, fmt.Sprintf("%s: the azure machine %s is %s; remove it or change its vm when it is stopped (drain it, and wait for warm_running without a lease)", entryKey(r), r.Name, r.State))
 			continue
 		}

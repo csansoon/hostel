@@ -340,7 +340,12 @@ func (s *Server) stepStopping(ctx context.Context, r store.Machine, m *config.Te
 		// Hostel did not create the machine, so it is not destroyed. Broken, it
 		// takes no lease, and warm tries the stop again after warm_running.
 		s.log.Warn("stop failed", "machine_id", r.ID, "err", err)
-		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineBroken, reasonStopFailed+": "+err.Error(), time.Now())
+		reason := reasonStopFailed + ": " + err.Error()
+		if kept, ok := strings.CutPrefix(r.BrokenReason, reasonKeepBroken); ok {
+			// Still broken for its first reason; warm_running tries again.
+			reason = kept + " (" + reason + ")"
+		}
+		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineBroken, reason, time.Now())
 	default:
 		s.log.Warn("stop failed; destroy the machine", "machine_id", r.ID, "err", err)
 		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineDestroying, "stop failed: "+err.Error(), time.Now())

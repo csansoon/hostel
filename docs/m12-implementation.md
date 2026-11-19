@@ -164,11 +164,19 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
   Azure does not find is a failed start; the reconcile has a 1 minute deadline
   and one wrong `vm` does not stop it for the others; the secret goes with its
   provider; the fake API ends a start before SSH answers, as Azure does.
+  Second review: no start loop for a machine that never answers (above); the
+  dirty-room start only for a lease that the machine can serve; the state
+  changes that a configuration check depends on take the scheduler lock; the
+  removal guard accepts only `stopped` and "deallocated: ".
 - **Failed stop.** The machine is `broken` ("stop failed: ..."): it takes no
   lease, and `warm_running` tries the deallocation again.
-- **Unreachable idle machine.** A `broken` ("unreachable") machine without a
-  lease is also deallocated after `warm_running`: a machine that stopped inside
-  the OS is still billed.
+- **Unreachable machine.** A machine that Azure reports deallocated or stopped
+  is `stopped` at the next reconcile (a stopped one is deallocated first). A
+  machine that Azure reports running but that stays unreachable for
+  `warm_running` is deallocated and stays `broken` ("deallocated:
+  unreachable") until a repair: else each waiting lease would start it again
+  and pay for it without end. A failed stop of a broken machine keeps its first
+  reason, with "(stop failed: ...)", and `warm_running` tries again.
 - **Login check.** `providers login` stores the secret first, then tries it
   (`List`); the command fails with the Azure message (its first line only) when
   Azure refuses it.
