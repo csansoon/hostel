@@ -1,0 +1,458 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/csansoon/hostel/internal/protocol"
+)
+
+const (
+	azureTenant = "11111111-2222-3333-4444-555555555555"
+	azureClient = "66666666-7777-8888-9999-000000000000"
+	azureSecret = "e2e-client-secret-Zq8~value"
+	azureVM     = "/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/resourceGroups/rg-e2e/providers/Microsoft.Compute/virtualMachines/box"
+)
+
+// fakeAzure is the Azure API at its adapter boundary (sign-in, start,
+// deallocate, instance view, operation status) for one virtual machine: a
+// machine container that "start" and "deallocate" start and stop.
+type fakeAzure struct {
+	t   *testing.T
+	srv *httptest.Server
+	c   *container
+
+	mu          sync.Mutex
+	failStart   bool
+	starts      int
+	deallocates int
+	views       int // instanceView requests
+	busy        string            // "starting" or "deallocating" while an operation runs
+	ops         map[string]string // operation ID → InProgress, Succeeded, Failed
+	tokens      map[string]bool
+}
+
+func newFakeAzure(t *testing.T, c *container) *fakeAzure {
+	f := &fakeAzure{t: t, c: c, ops: map[string]string{}, tokens: map[string]bool{}}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeAzure) providerKeys() string {
+	return fmt.Sprintf("tenant = %q\nclient_id = %q\nlogin_url = %q\nmanagement_url = %q\n", azureTenant, azureClient, f.srv.URL, f.srv.URL)
+}
+
+func (f *fakeAzure) counts() (starts, deallocates int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.starts, f.deallocates
+}
+
+func (f *fakeAzure) viewCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.views
+}
+
+func (f *fakeAzure) setFailStart(v bool) {
+	f.mu.Lock()
+	f.failStart = v
+	f.mu.Unlock()
+}
+
+func azureJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func (f *fakeAzure) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && r.URL.Path == "/"+azureTenant+"/oauth2/v2.0/token" {
+		r.ParseForm()
+		if r.PostForm.Get("grant_type") != "client_credentials" || r.PostForm.Get("client_id") != azureClient ||
+			r.PostForm.Get("scope") != f.srv.URL+"/.default" || r.PostForm.Get("client_secret") != azureSecret {
+			azureJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_client",
+				"error_description": "AADSTS7000215: Invalid client secret provided.\r\nTrace ID: 0000\r\nCorrelation ID: 0000"})
+			return
+		}
+		f.mu.Lock()
+		tok := fmt.Sprintf("token-%d", len(f.tokens))
+		f.tokens[tok] = true
+		f.mu.Unlock()
+		azureJSON(w, http.StatusOK, map[string]any{"token_type": "Bearer", "expires_in": 3599, "access_token": tok})
+		return
+	}
+	f.mu.Lock()
+	ok := f.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+	f.mu.Unlock()
+	if !ok {
+		azureJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "InvalidAuthenticationToken", "message": "no valid token"}})
+		return
+	}
+	if r.URL.Query().Get("api-version") == "" {
+		azureJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "MissingApiVersionParameter", "message": "api-version"}})
+		return
+	}
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == azureVM+"/instanceView":
+		f.mu.Lock()
+		f.views++
+		state := f.busy
+		f.mu.Unlock()
+		if state == "" {
+			state = "deallocated"
+			if f.running() {
+				state = "running"
+			}
+		}
+		azureJSON(w, http.StatusOK, map[string]any{"statuses": []map[string]string{
+			{"code": "ProvisioningState/succeeded"}, {"code": "PowerState/" + state}}})
+	case r.Method == http.MethodPost && (r.URL.Path == azureVM+"/start" || r.URL.Path == azureVM+"/deallocate"):
+		start := strings.HasSuffix(r.URL.Path, "/start")
+		f.mu.Lock()
+		id := fmt.Sprintf("op-%d", len(f.ops))
+		f.ops[id] = "InProgress"
+		fail := start && f.failStart
+		if start {
+			f.starts++
+			f.busy = "starting"
+		} else {
+			f.deallocates++
+			f.busy = "deallocating"
+		}
+		f.mu.Unlock()
+		go f.run(id, start, fail)
+		w.Header().Set("Azure-AsyncOperation", f.srv.URL+"/providers/Microsoft.Compute/locations/e2e/operations/"+id+"?api-version=2024-07-01")
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusAccepted)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/providers/Microsoft.Compute/locations/e2e/operations/"):
+		f.mu.Lock()
+		st, found := f.ops[filepath.Base(r.URL.Path)]
+		f.mu.Unlock()
+		if !found {
+			azureJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "NotFound", "message": "no operation"}})
+			return
+		}
+		body := map[string]any{"status": st}
+		if st == "Failed" {
+			body["error"] = map[string]string{"code": "AllocationFailed", "message": "No capacity for the size in this region (e2e)."}
+		}
+		azureJSON(w, http.StatusOK, body)
+	default:
+		azureJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "ResourceNotFound", "message": r.Method + " " + r.URL.Path}})
+	}
+}
+
+// run does an operation: the container starts (and its SSH server answers)
+// or stops.
+func (f *fakeAzure) run(id string, start, fail bool) {
+	status := "Succeeded"
+	switch {
+	case fail:
+		status = "Failed"
+	case start:
+		if _, err := docker("start", f.c.name); err != nil || !sshAnswers(f.c.port, time.Minute) {
+			status = "Failed"
+		}
+	default:
+		if _, err := docker("stop", "-t", "1", f.c.name); err != nil {
+			status = "Failed"
+		}
+	}
+	f.mu.Lock()
+	f.ops[id], f.busy = status, ""
+	f.mu.Unlock()
+}
+
+func (f *fakeAzure) running() bool {
+	out, err := docker("inspect", "-f", "{{.State.Running}}", f.c.name)
+	return err == nil && out == "true"
+}
+
+// sshAnswers waits until the SSH server on the port sends its banner.
+func sshAnswers(port int, timeout time.Duration) bool {
+	for end := time.Now().Add(timeout); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+		if err != nil {
+			continue
+		}
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 4)
+		_, err = io.ReadFull(conn, buf)
+		conn.Close()
+		if err == nil && string(buf) == "SSH-" {
+			return true
+		}
+	}
+	return false
+}
+
+func azureConfig(f *fakeAzure, warm string) string {
+	return serverHeader() + fmt.Sprintf(`
+[providers.cloud]
+kind = "azure"
+%s
+[providers.cloud.machines.box]
+vm = %q
+address = %q
+os = "linux"
+tools = ["probe"]
+warm_running = %q
+`, f.providerKeys(), azureVM, f.c.address(), warm)
+}
+
+func (e *env) writeProbeTool() {
+	e.writeTool("probe", map[string]string{
+		"tool.toml":        "description = \"Probe\"\n",
+		"install.linux.sh": installScript,
+		"check.linux.sh":   "#!/bin/sh\necho 1.0\n",
+	})
+}
+
+// azureLogin gives the server the client secret with "hostel config providers
+// login": a wrong secret is stored but Azure refuses it (the first line of
+// the Azure message only); the right one works.
+func azureLogin(t *testing.T, e *env) {
+	t.Helper()
+	r := e.adminHostel("config", "providers", "login", "cloud")
+	if r.code != 2 || !strings.Contains(r.stderr, "no secret given") {
+		t.Fatalf("providers login without a secret: %s", r)
+	}
+	saved := e.vars["HOSTEL_TOKEN"]
+	e.vars["HOSTEL_TOKEN"] = e.admin
+	r = e.hostelIn("wrong-secret\n", "config", "providers", "login", "cloud")
+	if r.code != 1 || !strings.Contains(r.stderr, "Azure sign-in failed (HTTP 401): invalid_client AADSTS7000215: Invalid client secret provided.") ||
+		strings.Contains(r.stderr, "Trace ID") {
+		t.Fatalf("providers login with a wrong secret: %s", r)
+	}
+	r = e.hostelIn(azureSecret+"\n", "config", "providers", "login", "cloud")
+	e.vars["HOSTEL_TOKEN"] = saved
+	if r.code != 0 || !strings.Contains(r.stdout, "Azure accepted it") {
+		t.Fatalf("providers login: %s", r)
+	}
+	for path, want := range map[string]os.FileMode{
+		filepath.Join(e.dataDir(), "provider-secrets"):          0o700 | os.ModeDir,
+		filepath.Join(e.dataDir(), "provider-secrets", "cloud"): 0o600,
+	} {
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode() != want {
+			t.Fatalf("%s: mode %v, want %v", path, st.Mode(), want)
+		}
+	}
+}
+
+// machineEvents are the event messages of the machine, as an admin sees them.
+func (s *serverProc) machineEvents(key string) string {
+	s.e.t.Helper()
+	var d protocol.MachineDetails
+	if code := s.get("/v1/machines/"+key, s.token, &d); code != 200 {
+		s.e.t.Fatalf("GET /v1/machines/%s: HTTP %d", key, code)
+	}
+	var msgs []string
+	for _, ev := range d.Events {
+		msgs = append(msgs, ev.Message)
+	}
+	return strings.Join(msgs, "\n")
+}
+
+// TestAzure (M12): an azure machine is deallocated until a lease needs it.
+// Without a client secret Hostel cannot read the power state; "providers
+// login" stores the secret on the server only. A lease starts the machine,
+// and after warm_running without a lease Hostel deallocates it; the next
+// lease starts it again without a new install. A failed start makes the
+// machine broken with the Azure message and is not tried again until repair.
+// A drained stopped machine is not started. The secret is not in the
+// configuration, the events, or the server log.
+func TestAzure(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.init()
+	c := e.createStaticMachine("box")
+	az := newFakeAzure(t, c)
+	e.writeProbeTool()
+	e.writeConfig(azureConfig(az, "4s"))
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	e.waitFor("the server says that the client secret is missing", time.Minute, func() bool {
+		return strings.Contains(s.log.String(), `no client secret for provider cloud: run \"hostel config providers login cloud\"`)
+	})
+	azureLogin(t, e)
+	s.waitMachine("cloud/box", protocol.MachineStopped, time.Minute)
+	if r := e.hostel("status", "cloud/box"); r.code != 0 || !strings.Contains(r.stdout, "Azure, started when a lease needs it") {
+		t.Fatalf("status cloud/box: %s", r)
+	}
+	// An unreachable idle machine can also be deallocated (warm_running): a
+	// machine that was shut down inside is still billed.
+	starts0, deallocates0 := az.counts()
+	if starts0 != 0 {
+		t.Fatalf("starts before a lease: %d", starts0)
+	}
+
+	e.useGuestToken()
+	e.newRepo(defaultRepoFiles())
+	f := &fixture{e: e, s: s, c: c}
+	f.acquire("probe")
+	if r := e.mustHostel("run", "--", "echo", "on-azure"); !strings.Contains(r.stdout, "on-azure") {
+		t.Fatalf("run: %s", r)
+	}
+	e.mustHostel("release")
+	s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
+	if starts, deallocates := az.counts(); starts != 1 || deallocates != deallocates0+1 || az.running() {
+		t.Fatalf("after warm_running: starts %d, deallocates %d, running %t; want 1, %d, false", starts, deallocates, az.running(), deallocates0+1)
+	}
+
+	f.acquire("probe")
+	if got := strings.Count(c.sh("cat "+cacheDir+"/install.log"), "install probe"); got != 1 {
+		t.Fatalf("installs of probe after a second start: %d, want 1", got)
+	}
+	e.mustHostel("release")
+	s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
+
+	// A failed start: broken, with the Azure message; no new start until repair.
+	az.setFailStart(true)
+	e.newRepoNamed("fail", defaultRepoFiles())
+	if r := e.hostel("acquire", "probe", "--task", "start fails", "--wait", "40s"); r.code != 75 || !strings.Contains(r.stderr, "AllocationFailed") {
+		t.Fatalf("acquire with a failing start: %s", r)
+	}
+	m := s.waitMachine("cloud/box", protocol.MachineBroken, time.Minute)
+	if !strings.Contains(m.Reason, "start failed: start: Azure: AllocationFailed: No capacity for the size in this region (e2e).") {
+		t.Fatalf("machine after the failed start: %+v", m)
+	}
+	if ev := s.machineEvents("cloud/box"); !strings.Contains(ev, "AllocationFailed") || strings.Contains(ev, azureSecret) {
+		t.Fatalf("machine events after the failed start:\n%s", ev)
+	}
+	failed, _ := az.counts()
+	// Two reconcile passes read the power state (deallocated); the machine
+	// stays broken and is not started again.
+	views := az.viewCount()
+	e.waitFor("two reconcile passes", time.Minute, func() bool { return az.viewCount() >= views+2 })
+	if starts, _ := az.counts(); starts != failed || s.machine("cloud/box").State != protocol.MachineBroken {
+		t.Fatalf("after a failed start without repair: starts %d (want %d), machine %+v", starts, failed, s.machine("cloud/box"))
+	}
+	az.setFailStart(false)
+	saved := e.vars["HOSTEL_TOKEN"]
+	e.vars["HOSTEL_TOKEN"] = e.admin
+	e.mustHostel("config", "machines", "repair", "cloud/box")
+	e.vars["HOSTEL_TOKEN"] = saved
+	f.acquire("probe")
+	e.mustHostel("release")
+	s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
+
+	// Drained and stopped: not started.
+	before, _ := az.counts()
+	if r := e.adminHostel("config", "machines", "drain", "cloud/box"); r.code != 0 {
+		t.Fatalf("drain: %s", r)
+	}
+	e.newRepoNamed("drained", defaultRepoFiles())
+	if r := e.hostel("acquire", "probe", "--task", "drained", "--wait", "5s"); r.code != 75 {
+		t.Fatalf("acquire with the machine drained: %s, want exit code 75", r)
+	}
+	if starts, _ := az.counts(); starts != before || s.machine("cloud/box").State != protocol.MachineStopped {
+		t.Fatalf("a drained machine: starts %d (before %d), state %s", starts, before, s.machine("cloud/box").State)
+	}
+	e.mustHostel("release")
+
+	// A machine joins an azure provider with its resource ID.
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--provider", "cloud"}, "a machine of an azure provider needs --vm"},
+		{[]string{"--provider", "home", "--vm", azureVM}, "a machine of an azure provider needs --vm"},
+		{[]string{"--provider", "cloud", "--vm", "/subscriptions/x"}, "is not the resource ID of an Azure virtual machine"},
+	} {
+		if r := e.adminHostel(append([]string{"config", "machines", "add", "win"}, c.args...)...); r.code != 1 || !strings.Contains(r.stderr, c.want) {
+			t.Fatalf("machines add win %v: %s", c.args, r)
+		}
+	}
+	if r := e.adminHostel("config", "machines", "add", "win", "--provider", "cloud", "--vm", strings.Replace(azureVM, "/box", "/win", 1)); r.code != 0 ||
+		!strings.Contains(r.stdout, "machine join") {
+		t.Fatalf("machines add win --vm: %s", r)
+	}
+	if r := e.adminHostel("config", "providers", "add", "cloud2", "--kind", "azure", "--tenant", azureTenant, "--client-id", azureClient); r.code != 0 ||
+		!strings.Contains(r.stdout, "hostel config providers login cloud2") {
+		t.Fatalf("providers add --kind azure: %s", r)
+	}
+	if r := e.adminHostel("config", "providers", "add", "cloud3", "--kind", "azure"); r.code == 0 || !strings.Contains(r.stderr, "tenant") {
+		t.Fatalf("providers add --kind azure without IDs: %s", r)
+	}
+	if r := e.adminHostel("config", "providers", "remove", "cloud2"); r.code != 0 {
+		t.Fatalf("providers remove cloud2: %s", r)
+	}
+
+	// The secret is on the server only.
+	doc := s.configDoc().Document
+	cfg := e.adminHostel("config")
+	events := s.machineEvents("cloud/box")
+	for what, text := range map[string]string{"document": doc, "hostel config": cfg.stdout + cfg.stderr, "events": events, "server log": s.log.String()} {
+		if strings.Contains(text, azureSecret) {
+			t.Fatalf("the client secret is in the %s", what)
+		}
+	}
+}
+
+// TestAzureOutside (M12): a static machine becomes an azure machine in place
+// (the same machine row). A machine that someone deallocates outside Hostel
+// is stopped; one that someone starts outside Hostel is probed and used.
+func TestAzureOutside(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.init()
+	c := e.startStaticMachine("box")
+	az := newFakeAzure(t, c)
+	e.writeProbeTool()
+	e.writeConfig(serverHeader() + fmt.Sprintf(`
+[providers.cloud]
+kind = "static"
+
+[providers.cloud.machines.box]
+address = %q
+os = "linux"
+tools = ["probe"]
+`, c.address()))
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	id := s.waitMachine("cloud/box", protocol.MachineRunning, machineReady).ID
+	doc := s.configDoc().Document
+	doc = strings.Replace(doc, `kind = "static"`, `kind = "azure"`+"\n"+az.providerKeys(), 1)
+	doc = strings.Replace(doc, "[providers.cloud.machines.box]\n", fmt.Sprintf("[providers.cloud.machines.box]\nvm = %q\nwarm_running = \"1h\"\n", azureVM), 1)
+	if r := e.applyDoc(doc); r.code != 0 {
+		t.Fatalf("apply the azure provider: %s", r)
+	}
+	azureLogin(t, e)
+	if m := s.machine("cloud/box"); m.ID != id || m.State != protocol.MachineRunning {
+		t.Fatalf("machine after the change to azure: %+v, want ID %d and running", m, id)
+	}
+
+	c.stop() // deallocated in the portal
+	m := s.waitMachine("cloud/box", protocol.MachineStopped, time.Minute)
+	if m.ID != id {
+		t.Fatalf("machine ID %d, want %d", m.ID, id)
+	}
+	if ev := s.machineEvents("cloud/box"); !strings.Contains(ev, "deallocated outside Hostel") {
+		t.Fatalf("machine events:\n%s", ev)
+	}
+	c.start() // started in the portal
+	s.waitMachine("cloud/box", protocol.MachineRunning, machineReady)
+	if starts, deallocates := az.counts(); starts != 0 || deallocates != 0 {
+		t.Fatalf("Hostel called start %d and deallocate %d times, want 0", starts, deallocates)
+	}
+	e.useGuestToken()
+	e.newRepo(defaultRepoFiles())
+	(&fixture{e: e, s: s, c: c}).acquire("probe")
+	e.mustHostel("release")
+}

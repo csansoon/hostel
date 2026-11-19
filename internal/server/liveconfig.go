@@ -51,7 +51,7 @@ func (s *Server) toolUploads() map[string]map[string]machineops.Tool {
 // Providers whose settings did not change are reused (no login check again).
 func (s *Server) buildLive(ctx context.Context, cfg *config.Server, revision int, document string, tools map[string]map[string]string, toolsDir string, old *liveConfig) (*liveConfig, error) {
 	lc := &liveConfig{cfg: cfg, revision: revision, document: document, tools: tools, toolsDir: toolsDir, providers: map[string]provider.Provider{}}
-	fresh := &config.Server{ProviderOrder: nil, Providers: map[string]*config.Provider{}}
+	fresh := &config.Server{DataDir: cfg.DataDir, Providers: map[string]*config.Provider{}}
 	for _, name := range cfg.ProviderOrder {
 		if old != nil && old.providers[name] != nil && reflect.DeepEqual(old.cfg.Providers[name], cfg.Providers[name]) {
 			lc.providers[name] = old.providers[name]

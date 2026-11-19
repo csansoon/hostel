@@ -265,7 +265,11 @@ func (s *Server) warm(ctx context.Context) error {
 // lease and still costs money; a failed stop is tried again this way). It
 // never destroys the machine, and a stopped one stays stopped.
 func (s *Server) warmPowerManaged(ctx context.Context, r store.Machine, m *config.Template, busy bool, now time.Time) {
-	if r.State != protocol.MachineRunning && r.State != protocol.MachineBroken {
+	// A machine that did not start stays broken until a repair (else it would
+	// be stopped, and started again for the next lease); the reconcile probes
+	// it when Azure reports it running.
+	if r.State != protocol.MachineRunning && r.State != protocol.MachineBroken ||
+		strings.HasPrefix(r.BrokenReason, reasonStartFailed) {
 		return
 	}
 	switch {
@@ -318,7 +322,8 @@ func (s *Server) reconcilePower(ctx context.Context, name string, p provider.Pro
 		case state == provider.PowerRunning && (r.State == protocol.MachineStopped ||
 			r.State == protocol.MachineBroken && strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
 			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", now)
-		case state == provider.PowerStopped && !busy[r.ID] && (r.State == protocol.MachineRunning || r.State == protocol.MachineBroken):
+		case state == provider.PowerStopped && !busy[r.ID] && (r.State == protocol.MachineRunning ||
+			r.State == protocol.MachineBroken && !strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
 			if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopped, "deallocated outside Hostel", now); ok {
 				s.store.SetWarmUntil(ctx, r.ID, time.Time{})
 			}

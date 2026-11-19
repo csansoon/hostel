@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/csansoon/hostel/internal/protocol"
@@ -83,7 +84,12 @@ func (s *Server) handleMachineRepair(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "mark rooms for cleanup", err)
 		return
 	}
-	if _, err := s.store.SetMachineState(ctx, machine.ID, []string{protocol.MachineBroken}, protocol.MachineProvisioning, "", time.Now()); err != nil {
+	to := protocol.MachineProvisioning
+	if m.PowerManaged() && strings.HasPrefix(machine.BrokenReason, reasonStartFailed) {
+		// Not started: the scheduler starts it when a lease needs it.
+		to = protocol.MachineStopped
+	}
+	if _, err := s.store.SetMachineState(ctx, machine.ID, []string{protocol.MachineBroken}, to, "", time.Now()); err != nil {
 		s.internalError(w, "repair machine", err)
 		return
 	}

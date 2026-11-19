@@ -568,8 +568,11 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 		}
 		for _, u := range []struct{ name, v string }{{"login_url", p.LoginURL}, {"management_url", p.ManagementURL}} {
 			if u.v != "" {
-				if pu, err := url.Parse(u.v); err != nil || (pu.Scheme != "https" && pu.Scheme != "http") || pu.Host == "" || pu.Path != "" && pu.Path != "/" {
-					el.add(key+"."+u.name, "must be a base address such as https://host")
+				// http only on loopback (tests): the client secret goes to login_url.
+				pu, err := url.Parse(u.v)
+				if err != nil || pu.Host == "" || pu.Path != "" && pu.Path != "/" || pu.RawQuery != "" ||
+					pu.Scheme != "https" && !(pu.Scheme == "http" && isLoopback(pu.Hostname())) {
+					el.add(key+"."+u.name, "must be a base address such as https://host (http only on loopback)")
 				}
 			}
 		}
