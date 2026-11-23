@@ -196,6 +196,7 @@ func quoteKey(k string) string {
 type DocProvider struct {
 	Name      string
 	Kind      string
+	Auth      string
 	Templates []DocTemplate
 }
 
@@ -216,6 +217,7 @@ func DocumentProviders(data []byte) ([]DocProvider, error) {
 	var raw struct {
 		Providers map[string]struct {
 			Kind      string `toml:"kind"`
+			Auth      string `toml:"auth"`
 			Templates map[string]struct {
 				OS      string         `toml:"os"`
 				Address string         `toml:"address"`
@@ -242,7 +244,7 @@ func DocumentProviders(data []byte) ([]DocProvider, error) {
 	var out []DocProvider
 	for _, pn := range childOrder(order, "providers") {
 		p := raw.Providers[pn]
-		dp := DocProvider{Name: pn, Kind: p.Kind}
+		dp := DocProvider{Name: pn, Kind: p.Kind, Auth: p.Auth}
 		entries := p.Templates
 		if Fixed(p.Kind) {
 			entries = p.Machines

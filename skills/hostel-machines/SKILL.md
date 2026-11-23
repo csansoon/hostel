@@ -209,6 +209,10 @@ tools = ["windows-desktop"]
 warm_running = "30m"
 ```
 
+- Without an application (no admin rights in the Azure directory): `hostel
+  config providers add cloud --kind azure --auth cli`, and run `az login` on
+  the server as the server's user. The server then has the rights of that
+  account (`docs/machine-setup.md`, section 9.3).
 - A static machine can become an Azure machine in place: change its provider
   to `kind = "azure"` with `tenant` and `client_id`, and add `vm`.
 - A failed start makes the machine `broken` with the Azure message; `hostel

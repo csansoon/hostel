@@ -528,6 +528,9 @@ macOS is not in Azure, or Linux); this section adds the Azure part.
 
 ### 9.1 An application for Hostel
 
+If you cannot register an application, use the Azure CLI of the server
+instead (section 9.3) and skip this section.
+
 In the Azure portal:
 
 1. Microsoft Entra ID, App registrations, New registration. Keep the
@@ -580,6 +583,34 @@ join it (the printed command, section 4.2 or 5).
 A machine that is already in a `static` provider can stay: change the provider
 to `kind = "azure"` with `tenant` and `client_id`, and add `vm` to the machine
 (`hostel config edit`). Then run `providers login`.
+
+### 9.3 Without an application: the Azure CLI
+
+The server can use the account of the Azure CLI instead of an application.
+Your account must be able to read, start, and deallocate the machine. The
+server has the rights of that account, which are often more than the custom
+role of section 9.1, so prefer an application when you can.
+
+1. Install the Azure CLI (`az`) on the server.
+2. Sign in as the user that runs the server (the sign-in stays in that user's
+   `~/.azure`):
+
+   ```sh
+   sudo -u hostel -H az login --use-device-code   # open the address and enter the code
+   ```
+
+3. As a Hostel admin:
+
+   ```sh
+   hostel config providers add cloud --kind azure --auth cli [--tenant <tenant ID>]
+   hostel config machines add win --provider cloud --vm <resource ID> --tool windows-desktop
+   ```
+
+The Azure sign-in can end (for example after a password change, or by a
+policy of your organization). Then Hostel cannot start the machine, and the
+server log says to run `az login` again.
+
+### 9.4 The idle time
 
 The idle time before the deallocation (`hostel config edit`):
 

@@ -272,6 +272,8 @@ const providersUsage = `hostel: usage:
   hostel config providers                                       the providers
   hostel config providers add <name> --kind static|namespace|external
   hostel config providers add <name> --kind azure --tenant <ID> --client-id <ID>
+  hostel config providers add <name> --kind azure --auth cli [--tenant <ID>]
+                                                                the account of "az login" on the server
   hostel config providers remove <name>                         no on-demand machines may be left
   hostel config providers login namespace [--cli devbox|nsc]    log the server in to Namespace
   hostel config providers login <azure provider>                give the server the client secret
@@ -286,6 +288,7 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 	kind := fs.String("kind", "", "with add: static, namespace, external, or azure")
 	tenant := fs.String("tenant", "", "with add --kind azure: the directory (tenant) ID")
 	clientID := fs.String("client-id", "", "with add --kind azure: the application (client) ID")
+	auth := fs.String("auth", "", "with add --kind azure: cli for the account of the Azure CLI on the server")
 	only := fs.String("cli", "", "with login: only this CLI (devbox or nsc)")
 	pos, err := cli.Parse(fs, args)
 	if err != nil {
@@ -333,16 +336,21 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 			}
 			keys := [][2]string{{"kind", *kind}}
 			if *kind == config.ProviderAzure {
-				keys = append(keys, [2]string{"tenant", *tenant}, [2]string{"client_id", *clientID})
+				keys = append(keys, [2]string{"auth", *auth}, [2]string{"tenant", *tenant}, [2]string{"client_id", *clientID})
 			}
 			for _, kv := range keys {
+				if kv[1] == "" && (kv[0] == "auth" || *auth == config.AzureAuthCLI) {
+					continue
+				}
 				if doc, err = config.SetKey(doc, []string{"providers", name, kv[0]}, fmt.Sprintf("%q", kv[1])); err != nil {
 					return nil, err
 				}
 			}
 			return doc, nil
 		})
-		if code == 0 && *kind == config.ProviderAzure {
+		if code == 0 && *kind == config.ProviderAzure && *auth == config.AzureAuthCLI {
+			fmt.Fprintf(stdout, "Added the provider %[1]s. On the server, run \"az login\" as the server's user,\nthen add each machine with \"hostel config machines add <name> --provider %[1]s --vm <resource ID>\".\n", name)
+		} else if code == 0 && *kind == config.ProviderAzure {
 			fmt.Fprintf(stdout, "Added the provider %[1]s. Give the server its client secret with \"hostel config providers login %[1]s\",\nthen add each machine with \"hostel config machines add <name> --provider %[1]s --vm <resource ID>\".\n", name)
 		} else if code == 0 {
 			fmt.Fprintf(stdout, "Added the provider %s. Add machines with \"hostel config edit\".\n", name)
@@ -355,6 +363,10 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 		}
 		return providerLogin(clis, stdout, stderr)
 	case sub == "login" && len(pos) == 1:
+		if cliAuth(pos[0]) {
+			fmt.Fprintf(stderr, "hostel: the provider %s signs in with the Azure CLI of the server (auth = \"cli\"): run \"az login\" there as the server's user\n", pos[0])
+			return 1
+		}
 		return providerSecret(pos[0], os.Stdin, stdout, stderr)
 	case sub == "remove" && len(pos) == 1:
 		return changeConfig(stdout, stderr, func(doc []byte) ([]byte, error) {
@@ -367,6 +379,29 @@ func providersCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stderr, providersUsage)
 	return 2
+}
+
+// cliAuth reports whether the provider signs in with the Azure CLI of the
+// server; on an error, the server's answer to the secret tells.
+func cliAuth(name string) bool {
+	c, err := apiClient()
+	if err != nil {
+		return false
+	}
+	doc, err := getConfig(c)
+	if err != nil {
+		return false
+	}
+	providers, err := config.DocumentProviders([]byte(doc.Document))
+	if err != nil {
+		return false
+	}
+	for _, p := range providers {
+		if p.Name == name {
+			return p.Kind == config.ProviderAzure && p.Auth == config.AzureAuthCLI
+		}
+	}
+	return false
 }
 
 // providerSecret sends the client secret of an Azure provider to the server,

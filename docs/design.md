@@ -620,7 +620,7 @@ can mix devbox and instance machines.
 ### Azure machines
 
 M12, `m12-implementation.md`. The provider calls the Azure Resource Manager REST
-API with `net/http` (no SDK, no `az` CLI): a client-credentials token from
+API with `net/http` (no SDK; the `az` CLI only with `auth = "cli"`): a client-credentials token from
 `<login_url>/<tenant>/oauth2/v2.0/token`, then `POST <vm>/start`, `POST
 <vm>/deallocate`, and `GET <vm>/instanceView` on `management_url`, with a pinned
 `api-version`. A start or a deallocation answers `202`; the provider polls the
@@ -637,6 +637,15 @@ signs in again once.
   adds the event "client secret of provider X set" (no value), and tries it with
   `List`. The provider reads the file at each sign-in. The value is never in a
   log, an event, or an answer.
+- **Azure CLI sign-in.** With `auth = "cli"` (owner decision, 2026-11-23), no
+  application or client secret is necessary: the provider runs `az account
+  get-access-token --resource <management_url>/ --output json [--tenant
+  <tenant>]` (30 s deadline) and keeps the token until a minute before its
+  `expires_on`. The account is the one of `az login` as the server's user, with
+  that account's rights (often more than the custom role). The token is never
+  logged; an error shows the first `ERROR:` line of `az`. `providers login`
+  and `PUT /v1/providers/{name}/secret` refuse such a provider and say to run
+  `az login` on the server.
 - **States.** A machine row exists from server start, as for `static`. A machine
   without a lease for `warm_running` (also a `broken` one: it costs money) goes
   `stopping` → `stopped`. A `broken` machine is deallocated too; it stays
@@ -1166,6 +1175,7 @@ not inherited: on a provider it is a limit for all machines together.
 |---|---|---|
 | `kind` | provider | required: `static`, `namespace`, `external`, `azure` |
 | `tenant`, `client_id` | azure provider | required: the directory (tenant) ID and the application (client) ID, GUIDs. The client secret is not here (section 7, "Azure machines") |
+| `auth` | azure provider | `"secret"` (default: the application and its client secret) or `"cli"`: the account of the Azure CLI on the server; then `client_id` and `login_url` are not used, and `tenant` is optional |
 | `login_url`, `management_url` | azure provider | `https://login.microsoftonline.com`, `https://management.azure.com` (other clouds; `http://` only on loopback, for tests) |
 | `vm` | azure machine | required: `/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>` |
 | `label` | provider | the provider's key; the name that people see (a heading in Rooms) |

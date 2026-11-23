@@ -533,3 +533,86 @@ tools = ["probe"]
 	}
 	e.mustHostel("release")
 }
+
+// TestAzureCLI (M12): with auth = "cli", the server signs in with the Azure
+// CLI ("az account get-access-token"; a fake az here). Before "az login" the
+// server reports the error of az and its next step, and "providers login"
+// says what to do instead of asking for a secret. After "az login", a lease
+// starts the machine and Hostel deallocates it after warm_running. The
+// access token is not in the server log.
+func TestAzureCLI(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.init()
+	c := e.createStaticMachine("box")
+	az := newFakeAzure(t, c)
+	az.mu.Lock()
+	az.tokens["cli-token-Zq8"] = true
+	az.mu.Unlock()
+	bin := filepath.Join(e.home, "az-bin")
+	loggedIn, calls := filepath.Join(e.home, "az-logged-in"), filepath.Join(e.home, "az-calls")
+	e.writeFile(filepath.Join(bin, "az"), fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %[1]q
+if [ ! -f %[2]q ]; then
+  echo "WARNING: a warning of az" >&2
+  echo "ERROR: Please run 'az login' to setup account." >&2
+  exit 1
+fi
+echo '{"accessToken": "cli-token-Zq8", "expiresOn": "2099-01-01 00:00:00.000000", "expires_on": '$(($(date +%%s) + 3600))', "tokenType": "Bearer"}'
+`, calls, loggedIn))
+	if err := os.Chmod(filepath.Join(bin, "az"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.vars["PATH"] = bin + string(os.PathListSeparator) + os.Getenv("PATH")
+	e.writeProbeTool()
+	e.writeConfig(serverHeader() + fmt.Sprintf(`
+[providers.cloud]
+kind = "azure"
+auth = "cli"
+tenant = %q
+management_url = %q
+
+[providers.cloud.machines.box]
+vm = %q
+address = %q
+os = "linux"
+tools = ["probe"]
+warm_running = "4s"
+`, azureTenant, az.srv.URL, azureVM, c.address()))
+	s := e.startServer(e.vars["HOSTEL_TOKEN"])
+	e.waitFor("the server reports the error of az", time.Minute, func() bool {
+		return strings.Contains(s.log.String(), `Azure CLI sign-in failed: exit status 1: ERROR: Please run 'az login' to setup account.; run \"az login\" as the server's user`)
+	})
+	if r := e.adminHostel("config", "providers", "login", "cloud"); r.code != 1 || !strings.Contains(r.stderr, `signs in with the Azure CLI of the server (auth = "cli"): run "az login" there`) {
+		t.Fatalf("providers login of a cli provider: %s", r)
+	}
+
+	e.writeFile(loggedIn, "")
+	s.waitMachine("cloud/box", protocol.MachineStopped, time.Minute)
+	e.useGuestToken()
+	e.newRepo(defaultRepoFiles())
+	f := &fixture{e: e, s: s, c: c}
+	f.acquire("probe")
+	if r := e.mustHostel("run", "--", "echo", "on-azure"); !strings.Contains(r.stdout, "on-azure") {
+		t.Fatalf("run: %s", r)
+	}
+	e.mustHostel("release")
+	s.waitMachine("cloud/box", protocol.MachineStopped, 2*time.Minute)
+	if starts, deallocates := az.counts(); starts != 1 || deallocates < 1 || az.running() {
+		t.Fatalf("after warm_running: starts %d, deallocates %d, running %t; want 1, at least 1, false", starts, deallocates, az.running())
+	}
+
+	b, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("account get-access-token --resource %s/ --output json --tenant %s", az.srv.URL, azureTenant)
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line != want {
+			t.Fatalf("az %s; want az %s", line, want)
+		}
+	}
+	if strings.Contains(s.log.String(), "cli-token-Zq8") || strings.Contains(s.log.String(), "a warning of az") {
+		t.Fatal("the server log has the access token or a warning of az")
+	}
+}

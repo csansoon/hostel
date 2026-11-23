@@ -33,6 +33,9 @@ func (s *Server) handleProviderSecret(w http.ResponseWriter, r *http.Request) {
 	case p.Kind != config.ProviderAzure:
 		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("the provider %s is %s; only azure providers take a client secret", name, p.Kind))
 		return
+	case p.Auth == config.AzureAuthCLI:
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("the provider %s signs in with the Azure CLI of the server (auth = \"cli\"): run \"az login\" there as the server's user", name))
+		return
 	}
 	var req protocol.ProviderSecret
 	if !decodeBody(w, r, &req) {

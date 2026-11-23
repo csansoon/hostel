@@ -22,6 +22,8 @@ import (
 //
 //   - HOSTEL_SMOKE_AZURE_TENANT, HOSTEL_SMOKE_AZURE_CLIENT_ID: the application;
 //   - HOSTEL_SMOKE_AZURE_SECRET_FILE: a file with its client secret;
+//   - or, instead of the application, HOSTEL_SMOKE_AZURE_AUTH=cli: the account
+//     of the Azure CLI ("az login" first; HOSTEL_SMOKE_AZURE_TENANT optional);
 //   - HOSTEL_SMOKE_AZURE_VM: the resource ID of the machine;
 //   - HOSTEL_SMOKE_WINDOWS and HOSTEL_SMOKE_WINDOWS_KEY: the SSH address of
 //     the machine when it runs, and the key that its machine user accepts
@@ -34,16 +36,23 @@ func TestSmokeAzure(t *testing.T) {
 	if os.Getenv("HOSTEL_SMOKE_AZURE") != "1" {
 		t.Skip("set HOSTEL_SMOKE_AZURE=1 (it starts a real Azure machine; see the test comment)")
 	}
-	vars := map[string]string{}
-	for _, k := range []string{"HOSTEL_SMOKE_AZURE_TENANT", "HOSTEL_SMOKE_AZURE_CLIENT_ID", "HOSTEL_SMOKE_AZURE_SECRET_FILE",
-		"HOSTEL_SMOKE_AZURE_VM", "HOSTEL_SMOKE_WINDOWS", "HOSTEL_SMOKE_WINDOWS_KEY"} {
+	cli := os.Getenv("HOSTEL_SMOKE_AZURE_AUTH") == config.AzureAuthCLI
+	required := []string{"HOSTEL_SMOKE_AZURE_VM", "HOSTEL_SMOKE_WINDOWS", "HOSTEL_SMOKE_WINDOWS_KEY"}
+	if !cli {
+		required = append(required, "HOSTEL_SMOKE_AZURE_TENANT", "HOSTEL_SMOKE_AZURE_CLIENT_ID", "HOSTEL_SMOKE_AZURE_SECRET_FILE")
+	}
+	vars := map[string]string{"HOSTEL_SMOKE_AZURE_TENANT": os.Getenv("HOSTEL_SMOKE_AZURE_TENANT")}
+	for _, k := range required {
 		if vars[k] = os.Getenv(k); vars[k] == "" {
 			t.Fatalf("%s is not set", k)
 		}
 	}
-	secret, err := os.ReadFile(vars["HOSTEL_SMOKE_AZURE_SECRET_FILE"])
-	if err != nil {
-		t.Fatalf("read HOSTEL_SMOKE_AZURE_SECRET_FILE: %v", err)
+	var secret []byte
+	if !cli {
+		var err error
+		if secret, err = os.ReadFile(vars["HOSTEL_SMOKE_AZURE_SECRET_FILE"]); err != nil {
+			t.Fatalf("read HOSTEL_SMOKE_AZURE_SECRET_FILE: %v", err)
+		}
 	}
 	key, err := os.ReadFile(vars["HOSTEL_SMOKE_WINDOWS_KEY"])
 	if err != nil {
@@ -63,7 +72,11 @@ func TestSmokeAzure(t *testing.T) {
 	e := newEnv(t)
 	secretFile := filepath.Join(e.home, "azure-secret")
 	e.writeFile(secretFile, string(secret))
-	p := &config.Provider{Name: "cloud", Kind: config.ProviderAzure, Tenant: vars["HOSTEL_SMOKE_AZURE_TENANT"], ClientID: vars["HOSTEL_SMOKE_AZURE_CLIENT_ID"],
+	auth := ""
+	if cli {
+		auth = config.AzureAuthCLI
+	}
+	p := &config.Provider{Name: "cloud", Kind: config.ProviderAzure, Auth: auth, Tenant: vars["HOSTEL_SMOKE_AZURE_TENANT"], ClientID: vars["HOSTEL_SMOKE_AZURE_CLIENT_ID"],
 		TemplateOrder: []string{"win"}, Templates: map[string]*config.Template{"win": {Name: "win", VM: vars["HOSTEL_SMOKE_AZURE_VM"]}}}
 	az := provider.NewAzure(p, secretFile, nil, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -91,25 +104,34 @@ func TestSmokeAzure(t *testing.T) {
 	e.init()
 	header := strings.Replace(serverHeader(), fmt.Sprintf("helper_dir = %q", helperDir), fmt.Sprintf("helper_dir = %q", dist), 1)
 	header = strings.Replace(header, `reconcile = "2s"`, `reconcile = "15s"`, 1)
+	signIn := fmt.Sprintf("tenant = %q\nclient_id = %q\n", p.Tenant, p.ClientID)
+	if cli {
+		signIn = "auth = \"cli\"\n"
+		if p.Tenant != "" {
+			signIn += fmt.Sprintf("tenant = %q\n", p.Tenant)
+		}
+		// The Azure CLI keeps its sign-in in the real home directory.
+		e.vars["AZURE_CONFIG_DIR"] = azureConfigDir(t)
+	}
 	e.writeConfig(header + fmt.Sprintf(`
 [providers.cloud]
 kind = "azure"
-tenant = %q
-client_id = %q
-
+%s
 [providers.cloud.machines.win]
 vm = %q
 address = %q
 os = "windows"
 warm_running = "1m"
-`, p.Tenant, p.ClientID, p.Templates["win"].VM, vars["HOSTEL_SMOKE_WINDOWS"]))
+`, signIn, p.Templates["win"].VM, vars["HOSTEL_SMOKE_WINDOWS"]))
 	s := e.startServer(e.vars["HOSTEL_TOKEN"])
-	saved := e.vars["HOSTEL_TOKEN"]
-	e.vars["HOSTEL_TOKEN"] = e.admin
-	if r := e.hostelIn(string(secret), "config", "providers", "login", "cloud"); r.code != 0 {
-		t.Fatalf("providers login: %s", r)
+	if !cli {
+		saved := e.vars["HOSTEL_TOKEN"]
+		e.vars["HOSTEL_TOKEN"] = e.admin
+		if r := e.hostelIn(string(secret), "config", "providers", "login", "cloud"); r.code != 0 {
+			t.Fatalf("providers login: %s", r)
+		}
+		e.vars["HOSTEL_TOKEN"] = saved
 	}
-	e.vars["HOSTEL_TOKEN"] = saved
 	s.waitMachine("cloud/win", protocol.MachineStopped, 2*time.Minute)
 
 	e.useGuestToken()
@@ -135,4 +157,17 @@ warm_running = "1m"
 	if err != nil || len(listed) != 1 || listed[0].State != provider.PowerStopped {
 		t.Fatalf("Azure power state after warm_running: %+v (err %v), want deallocated", listed, err)
 	}
+}
+
+// azureConfigDir is the directory of the Azure CLI sign-in of the user who
+// runs the test: the server of the test has another home directory.
+func azureConfigDir(t *testing.T) string {
+	if d := os.Getenv("AZURE_CONFIG_DIR"); d != "" {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(home, ".azure")
 }

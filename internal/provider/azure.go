@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,7 +52,8 @@ type Azure struct {
 }
 
 // NewAzure reads the client secret from secretFile at each sign-in, so a new
-// secret applies without a new provider.
+// secret applies without a new provider. With auth "cli", it runs the Azure
+// CLI instead.
 func NewAzure(cfg *config.Provider, secretFile string, serverKey ssh.Signer, dialMachine MachineDialer) *Azure {
 	a := &Azure{
 		Static:     NewStatic(cfg, serverKey, dialMachine),
@@ -266,6 +268,9 @@ func (a *Azure) accessToken(ctx context.Context) (string, error) {
 	if a.token != "" && time.Now().Before(a.expires) {
 		return a.token, nil
 	}
+	if a.cfg.Auth == config.AzureAuthCLI {
+		return a.cliToken(ctx)
+	}
 	secret, err := os.ReadFile(a.secretFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("no client secret for provider %s: run \"hostel config providers login %s\"", a.cfg.Name, a.cfg.Name)
@@ -313,6 +318,81 @@ func (a *Azure) accessToken(ctx context.Context) (string, error) {
 	secs, _ := strconv.Atoi(strings.Trim(string(t.ExpiresIn), `"`))
 	a.token, a.expires = t.AccessToken, time.Now().Add(time.Duration(secs)*time.Second-time.Minute)
 	return a.token, nil
+}
+
+// cliToken gets an access token from the Azure CLI of the server (the
+// account of "az login" as the server's user). Its output has the token: it
+// is never logged.
+func (a *Azure) cliToken(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, azureRequestTimeout)
+	defer cancel()
+	args := []string{"account", "get-access-token", "--resource", a.management + "/", "--output", "json"}
+	if a.cfg.Tenant != "" {
+		args = append(args, "--tenant", a.cfg.Tenant)
+	}
+	cmd := exec.CommandContext(ctx, "az", args...)
+	var stderr strings.Builder
+	cmd.Stderr = &limitWriter{w: &stderr, n: 4096}
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrNotFound) {
+		return "", fmt.Errorf("provider %s signs in with the Azure CLI, but az is not installed on the server: install it, then run \"az login\" as the server's user", a.cfg.Name)
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			err = fmt.Errorf("no answer in %s", azureRequestTimeout)
+		}
+		return "", fmt.Errorf("Azure CLI sign-in failed: %v: %s; run \"az login\" as the server's user", err, cliError(stderr.String()))
+	}
+	var t struct {
+		AccessToken string          `json:"accessToken"`
+		ExpiresOn   json.RawMessage `json:"expires_on"`
+	}
+	if err := json.Unmarshal(out, &t); err != nil || t.AccessToken == "" {
+		return "", errors.New("Azure CLI sign-in: the answer of \"az account get-access-token\" has no access token")
+	}
+	expires := time.Now().Add(5 * time.Minute)
+	if secs, err := strconv.ParseInt(strings.Trim(string(t.ExpiresOn), `"`), 10, 64); err == nil && secs > 0 {
+		expires = time.Unix(secs, 0).Add(-time.Minute)
+	}
+	a.token, a.expires = t.AccessToken, expires
+	return a.token, nil
+}
+
+// cliError is the first error line of the Azure CLI (it also prints
+// warnings), at most 300 characters.
+func cliError(stderr string) string {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	line := lines[0]
+	for _, l := range lines {
+		if strings.HasPrefix(l, "ERROR:") {
+			line = l
+			break
+		}
+	}
+	line = strings.TrimSpace(line)
+	if len(line) > 300 {
+		line = line[:300]
+	}
+	if line == "" {
+		return "no message"
+	}
+	return line
+}
+
+// limitWriter keeps the first n bytes and drops the rest.
+type limitWriter struct {
+	w io.Writer
+	n int
+}
+
+func (l *limitWriter) Write(p []byte) (int, error) {
+	if l.n > 0 {
+		k := min(len(p), l.n)
+		l.w.Write(p[:k])
+		l.n -= k
+	}
+	return len(p), nil
 }
 
 func azureError(status int, body []byte) error {

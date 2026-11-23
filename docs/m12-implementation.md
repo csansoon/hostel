@@ -185,6 +185,11 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
 - **Smoke test.** `make test-smoke-azure` (`test/e2e/smoke_azure_test.go`):
   the environment variables are in the test comment. The machine must be
   deallocated at the start; the test deallocates it also when it fails.
+- **Azure CLI sign-in** (owner decision, 2026-11-23). `auth = "cli"`: the
+  provider gets the token from `az account get-access-token` on the server
+  (the account of `az login` as the server's user). For an owner who cannot
+  register an application. `TestAzureCLI` uses a fake `az`;
+  `HOSTEL_SMOKE_AZURE_AUTH=cli` runs the smoke test with the local `az` sign-in.
 - **Not done.** Creating machines from an image; a certificate or a managed
   identity instead of a client secret; the auto-shutdown schedule (the owner
   sets it in the portal).

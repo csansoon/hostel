@@ -31,6 +31,12 @@ const (
 
 // Fixed reports whether the entries of a provider kind are existing machines
 // ([providers.<name>.machines]), not templates of machines that it creates.
+// The sign-ins of an azure provider (auth).
+const (
+	AzureAuthSecret = "secret" // an application and its client secret (the default)
+	AzureAuthCLI    = "cli"    // the account of the Azure CLI on the server
+)
+
 func Fixed(kind string) bool { return kind == ProviderStatic || kind == ProviderAzure }
 
 var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -163,8 +169,11 @@ type Provider struct {
 	CommandEnv  map[string]string `toml:"command_env,omitempty"`
 	Timeouts    *Timeouts         `toml:"timeouts,omitempty"`
 	// Tenant and ClientID are the Azure sign-in (azure); the client secret is
-	// on the server, not in the configuration. LoginURL and ManagementURL
-	// replace the public Azure addresses (national clouds, tests).
+	// on the server, not in the configuration. With Auth "cli", the server
+	// uses the account of the Azure CLI ("az login" as the server's user)
+	// instead, and Tenant is optional. LoginURL and ManagementURL replace the
+	// public Azure addresses (national clouds, tests).
+	Auth          string               `toml:"auth,omitempty"`
 	Tenant        string               `toml:"tenant,omitempty"`
 	ClientID      string               `toml:"client_id,omitempty"`
 	LoginURL      string               `toml:"login_url,omitempty"`
@@ -564,11 +573,23 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 			// "hostel config providers login namespace" is the Namespace login.
 			el.add(key, "an azure provider cannot be named namespace")
 		}
-		if !uuidRE.MatchString(p.Tenant) {
-			el.add(key+".tenant", "required for an azure provider: the directory (tenant) ID, a GUID")
-		}
-		if !uuidRE.MatchString(p.ClientID) {
-			el.add(key+".client_id", "required for an azure provider: the application (client) ID, a GUID")
+		switch p.Auth {
+		case "", AzureAuthSecret:
+			if !uuidRE.MatchString(p.Tenant) {
+				el.add(key+".tenant", "required for an azure provider: the directory (tenant) ID, a GUID")
+			}
+			if !uuidRE.MatchString(p.ClientID) {
+				el.add(key+".client_id", "required for an azure provider: the application (client) ID, a GUID (or auth = \"cli\" for the account of the Azure CLI)")
+			}
+		case AzureAuthCLI:
+			if p.Tenant != "" && !uuidRE.MatchString(p.Tenant) {
+				el.add(key+".tenant", "the directory (tenant) ID must be a GUID")
+			}
+			if p.ClientID != "" || p.LoginURL != "" {
+				el.add(key, "client_id and login_url are not used with auth = \"cli\"")
+			}
+		default:
+			el.add(key+".auth", "unknown sign-in %q; use %q (an application and its client secret, the default) or %q (the account of the Azure CLI on the server)", p.Auth, AzureAuthSecret, AzureAuthCLI)
 		}
 		for _, u := range []struct{ name, v string }{{"login_url", p.LoginURL}, {"management_url", p.ManagementURL}} {
 			if u.v != "" {
@@ -580,8 +601,8 @@ func (s *Server) resolveProvider(el *errList, pn string, p *Provider) {
 				}
 			}
 		}
-	} else if p.Tenant != "" || p.ClientID != "" || p.LoginURL != "" || p.ManagementURL != "" {
-		el.add(key, "tenant, client_id, login_url, and management_url are only for azure providers")
+	} else if p.Auth != "" || p.Tenant != "" || p.ClientID != "" || p.LoginURL != "" || p.ManagementURL != "" {
+		el.add(key, "auth, tenant, client_id, login_url, and management_url are only for azure providers")
 	}
 	if p.Kind == ProviderExternal {
 		if len(p.Command) == 0 {
