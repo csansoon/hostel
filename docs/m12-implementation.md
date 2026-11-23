@@ -204,5 +204,10 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
   timeout; `TestStaticOffline`, an SSH `EOF` that is not counted as
   unreachable). `TestAcquireBackground` now uses `poll_timeout = "12s"` (its
   keeper missed 6 s at a load average of 34).
-- The smoke test against a real Azure machine did not run: it needs the
-  owner's application and client secret.
+- The smoke test against a real Azure machine did not run on 2026-11-19: it
+  needed the owner's application and client secret.
+- 2026-11-23: `TestAzureCLI` passes. The smoke test against a real Azure
+  Windows machine passed with `HOSTEL_SMOKE_AZURE_AUTH=cli` (341 s): the lease
+  was ready 3 min 9 s after `acquire` (start of the deallocated machine and
+  provisioning), and Hostel deallocated the machine after `warm_running`
+  (1 min). The client-secret sign-in was not tried against real Azure.
