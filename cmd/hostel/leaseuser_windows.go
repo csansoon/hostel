@@ -179,7 +179,6 @@ func serveLeaseUsers(stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel: lease-user serve runs only as the Windows service "+leaseService)
 		return 2
 	}
-	inRootService = true
 	if err := svc.Run(leaseService, leaseHandler{}); err != nil {
 		return 1
 	}
@@ -404,7 +403,7 @@ func runLeaseOp(req leaseRequest) (any, error) {
 		// The root step of a remote update (M13). The connection restarts,
 		// and the service when the update replaced its binary, after the
 		// answer.
-		res, restart, err := updateServiceBinary(config.OSWindows, true)
+		res, restart, err := updateSigned(config.OSWindows)
 		if err == nil && restart != nil {
 			afterAnswer = func() {
 				restart()

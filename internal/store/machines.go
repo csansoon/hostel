@@ -473,13 +473,35 @@ func (s *Store) StartMachineUpdate(ctx context.Context, id int64, tag string) (b
 	return n == 1, err
 }
 
-// EndMachineUpdate clears the update and gives the machine its drain state of
+// FinishMachineUpdate ends an update in one transaction: the machine goes
+// from updating to the state to (with reason), and gets its drain state of
 // before.
-func (s *Store) EndMachineUpdate(ctx context.Context, id int64) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = update_drained, update_to = '', update_drained = 0 WHERE id = ? AND update_to != ''`, id); err != nil {
-		return fmt.Errorf("end the update of machine %d: %w", id, err)
+func (s *Store) FinishMachineUpdate(ctx context.Context, id int64, to, reason string, now time.Time) (bool, error) {
+	changed := false
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var state, name string
+		if err := tx.QueryRowContext(ctx, `SELECT state, name FROM machines WHERE id = ?`, id).Scan(&state, &name); err != nil {
+			return err
+		}
+		if state != "updating" {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE machines SET state = ?, broken_reason = ?, state_changed_at = ?,
+			drained = CASE WHEN update_to = '' THEN drained ELSE update_drained END, update_to = '', update_drained = 0 WHERE id = ?`,
+			to, reason, now.UnixMilli(), id); err != nil {
+			return err
+		}
+		changed = true
+		msg := "machine " + name + " " + state + " → " + to
+		if reason != "" {
+			msg += ": " + reason
+		}
+		return insertEvent(ctx, tx, now, "", id, "machine", msg)
+	})
+	if err != nil {
+		return false, fmt.Errorf("finish the update of machine %d: %w", id, err)
 	}
-	return nil
+	return changed, nil
 }
 
 // SetDrained sets the drain state; during a remote update, the state that

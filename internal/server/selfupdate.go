@@ -99,10 +99,13 @@ func (s *Server) runUpdate(src *update.Source, tag, machinesBy string) {
 		if err := update.Server(ctx, src, rel, s.exe, s.config().HelperDir); err != nil {
 			return err
 		}
-		if machinesBy == "" {
-			return nil
+		if machinesBy != "" {
+			if err := os.WriteFile(filepath.Join(s.config().DataDir, updateMachinesFile), []byte(machinesBy+"\n"), 0o600); err != nil {
+				// The server is updated; only the machines wait for an admin.
+				s.log.Error("server update: the machine updates after the restart", "err", err)
+			}
 		}
-		return os.WriteFile(filepath.Join(s.config().DataDir, updateMachinesFile), []byte(machinesBy+"\n"), 0o600)
+		return nil
 	}()
 	s.update.mu.Lock()
 	defer s.update.mu.Unlock()

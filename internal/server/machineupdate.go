@@ -22,8 +22,24 @@ import (
 // connection of the machine with the new version (M13).
 const machineUpdateWait = 10 * time.Minute
 
-// errUpToDate: the machine's connection has the server's release already.
+// errUpToDate: the machine's connection has the server's release already, or
+// a newer one.
 var errUpToDate = errors.New("up to date")
+
+// needsUpdate: a connection with version have needs the release tag (a
+// build that is not a release, such as dev, gets it too).
+func needsUpdate(have, tag string) bool {
+	if have == tag {
+		return false
+	}
+	_, known := update.Parse(have)
+	return !known || update.Older(have, tag)
+}
+
+// updateReason is the end reason of the leases that an update ends.
+func updateReason(machine string) string {
+	return fmt.Sprintf("the machine %s is updated; acquire again", machine)
+}
 
 // serverRelease is the signed release of helper_dir (update.Server writes
 // it), checked with the release key of this server.
@@ -83,8 +99,8 @@ func (s *Server) startMachineUpdate(ctx context.Context, machine store.Machine, 
 	}
 	have := s.machines.Version(m.Key())
 	switch {
-	case have == rel.Tag:
-		return rel.Tag, errUpToDate
+	case have != "" && !needsUpdate(have, rel.Tag):
+		return have, errUpToDate
 	case machine.State != protocol.MachineRunning:
 		return "", fmt.Errorf("machine %s is %s; Hostel updates a running machine (repair it first)", machine.Name, machine.State)
 	}
@@ -92,14 +108,19 @@ func (s *Server) startMachineUpdate(ctx context.Context, machine store.Machine, 
 		return "", err
 	}
 	s.store.AddEvent(ctx, time.Now(), "", machine.ID, "admin", fmt.Sprintf("machine %s: update from %s to %s by %s", machine.Name, have, rel.Tag, admin))
+	// Also each loop pass (startUpdates): a lease that the scheduler
+	// assigned meanwhile, and after a restart.
 	for _, l := range s.machineLeases(ctx, machine.ID) {
-		if err := s.endLease(ctx, l.ID, fmt.Sprintf("the machine %s is updated (by %s); acquire again", machine.Name, admin)); err != nil {
+		if err := s.endLease(ctx, l.ID, updateReason(machine.Name)); err != nil {
 			s.log.Warn("machine update: end a lease", "lease", l.ID, "err", err)
 		}
 	}
 	s.kickScheduler()
 	return rel.Tag, nil
 }
+
+// windowsServiceBinary is the binary of the connect service on Windows.
+const windowsServiceBinary = `C:\ProgramData\hostel\hostel.exe`
 
 // updateMachinesFile, in data_dir, asks the server that starts after a server
 // update to update its machines (POST /v1/server/update with "machines").
@@ -167,20 +188,28 @@ func (s *Server) updateMachines(ctx context.Context, admin string, quiet bool) (
 // "machines", it updates each machine that connects with an older version,
 // for updateMachinesTime after the start.
 func (s *Server) updateMachinesAfterUpdate(ctx context.Context) {
+	file := filepath.Join(s.config().DataDir, updateMachinesFile)
 	if !s.updateMachinesChecked {
+		// The file stays for the whole time: a second restart continues.
 		s.updateMachinesChecked = true
-		file := filepath.Join(s.config().DataDir, updateMachinesFile)
-		if data, err := os.ReadFile(file); err == nil {
-			os.Remove(file)
+		if fi, err := os.Stat(file); err == nil {
+			data, _ := os.ReadFile(file)
 			s.updateMachinesBy = strings.TrimSpace(string(data))
-			s.updateMachinesUntil = time.Now().Add(updateMachinesTime)
+			s.updateMachinesUntil = fi.ModTime().Add(updateMachinesTime)
+			s.log.Info("machine updates after the server update", "by", s.updateMachinesBy, "until", s.updateMachinesUntil)
 		}
 	}
-	if s.updateMachinesBy == "" || time.Now().After(s.updateMachinesUntil) {
+	if s.updateMachinesBy == "" {
+		return
+	}
+	if time.Now().After(s.updateMachinesUntil) {
+		os.Remove(file)
+		s.updateMachinesBy = ""
 		return
 	}
 	if _, err := s.serverRelease(); err != nil {
 		s.log.Warn("update machines after the server update", "err", err)
+		os.Remove(file)
 		s.updateMachinesBy = ""
 		return
 	}
@@ -211,8 +240,19 @@ func (s *Server) startUpdates(ctx context.Context) error {
 		}
 	}
 	for _, r := range machines {
-		if r.UpdateTo != "" && r.State == protocol.MachineRunning && !busy[r.ID] {
+		if r.UpdateTo == "" || r.State != protocol.MachineRunning {
+			continue
+		}
+		if !busy[r.ID] {
 			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineRunning}, protocol.MachineUpdating, "update to "+r.UpdateTo, time.Now())
+			continue
+		}
+		for _, l := range s.machineLeases(ctx, r.ID) {
+			if l.State != protocol.LeaseCleaning {
+				if err := s.endLease(ctx, l.ID, updateReason(r.Name)); err != nil {
+					s.log.Warn("machine update: end a lease", "lease", l.ID, "err", err)
+				}
+			}
 		}
 	}
 	return nil
@@ -227,8 +267,12 @@ func (s *Server) startUpdates(ctx context.Context) error {
 func (s *Server) stepUpdating(ctx context.Context, r store.Machine, m *config.Template) {
 	fail := func(err error) {
 		s.log.Warn("machine update failed", "machine", r.Name, "err", err)
-		s.store.EndMachineUpdate(ctx, r.ID)
-		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineUpdating}, protocol.MachineBroken, "update failed: "+err.Error(), time.Now())
+		s.store.FinishMachineUpdate(ctx, r.ID, protocol.MachineBroken, "update failed: "+err.Error(), time.Now())
+	}
+	if r.UpdateTo == "" {
+		// Nothing to wait for (a row from an interrupted end).
+		s.store.FinishMachineUpdate(ctx, r.ID, protocol.MachineProvisioning, "", time.Now())
+		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, machineUpdateWait)
 	defer cancel()
@@ -239,7 +283,7 @@ func (s *Server) stepUpdating(ctx context.Context, r store.Machine, m *config.Te
 	defer tick.Stop()
 	for {
 		have := s.machines.Version(m.Key())
-		if have == r.UpdateTo {
+		if have != "" && !needsUpdate(have, r.UpdateTo) {
 			break
 		}
 		if have != "" && steps < 3 && time.Since(last) > 30*time.Second {
@@ -270,10 +314,7 @@ func (s *Server) stepUpdating(ctx context.Context, r store.Machine, m *config.Te
 		case <-tick.C:
 		}
 	}
-	if err := s.store.EndMachineUpdate(ctx, r.ID); err != nil {
-		return
-	}
-	if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineUpdating}, protocol.MachineProvisioning, "", time.Now()); ok {
+	if ok, _ := s.store.FinishMachineUpdate(ctx, r.ID, protocol.MachineProvisioning, "", time.Now()); ok {
 		s.store.AddEvent(ctx, time.Now(), "", r.ID, "machine", fmt.Sprintf("machine %s: updated to %s", r.Name, r.UpdateTo))
 	}
 }
@@ -290,7 +331,10 @@ func (s *Server) runUpdateStep(ctx context.Context, machineID int64) (int, strin
 	defer machine.Conn.Close()
 	cmd := "sudo -n " + leaseUserRoot + " machine update --signed"
 	if machine.OS == config.OSWindows {
-		if cmd, err = shell.Command(machine.Shell, machine.HelperPath(), "machine", "update", "--signed"); err != nil {
+		// The service directory's binary is only the client of the SYSTEM
+		// service; it is from the join or the last update (the helper can
+		// be older).
+		if cmd, err = shell.Command(machine.Shell, windowsServiceBinary, "machine", "update", "--signed"); err != nil {
 			return 0, "", err
 		}
 	}

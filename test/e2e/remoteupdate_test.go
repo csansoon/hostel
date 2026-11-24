@@ -173,15 +173,16 @@ func TestRemoteMachineUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old, err := os.ReadFile(versionBin(t, "linux", dockerArch, "v1.1.0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(own, linux), old, 0o755); err != nil {
+	// A server that someone took over serves its own program with the
+	// signed files: the root step must not run it before the SHA-256 check.
+	if err := os.WriteFile(filepath.Join(own, linux), []byte("#!/bin/sh\nid -u > /tmp/ran-as-$(id -u)\necho hostel v1.2.0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if r := e.adminHostel("config", "machines", "update", "home/box"); r.code != 1 || !strings.Contains(r.stderr, "is not the one of release v1.2.0") {
 		t.Fatalf("machines update with a changed binary: %s", r)
+	}
+	if out, _ := docker("exec", name, "sh", "-c", "ls /tmp/ran-as-* 2>/dev/null"); out != "" {
+		t.Fatalf("the root step ran the server's unchecked binary: %s", out)
 	}
 	if ms := s.machine("home/box"); ms.State != protocol.MachineBroken || !strings.HasPrefix(ms.Reason, "update failed: ") || ms.Drained {
 		t.Fatalf("the machine after a refused update: %+v", ms)
@@ -191,6 +192,63 @@ func TestRemoteMachineUpdate(t *testing.T) {
 	}
 	e.adminHostel("config", "machines", "repair", "home/box")
 	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
+
+	// A signature that the machine's release key does not accept, and an
+	// older release (the root step directly, as the machine user can run
+	// it): refused, and nothing changes.
+	_, other, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey := base64.StdEncoding.EncodeToString(other.Public().(ed25519.PublicKey))
+	if _, err := docker("exec", name, "sh", "-c", "printf '%s\\n' '"+otherKey+"' > /etc/hostel/release-key"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := docker("exec", "-u", "hostel", name, "sudo", "-n", "/etc/hostel/hostel", "machine", "update", "--signed"); err == nil ||
+		!strings.Contains(err.Error()+out, "the signature of release v1.2.0 is not valid") {
+		t.Fatalf("the root step with another release key: %v\n%s", err, out)
+	}
+	if _, err := docker("exec", name, "sh", "-c", "printf '%s\\n' '"+key+"' > /etc/hostel/release-key"); err != nil {
+		t.Fatal(err)
+	}
+	signed := func(tag string, files map[string]string) {
+		t.Helper()
+		var sums strings.Builder
+		for name, path := range files {
+			fmt.Fprintf(&sums, "%s  %s\n", update.FileSHA256(path), name)
+		}
+		sig := base64.StdEncoding.EncodeToString(ed25519.Sign(rel.key, update.SignedText(tag, []byte(sums.String()))))
+		for name, data := range map[string]string{update.TagFile: tag + "\n", update.SumsFile: sums.String(), update.SigFile: sig + "\n"} {
+			if err := os.WriteFile(filepath.Join(own, name), []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	release, err := os.ReadFile(filepath.Join(own, update.TagFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums, _ := os.ReadFile(filepath.Join(own, update.SumsFile))
+	sig, _ := os.ReadFile(filepath.Join(own, update.SigFile))
+	signed("v1.0.0", map[string]string{linux: versionBin(t, "linux", dockerArch, "v1.0.0")})
+	if out, err := docker("exec", "-u", "hostel", name, "sudo", "-n", "/etc/hostel/hostel", "machine", "update", "--signed"); err == nil ||
+		!strings.Contains(err.Error()+out, "the server offers v1.0.0, which is older than v1.1.0 on this machine: not installed") {
+		t.Fatalf("the root step with an older release: %v\n%s", err, out)
+	}
+	if r := e.adminHostel("config", "machines", "update", "home/box"); r.code != 0 || !strings.Contains(r.stdout, "Up to date: machine home/box has v1.1.0 already.") {
+		t.Fatalf("machines update when the server offers an older release: %s", r)
+	}
+	for name, data := range map[string][]byte{update.TagFile: release, update.SumsFile: sums, update.SigFile: sig} {
+		if err := os.WriteFile(filepath.Join(own, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v, _ := docker("exec", name, "/etc/hostel/hostel", "--version"); v != "hostel v1.1.0" {
+		t.Fatalf("the machine's binary after the refused steps: %q", v)
+	}
+
+	// A drained machine stays drained after the update.
+	e.adminHostel("config", "machines", "drain", "home/box")
 
 	// "server update --remote --machines": the new server updates the
 	// machine when it connects.
@@ -215,5 +273,10 @@ func TestRemoteMachineUpdate(t *testing.T) {
 	}
 	<-killed
 	e.waitFor("the connect version v1.3.0", 5*time.Minute, func() bool { return connectVersion() == "v1.3.0" })
-	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
+	if ms := s.waitMachine("home/box", protocol.MachineRunning, machineReady); !ms.Drained || ms.UpdateTo != "" {
+		t.Fatalf("a drained machine after the update: %+v, want drained", ms)
+	}
+	if !strings.Contains(s.log.String(), `"msg":"machine updates after the server update"`) {
+		t.Fatal("the new server did not read the machine updates of --machines")
+	}
 }

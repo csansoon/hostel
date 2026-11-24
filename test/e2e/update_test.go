@@ -477,6 +477,9 @@ func TestMachineUpdate(t *testing.T) {
 	a.in("\r")
 	a.waitFor(10*time.Second, `Connect\s+v1\.0\.0\s+◆ out of date`, `as an administrator on it: sudo /etc/hostel/hostel machine update`)
 	// An admin can also update it from the app (M13: TestRemoteMachineUpdate).
+	// Update is an action of a running machine.
+	s.waitMachine("home/box3", protocol.MachineRunning, machineReady)
+	a.waitFor(10*time.Second, `Vacant`)
 	a.in("a")
 	a.waitFor(10*time.Second, `Installs the server.s version v1\.1\.0; its leases end`)
 	a.in("\x1b")
@@ -545,5 +548,9 @@ func TestAppUpdate(t *testing.T) {
 	a.waitFor(time.Minute, `The server updates from v1\.0\.0 to v1\.1\.0`)
 	a.waitFor(2*time.Minute, `Version\s+v1\.1\.0`)
 	a.waitGone(10*time.Second, `Update everything`)
+	// Update everything also asked for the machines (M13).
+	e.waitFor("the new server reads the machine updates", time.Minute, func() bool {
+		return strings.Contains(f.s.log.String(), `"msg":"machine updates after the server update"`)
+	})
 	a.quit()
 }

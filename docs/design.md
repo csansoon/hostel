@@ -131,7 +131,7 @@ them on the server machine.
   (state `updating`), and runs the root step as the machine user:
   `sudo -n /etc/hostel/hostel machine update --signed` (the join writes
   `/etc/sudoers.d/hostel-update`, which allows only this command), or on
-  Windows the helper as the client of the SYSTEM service `HostelLeaseUsers`
+  Windows `C:\\ProgramData\\hostel\\hostel.exe` as the client of the SYSTEM service `HostelLeaseUsers`
   (the join installs it on each Windows machine; op `update`). The root step
   checks the signature with the release key of the installed binary (or the
   root-owned `release-key` next to it), refuses a release that is not newer,

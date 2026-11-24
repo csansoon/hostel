@@ -18,6 +18,7 @@ import (
 	"github.com/csansoon/hostel/internal/client"
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/update"
+	"github.com/csansoon/hostel/internal/version"
 )
 
 // machineUpdateTimeout bounds the download of the binary from the server.
@@ -57,7 +58,16 @@ func machineUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel: run this as an administrator (sudo on macOS and Linux, an administrator PowerShell on Windows)")
 		return 1
 	}
-	res, restart, err := updateServiceBinary(osName, *signed)
+	if osName != config.OSWindows {
+		// Commands only from the system directories: sudo can keep the
+		// caller's PATH.
+		os.Setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	update := updateServiceBinary
+	if *signed {
+		update = updateSigned
+	}
+	res, restart, err := update(osName)
 	if err != nil {
 		fmt.Fprintln(stderr, "hostel machine update:", err)
 		return 1
@@ -80,30 +90,36 @@ func machineUpdate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// updateServiceBinary replaces the service binary and installs the root step
-// of a remote update. restart (nil when nothing changed) starts the service
-// again with the new binary.
-func updateServiceBinary(osName string, signed bool) (res string, restart func() (string, error), err error) {
+// joinedServer reads the join state of the machine and an HTTP client with
+// the TLS of the join.
+func joinedServer(osName string) (joinState, *http.Client, error) {
 	dir := serviceDir(osName)
 	var st joinState
 	data, err := os.ReadFile(filepath.Join(dir, "join.json"))
 	if err != nil || json.Unmarshal(data, &st) != nil || st.Server == "" {
-		return "", nil, fmt.Errorf("this machine has not joined a server (%s/join.json is missing). A machine that joined runs this command; on a machine that you set up by hand (\"hostel helper connect\"), install the new binary yourself and restart its connection", dir)
-	}
-	bin := filepath.Join(dir, "hostel")
-	if osName == config.OSWindows {
-		bin += ".exe"
+		return st, nil, fmt.Errorf("this machine has not joined a server (%s/join.json is missing). A machine that joined runs this command; on a machine that you set up by hand (\"hostel helper connect\"), install the new binary yourself and restart its connection", dir)
 	}
 	tlsConfig, err := client.TLSConfig(&config.Guest{Key: st.Key})
 	if err != nil {
-		return "", nil, err
+		return st, nil, err
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
-	hc := &http.Client{Transport: transport}
-	ctx, cancel := context.WithTimeout(context.Background(), machineUpdateTimeout)
-	defer cancel()
-	restart = func() (string, error) {
+	return st, &http.Client{Transport: transport}, nil
+}
+
+// serviceBinary is the binary of the connect service.
+func serviceBinary(osName string) string {
+	bin := filepath.Join(serviceDir(osName), "hostel")
+	if osName == config.OSWindows {
+		bin += ".exe"
+	}
+	return bin
+}
+
+// restartFunc starts the connect service again with the new binary.
+func restartFunc(osName string) func() (string, error) {
+	return func() (string, error) {
 		restarted, err := restartService(osName)
 		switch {
 		case err != nil:
@@ -113,24 +129,21 @@ func updateServiceBinary(osName string, signed bool) (res string, restart func()
 		}
 		return "The service runs the new binary.", nil
 	}
-	have := binaryVersion(ctx, bin)
-	var rel *update.Release
-	if signed {
-		if rel, err = serverRelease(ctx, hc, st.Server, osName); err != nil {
-			return "", nil, err
-		}
-		if _, known := update.Parse(have); known && !update.Newer(rel.Tag, have) {
-			if rel.Tag == have {
-				if err := installUpdateStep(osName, bin); err != nil {
-					return "", nil, fmt.Errorf("install the step of a remote update: %w", err)
-				}
-				// The server asks only when the connection has another
-				// version: the service must start the new binary.
-				return fmt.Sprintf("%s is up to date (%s, the server's release)", bin, have), restart, nil
-			}
-			return "", nil, fmt.Errorf("the server offers %s, which is older than %s on this machine: not installed", rel.Tag, have)
-		}
+}
+
+// updateServiceBinary (an administrator on the machine) replaces the service
+// binary with the server's binary for this machine and installs the root step
+// of a remote update. restart (nil when nothing changed) starts the service
+// again with the new binary.
+func updateServiceBinary(osName string) (res string, restart func() (string, error), err error) {
+	st, hc, err := joinedServer(osName)
+	if err != nil {
+		return "", nil, err
 	}
+	bin := serviceBinary(osName)
+	ctx, cancel := context.WithTimeout(context.Background(), machineUpdateTimeout)
+	defer cancel()
+	have := binaryVersion(ctx, bin)
 	name := update.BinaryName(runtime.GOOS, runtime.GOARCH)
 	tmp, err := downloadFromServer(ctx, hc, st.Server, name, bin)
 	if err != nil {
@@ -141,12 +154,6 @@ func updateServiceBinary(osName string, signed bool) (res string, restart func()
 	case newer == "":
 		os.Remove(tmp)
 		return "", nil, fmt.Errorf("the server's %s does not run on this machine", name)
-	case rel != nil && update.FileSHA256(tmp) != rel.Sums[name]:
-		os.Remove(tmp)
-		return "", nil, fmt.Errorf("the server's %s is not the one of release %s (its SHA-256 differs from the signed SHA256SUMS): not installed", name, rel.Tag)
-	case rel != nil && newer != rel.Tag:
-		os.Remove(tmp)
-		return "", nil, fmt.Errorf("the server's %s prints %s, not %s: not installed", name, newer, rel.Tag)
 	case update.FileSHA256(tmp) == update.FileSHA256(bin):
 		os.Remove(tmp)
 		if err := installUpdateStep(osName, bin); err != nil {
@@ -169,7 +176,113 @@ func updateServiceBinary(osName string, signed bool) (res string, restart func()
 	if err := installUpdateStep(osName, bin); err != nil {
 		return "", nil, fmt.Errorf("%s, but the step of a remote update was not installed: %w", res, err)
 	}
-	return res, restart, nil
+	return res, restartFunc(osName), nil
+}
+
+// updateSigned is the root step of a remote update (M13), as root through the
+// sudo rule, or in the SYSTEM service on Windows. It trusts only this binary
+// (the installed one: its version and its release key) and files that only
+// root (SYSTEM) can write: the server's release must have a valid signature
+// and be newer, and the server's binary must have the signed SHA-256 before
+// it runs. A machine with the release only restarts the connection (the
+// server asks when the connection has another version).
+func updateSigned(osName string) (res string, restart func() (string, error), err error) {
+	st, hc, err := joinedServer(osName)
+	if err != nil {
+		return "", nil, err
+	}
+	bin := serviceBinary(osName)
+	ctx, cancel := context.WithTimeout(context.Background(), machineUpdateTimeout)
+	defer cancel()
+	rel, err := serverRelease(ctx, hc, st.Server, osName)
+	if err != nil {
+		return "", nil, err
+	}
+	have := version.Version
+	if _, known := update.Parse(have); known && rel.Tag != have && !update.Newer(rel.Tag, have) {
+		return "", nil, fmt.Errorf("the server offers %s, which is older than %s on this machine: not installed", rel.Tag, have)
+	}
+	name := update.BinaryName(runtime.GOOS, runtime.GOARCH)
+	want := rel.Sums[name]
+	if want == "" {
+		return "", nil, fmt.Errorf("release %s has no %s", rel.Tag, name)
+	}
+	if rel.Tag == have && update.FileSHA256(bin) == want {
+		if osName != config.OSWindows {
+			if err := installUpdateStep(osName, bin); err != nil {
+				return "", nil, fmt.Errorf("install the step of a remote update: %w", err)
+			}
+		}
+		return fmt.Sprintf("%s is up to date (%s, the server's release)", bin, have), restartFunc(osName), nil
+	}
+	// Downloaded into the directory that only root (SYSTEM) can write, and
+	// checked before it runs.
+	trusted := filepath.Join(updateStepDir(osName), "hostel")
+	if osName == config.OSWindows {
+		trusted += ".exe"
+	}
+	tmp, err := downloadFromServer(ctx, hc, st.Server, name, trusted)
+	if err != nil {
+		return "", nil, err
+	}
+	defer os.Remove(tmp)
+	if update.FileSHA256(tmp) != want {
+		return "", nil, fmt.Errorf("the server's %s is not the one of release %s (its SHA-256 differs from the signed SHA256SUMS): not installed", name, rel.Tag)
+	}
+	if v := binaryVersion(ctx, tmp); v != rel.Tag {
+		return "", nil, fmt.Errorf("the server's %s prints %q, not %s: not installed", name, v, rel.Tag)
+	}
+	if osName == config.OSWindows {
+		// The connection's copy, from the checked file; then the service's
+		// own binary, which restarts after its answer.
+		data, err := os.ReadFile(tmp)
+		if err != nil {
+			return "", nil, err
+		}
+		runSetup("schtasks.exe", "/End", "/TN", "Hostel machine connect")
+		if err := writeReplace(bin, data); err != nil {
+			restartService(osName)
+			return "", nil, err
+		}
+		if err := update.Replace(tmp, trusted); err != nil {
+			return "", nil, err
+		}
+		selfReplaced = true
+	} else {
+		if err := update.Replace(tmp, bin); err != nil {
+			return "", nil, err
+		}
+		if err := installUpdateStep(osName, bin); err != nil {
+			return "", nil, fmt.Errorf("updated %s to %s, but the step of a remote update was not installed: %w", bin, rel.Tag, err)
+		}
+	}
+	return fmt.Sprintf("updated %s from %s to %s (signed release)", bin, have, rel.Tag), restartFunc(osName), nil
+}
+
+// selfReplaced: the signed update in the Windows SYSTEM service replaced the
+// service's own binary; the service restarts after its answer.
+var selfReplaced bool
+
+// writeReplace writes data to a new file next to dst and renames it over dst.
+func writeReplace(dst string, data []byte) error {
+	f, err := update.TempNext(dst)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(f.Name(), 0o755)
+	}
+	if err == nil {
+		err = update.Replace(f.Name(), dst)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
 }
 
 // serverRelease reads the signed release that the server offers (its tag,
