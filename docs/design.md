@@ -118,12 +118,40 @@ them on the server machine.
   older service, which sends no version). `hostel machine
   update` (as an administrator on the machine) downloads the server's binary
   for the machine (`/v1/download`, with the TLS of the join), checks that it
-  runs, replaces the binary in the service directory, and restarts the
-  service. The service does not replace itself: it cannot write its directory.
+  runs, replaces the binary in the service directory, installs the root step
+  of remote updates (below), and restarts the service. The service does not
+  replace itself: it cannot write its directory.
+- **Remote machine updates** (M13, `m13-implementation.md`). An admin updates
+  a machine that joined from a client: `hostel config machines update
+  <machine>... | --all`, `POST /v1/machines/{id}/update`, `POST
+  /v1/machines/update`. The server must run a release: `update.Server` also
+  writes `RELEASE`, `SHA256SUMS`, and `SHA256SUMS.sig` into `helper_dir`, and
+  `/v1/download` serves them. The server drains the machine (it keeps the
+  drain state of before), ends its active leases, waits for their cleanup
+  (state `updating`), and runs the root step as the machine user:
+  `sudo -n /etc/hostel/hostel machine update --signed` (the join writes
+  `/etc/sudoers.d/hostel-update`, which allows only this command), or on
+  Windows the helper as the client of the SYSTEM service `HostelLeaseUsers`
+  (the join installs it on each Windows machine; op `update`). The root step
+  checks the signature with the release key of the installed binary (or the
+  root-owned `release-key` next to it), refuses a release that is not newer,
+  checks the binary's SHA-256 and version, replaces it (on Windows also the
+  service's own copy, which then restarts by its recovery action), and
+  restarts the connect service. The server waits until the machine connects
+  with the new version (10 minutes; the step runs again when the machine
+  connects with the old one, at most 3 times), then the machine provisions
+  (the new helper) and gets its drain state back. A failure makes the machine
+  `broken` ("update failed: ..."); a repair makes it usable. `POST
+  /v1/server/update` with `"machines": true` (`hostel server update --remote
+  --machines`, the app's Update everything) writes `data_dir/update-machines`;
+  for 15 minutes after its start, the new server updates each machine that
+  connects with an older version.
 - **The app** reads the latest tag at start and every 6 hours
   (`HOSTEL_NO_UPDATE_CHECK=1` turns it off; errors are silent): Update in the
-  main menu, Update the server in Front desk (admins), and "Out of date" on
-  machines whose connect service is older than the server.
+  main menu, Update everything in Front desk (admins: the server, then the
+  machines; Update the machines when only machines are older), "Out of date"
+  on machines whose connect service is older than the server, and Update in
+  their machine actions.
 
 Dependencies. Use pure Go only, so that cross-compilation needs no C toolchain:
 
@@ -314,6 +342,7 @@ Rules:
 | `provisioning` | The server probes the machine, uploads the helper, mise, and the tool directories, installs the mise tools, runs the `install` and `check` scripts, and writes the inventory. |
 | `running` | Usable. Rooms have their own states. |
 | `stopping`, `stopped`, `resuming` | Warm stop and resume (providers that can stop), and the deallocation and start of an Azure machine. |
+| `updating` | A remote update of a machine that joined (M13): the root step on the machine, then the wait for its new connection; then `provisioning`. |
 | `destroying`, `destroyed` | Removal. |
 | `broken` | Not usable until repaired (static, azure) or destroyed (on-demand). |
 | `retired` | A static machine that was removed from the configuration. It takes no new lease. |
@@ -1074,7 +1103,8 @@ revision ("configuration revision 4: providers.home.machines.box.os: ...").
   machines and templates, each with its running machines), `machines set <machine>
   <key>=<value>` (`tools` as a comma list), `machines remove <machine>`, `machines
   drain|undrain|repair|destroy <machine>` (the same as `hostel admin machine`, by
-  name; `<machine>` is also a template key, when the template has one machine);
+  name; `<machine>` is also a template key, when the template has one machine),
+  `machines update <machine>... | --all [--no-wait]` (a remote update, M13);
   `hostel config providers` (list), `providers add <name> --kind <kind>`,
   `providers remove <name>`. The client sends the whole
   document with its base revision; the server refuses it if another revision
@@ -1114,8 +1144,10 @@ revision ("configuration revision 4: providers.home.machines.box.os: ...").
   installs the service that runs `hostel machine connect` from there (Linux:
   systemd unit as `hostel-connect`, which owns the token; macOS: LaunchDaemon as
   root, which is not the machine user; Windows: scheduled task as `LOCAL SERVICE`
-  that runs `machine-connect.cmd`); (5) prints the steps that only a person can
-  do. The server key goes into the machine user's files as that user (a lease can
+  that runs `machine-connect.cmd`), with the root step of remote updates (M13:
+  on macOS and Linux the sudo rule `/etc/sudoers.d/hostel-update`, also with
+  `--no-service`; on Windows the SYSTEM service `HostelLeaseUsers`, not with
+  `--no-service`); (5) prints the steps that only a person can do. The server key goes into the machine user's files as that user (a lease can
   leave links there). The server refuses a join for a machine that exists, and
   revokes the old machine tokens of the name; removing a machine revokes its machine
   tokens. `--no-service` skips the service. `hostel machine connect` is the
@@ -1730,6 +1762,7 @@ have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 |---|---|
 | `GET /v1/info` | Server version, gateway address, gateway host key, server SSH public key (for `hostel admin pubkey`). |
 | `POST /v1/server/update {"version"}`, `GET /v1/server/update` (admin) | Starts a remote update (`""`: the latest release; HTTP 202 with `{"state", "from", "to"}`; 409 while one runs or when the release is not newer); its state `{"state": "idle\|running\|failed", "from", "to", "error"}` (M10d). |
+| `POST /v1/machines/{id}/update`, `POST /v1/machines/update` (admin) | A remote update of a machine that joined, or of each one that connects with an older version (M13): `{"machine", "to"}`; `{"started", "skipped"}`. HTTP 409 `up_to_date`, or 409 when the server has no signed release. `POST /v1/server/update` also takes `"machines": true`. |
 | `GET /v1/tools` | Tools: name, description, screen flag, needs, `options` (the configured options of a screen tool, or the versions in the inventories), `max_options`, `whole_machine`, the environment names, the guide, the machines that have it (key, OS, options on that machine, online), free rooms, waiting leases, estimated wait, and `typical_lease_seconds` (the median of the last leases that asked for it). Also the repository-level note (mise tools on every machine). |
 | `POST /v1/leases` | Creates a lease: `{"tools": ["android-sdk", "android-emulator:pixel-9"], "task", ...}`. Returns its ID, state, and revision. HTTP 422 with `{"code": "unknown_tool" \| "unknown_option" \| "too_many_options" \| "no_machine", "message"}` for R4; `no_machine` names the tools that no machine has together and the machines of each tool. |
 | `GET /v1/leases/{id}?since=R&wait=50s` | Returns the lease when its revision is greater than `R`, or after `wait` (at most 60 s and half of `poll_timeout`, so the guest polls again before the timeout). Updates `last_poll_at` when the token is the lease owner (an admin can look without keeping a lease alive). The lease has `poll_timeout_ms` and `idle_timeout_ms` (the server settings), for the messages of the guest. |
@@ -1745,7 +1778,7 @@ have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 | `GET /v1/users`, `PATCH /v1/users/{name}`, `DELETE /v1/users/{name}`, `DELETE /v1/users/{name}/computers/{computer}` (admin to change) | Users with their computers; `{"role"}`; removal (tokens revoked, leases ended); removal of one computer (its tokens revoked; the user stays). The server keeps at least one admin (HTTP 409 `last_admin`). |
 | `GET /v1/config`, `PUT /v1/config`, `GET /v1/config/history` (admin to change) | The configuration document `{revision, document}`; a change `{base_revision, document}` gives the new revision, HTTP 409 (`conflict`) if `base_revision` is not the latest, or HTTP 422 with the errors (M9) |
 | `GET /v1/config/tools`, `GET/PUT/DELETE /v1/config/tools/{name}`, `POST /v1/config/tools/{name}/reset` (admin to change) | The defined tools with their source and machines; a tool's files `{name, files}`; a new version; removal (HTTP 409 while a machine lists it); a default back to the release's version |
-| `POST /v1/machines/invites` (admin), `POST /v1/machines/join` (the code, no token), `GET /v1/install.sh`, `GET /v1/download/hostel-<os>-<arch>[.exe]` (no token) | A machine code with the commands to run; the join (adds the machine, returns a machine token and the server's SSH key); the install script and the binaries of `helper_dir` (M9) |
+| `POST /v1/machines/invites` (admin), `POST /v1/machines/join` (the code, no token), `GET /v1/install.sh`, `GET /v1/download/hostel-<os>-<arch>[.exe]`, `RELEASE`, `SHA256SUMS`, `SHA256SUMS.sig` (no token) | A machine code with the commands to run; the join (adds the machine, returns a machine token and the server's SSH key); the install script and the binaries of `helper_dir` (M9) |
 | `POST /v1/logins/{cli}`, `GET /v1/logins/{cli}[?wait=1]` (admin; `cli` is `devbox` or `nsc`) | Starts a provider CLI login on the server and returns its address (or `already`); the state (`waiting`, `done`, `failed`) (M9) |
 | `POST /v1/invites` | `{"role", "name"}` (admin) or `{"self": true}` (a code for the caller's other computer); returns the code, the key fingerprint, and the expiry (24 hours). |
 | `PUT /v1/providers/{name}/secret` (admin) | The client secret of an azure provider: `{"secret": "..."}`; the answer `{"error": "..."}` says whether Azure accepted it (M12). |

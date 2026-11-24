@@ -527,8 +527,8 @@ harness).
 
 ## M13. Remote machine update
 
-Status: planned (`m13-implementation.md`). Owner decisions of 2026-11-24
-(`requirements.md`, section 3).
+Status: implemented (`m13-implementation.md`). Owner decisions of 2026-11-24
+(`requirements.md`, section 3). Windows is not checked on a real machine yet.
 
 Goal: an admin updates a connected machine from the client, and the server and
 all connected machines from Front desk after a new release, with no step on the

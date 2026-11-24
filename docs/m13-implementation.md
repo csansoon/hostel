@@ -1,6 +1,6 @@
 # M13. Remote machine update (plan)
 
-Status: planned. Owner decisions of 2026-11-24 (section 2).
+Status: implemented (section 8). Owner decisions of 2026-11-24 (section 2).
 
 ## 1. Why
 
@@ -82,8 +82,8 @@ command, without arguments that it chooses:
   4. Waits until the machine connects with the new version (10 minutes).
   5. `provisioning` (the probe, the new helper), then `running`. The drain goes
      back to its earlier state, and `update_to` is cleared.
-  A failure makes the machine `broken` ("update failed: ..."); a repair clears
-  `update_to` and the drain of the update.
+  A failure makes the machine `broken` ("update failed: ..."), and the drain
+  goes back to its earlier state at once; a repair makes the machine usable.
 - `POST /v1/server/update` takes `"machines": true`: after the restart with the
   new release, the server updates each connected machine whose connect version
   is older (a flag in the database, so it survives the restart). All machines
@@ -125,3 +125,21 @@ command, without arguments that it chooses:
 - The update restarts the connect service, which carries the SSH session of the
   update: the root step prints its result before the restart, and the server
   waits for the new connection, not for the end of the command.
+
+## 8. Implementation notes
+
+- The step on the machine waits for the connection: after a server restart
+  (Update everything), the machine connects later. The step runs when the
+  machine connects with an older version, again after 30 s if it still has
+  it, at most 3 times; the whole update has 10 minutes.
+- During an update, `drain`/`undrain` change the state that the machine gets
+  after the update; the machine stays drained until then.
+- The app's machine actions (drain, repair, update) are also for azure
+  machines now (before: static only).
+- The release v0.5.0 is the first one with M13; machines that joined before
+  need one manual `hostel machine update` (as an administrator on them).
+- Windows: the code compiles and follows the M11w service, but it was not run
+  on a real Windows machine yet (the E2E suite has Linux machines only). The
+  first check is on the Windows machine after v0.5.0: one manual update, then
+  a remote update (with the release, the root step answers "up to date" and
+  restarts the connection; the full path at the next release).

@@ -69,16 +69,24 @@ command to run yourself (`--server <url> --token-file <file> [--server-key k]
 
 **Update** the connection binary of a machine that joined: the app shows "Out
 of date" on the machine when its connect service is older than the server
-(`hostel status` JSON: `connect_version`). On the machine, as an administrator:
+(`hostel status` JSON: `connect_version`). An admin updates it from a client
+when the server runs a release; the machine's active leases end, and it takes
+leases again after the update:
+
+```sh
+hostel config machines update <machine>     # or --all; the app: machine actions › Update
+```
+
+A machine that joined before remote updates (M13) needs one update on the
+machine, as an administrator; it also installs the step of remote updates:
 
 ```sh
 sudo /etc/hostel/hostel machine update                 # macOS, Linux
 C:\ProgramData\hostel\hostel.exe machine update         # Windows, administrator PowerShell
 ```
 
-It downloads the server's binary for the machine, replaces the service's copy,
-and restarts the service. The machine helper needs nothing: the server sends it
-before each lease.
+The machine installs only the newer signed release that the server offers.
+The machine helper needs nothing: the server sends it before each lease.
 
 ## A static machine that the server reaches over SSH
 
