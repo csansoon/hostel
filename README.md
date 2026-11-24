@@ -169,8 +169,8 @@ only for the tools that you need; ask for a screen tool only to see the app. Alw
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents that work on Hostel itself |
 
-Status: version 0.3. Milestones M0 to M10e are done; M11 (hardening against
-backdoors) is planned. See [docs/plan.md](docs/plan.md).
+Status: release v0.4.0. Milestones M10h to M12 are merged after it (see their
+status lines). See [docs/plan.md](docs/plan.md).
 
 ## License
 

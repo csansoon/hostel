@@ -464,9 +464,11 @@ passes.
 
 ## M10h. Desktop app follow-ups
 
-Status: merged (pull request #10; release v0.5.0). The second Windows test
-flight of phase 6 is not recorded (`m10h-implementation.md`). Owner decisions of
-2026-11-12 (`requirements.md`, section 3).
+Status: merged (pull request #10). The 10-run CI gate failed on its branch
+(2026-11-12) and passed later on `main` with pull request #16 (2026-11-24). The
+second Windows test flight of phase 6 is not recorded
+(`m10h-implementation.md`). Owner decisions of 2026-11-12 (`requirements.md`,
+section 3).
 
 - A Windows test flight of a real app through Hostel, before the fixes; its
   findings go into this milestone.
@@ -498,8 +500,8 @@ Still to do (owner decision, 2026-11-16: merge first, do these later):
 - Windows lease users and the cleanup audit on Windows (owner decision,
   2026-11-16). The root step is a Hostel service that runs as SYSTEM, with a named
   pipe that only the machine user can open, for `lease-user` only; `machine join
-  --lease-users` installs it. `windows-desktop` leases keep the desktop user. Done: `m11w-implementation.md`
-  (pull requests #14 and #15).
+  --lease-users` installs it. `windows-desktop` leases keep the desktop user.
+  Done: `m11w-implementation.md` (pull requests #14 and #15).
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the
@@ -519,8 +521,9 @@ survives cleanup or reaches the next lease.
 
 ## M12. Azure provider
 
-Status: done (2026-11-24; pull request #16; release v0.5.0). Owner decisions of
-2026-11-18 and 2026-11-23 (`m12-implementation.md`).
+Status: done (2026-11-24; pull request #16). Owner decisions of 2026-11-18 and
+2026-11-23 (`m12-implementation.md`). Limit: the client-secret sign-in was not
+tried against real Azure.
 
 Goal: an existing Azure machine runs only when leases need it. The `azure`
 provider starts it for a lease and deallocates it after `warm_running` without a

@@ -1,6 +1,8 @@
 # M12. Azure provider (plan)
 
-Status: implemented. Owner decisions of 2026-11-18 (section 7: the recommended option of each).
+Status: done (2026-11-24, pull request #16). Owner decisions of 2026-11-18
+(section 7: the recommended option of each) and 2026-11-23 (the Azure CLI
+sign-in).
 Section 8 has what changed from the plan, and the limits.
 
 ## 1. Goal
@@ -220,3 +222,5 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
   was ready 3 min 9 s after `acquire` (start of the deallocated machine and
   provisioning), and Hostel deallocated the machine after `warm_running`
   (1 min). The client-secret sign-in was not tried against real Azure.
+- 2026-11-24, pull request #16: CI and the 10-run gate "E2E gate" on GitHub
+  passed on the last commit (10 of 10).
