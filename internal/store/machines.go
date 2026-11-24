@@ -33,6 +33,10 @@ type Machine struct {
 	BrokenReason     string
 	CreatedAt        time.Time
 	StateChangedAt   time.Time
+	// UpdateTo is the release of a remote update (M13), or ""; UpdateDrained
+	// is the drain state before it.
+	UpdateTo      string
+	UpdateDrained bool
 }
 
 type Room struct {
@@ -67,14 +71,14 @@ const (
 )
 
 const machineColumns = `id, name, provider, template, provider_ref, state, os, arch, home, shell, ssh_host_key,
-	helper_sha256, config_sha256, hardware, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at, last_seen_at`
+	helper_sha256, config_sha256, hardware, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at, last_seen_at, update_to, update_drained`
 
 func scanMachine(row interface{ Scan(...any) error }) (Machine, error) {
 	var r Machine
 	var deadline, warm sql.NullInt64
 	var created, changed, seen int64
 	err := row.Scan(&r.ID, &r.Name, &r.Provider, &r.Template, &r.ProviderRef, &r.State, &r.OS, &r.Arch, &r.Home, &r.Shell,
-		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &r.Hardware, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed, &seen)
+		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &r.Hardware, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed, &seen, &r.UpdateTo, &r.UpdateDrained)
 	r.ProviderDeadline, r.WarmUntil = fromMS(deadline), fromMS(warm)
 	if seen > 0 {
 		r.LastSeenAt = time.UnixMilli(seen)
@@ -457,8 +461,66 @@ func (s *Store) SetWarmUntil(ctx context.Context, id int64, t time.Time) error {
 	return err
 }
 
+// StartMachineUpdate records a remote update to tag (M13) and drains the
+// machine; it keeps the drain state of before. False when an update runs
+// already.
+func (s *Store) StartMachineUpdate(ctx context.Context, id int64, tag string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE machines SET update_to = ?, update_drained = drained, drained = 1 WHERE id = ? AND update_to = ''`, tag, id)
+	if err != nil {
+		return false, fmt.Errorf("start the update of machine %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// CancelMachineUpdate clears an update that has not started (the machine is
+// not updating) and gives the machine its drain state of before.
+func (s *Store) CancelMachineUpdate(ctx context.Context, id int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = update_drained, update_to = '', update_drained = 0
+		WHERE id = ? AND update_to != '' AND state != 'updating'`, id)
+	if err != nil {
+		return false, fmt.Errorf("cancel the update of machine %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// FinishMachineUpdate ends an update in one transaction: the machine goes
+// from updating to the state to (with reason), and gets its drain state of
+// before.
+func (s *Store) FinishMachineUpdate(ctx context.Context, id int64, to, reason string, now time.Time) (bool, error) {
+	changed := false
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var state, name string
+		if err := tx.QueryRowContext(ctx, `SELECT state, name FROM machines WHERE id = ?`, id).Scan(&state, &name); err != nil {
+			return err
+		}
+		if state != "updating" {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE machines SET state = ?, broken_reason = ?, state_changed_at = ?,
+			drained = CASE WHEN update_to = '' THEN drained ELSE update_drained END, update_to = '', update_drained = 0 WHERE id = ?`,
+			to, reason, now.UnixMilli(), id); err != nil {
+			return err
+		}
+		changed = true
+		msg := "machine " + name + " " + state + " → " + to
+		if reason != "" {
+			msg += ": " + reason
+		}
+		return insertEvent(ctx, tx, now, "", id, "machine", msg)
+	})
+	if err != nil {
+		return false, fmt.Errorf("finish the update of machine %d: %w", id, err)
+	}
+	return changed, nil
+}
+
+// SetDrained sets the drain state; during a remote update, the state that
+// the machine gets after it (the update keeps the machine drained).
 func (s *Store) SetDrained(ctx context.Context, id int64, drained bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = ? WHERE id = ?`, drained, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = CASE WHEN update_to = '' THEN ? ELSE 1 END,
+		update_drained = CASE WHEN update_to = '' THEN update_drained ELSE ? END WHERE id = ?`, drained, drained, id)
 	return err
 }
 

@@ -29,6 +29,9 @@ const machinesUsage = `hostel: usage:
   hostel config machines drain|undrain <machine>     no new leases on the machine / new leases again
   hostel config machines repair <machine> [--accept-host-key]
   hostel config machines destroy <machine>                  an on-demand machine without a lease
+  hostel config machines update <machine>... | --all [--no-wait]
+                                                     end the leases of a machine that joined, update
+                                                     it to the server's release, and start it again
 A machine is <provider>/<machine>, or only <machine> when the name is unique.`
 
 func machinesCmd(args []string, stdout, stderr io.Writer) int {
@@ -38,6 +41,8 @@ func machinesCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	fs := cli.NewFlagSet("hostel config machines "+sub, stderr)
 	accept := fs.Bool("accept-host-key", false, "with repair: accept a changed host key of the machine")
+	all := fs.Bool("all", false, "with update: each machine that joined and has another version than the server's release")
+	noWait := fs.Bool("no-wait", false, "with update: return when the updates started")
 	provider := fs.String("provider", "", "with add: the static or azure provider (default home)")
 	vm := fs.String("vm", "", "with add, for an azure provider: the resource ID of the virtual machine")
 	var tools cli.StringList
@@ -55,6 +60,8 @@ func machinesCmd(args []string, stdout, stderr io.Writer) int {
 		return machinesSet(pos[0], pos[1:], stdout, stderr)
 	case sub == "remove" && len(pos) == 1:
 		return machinesRemove(pos[0], stdout, stderr)
+	case sub == "update" && (len(pos) > 0) != *all:
+		return machinesUpdate(pos, *all, !*noWait, stdout, stderr)
 	case (sub == "drain" || sub == "undrain" || sub == "repair" || sub == "destroy") && len(pos) == 1:
 		return machineAction(sub, pos[0], *accept, stdout, stderr)
 	}
@@ -236,22 +243,9 @@ func machineAction(action, name string, accept bool, stdout, stderr io.Writer) i
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
-	var found []protocol.MachineStatus
-	for _, r := range st.Machines {
-		if r.Name == name || r.Provider+"/"+r.Template == name || r.Template == name {
-			found = append(found, r)
-		}
-	}
-	if len(found) != 1 {
-		var names []string
-		for _, r := range found {
-			names = append(names, r.Name)
-		}
-		if len(found) == 0 {
-			fmt.Fprintf(stderr, "hostel: no machine of %q; \"hostel config machines\" lists them\n", name)
-		} else {
-			fmt.Fprintf(stderr, "hostel: %q has several machines (%s); give the machine name\n", name, strings.Join(names, ", "))
-		}
+	found, err := findMachine(st, name)
+	if err != nil {
+		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
 	var body any
@@ -260,12 +254,34 @@ func machineAction(action, name string, accept bool, stdout, stderr io.Writer) i
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := c.Do(ctx, "POST", fmt.Sprintf("/v1/machines/%d/%s", found[0].ID, url.PathEscape(action)), body, nil); err != nil {
+	if err := c.Do(ctx, "POST", fmt.Sprintf("/v1/machines/%d/%s", found.ID, url.PathEscape(action)), body, nil); err != nil {
 		fmt.Fprintln(stderr, "hostel:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Machine %s: %s requested.\n", found[0].Name, action)
+	fmt.Fprintf(stdout, "Machine %s: %s requested.\n", found.Name, action)
 	return 0
+}
+
+// findMachine finds a machine by its name, "<provider>/<machine>", or only
+// "<machine>" when that is unique.
+func findMachine(st protocol.Status, name string) (protocol.MachineStatus, error) {
+	var found []protocol.MachineStatus
+	for _, r := range st.Machines {
+		if r.Name == name || r.Provider+"/"+r.Template == name || r.Template == name {
+			found = append(found, r)
+		}
+	}
+	if len(found) == 1 {
+		return found[0], nil
+	}
+	if len(found) == 0 {
+		return protocol.MachineStatus{}, fmt.Errorf("no machine of %q; \"hostel config machines\" lists them", name)
+	}
+	var names []string
+	for _, r := range found {
+		names = append(names, r.Name)
+	}
+	return protocol.MachineStatus{}, fmt.Errorf("%q has several machines (%s); give the machine name", name, strings.Join(names, ", "))
 }
 
 const providersUsage = `hostel: usage:

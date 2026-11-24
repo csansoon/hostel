@@ -20,13 +20,15 @@ import (
 )
 
 const serverUpdateUsage = `Usage: hostel server update [--version vX.Y.Z] [--config server.toml]
-       hostel server update --remote [--version vX.Y.Z]
+       hostel server update --remote [--version vX.Y.Z] [--machines]
 
 On the server machine: replaces the server binary and the machine binaries in
 helper_dir with the latest release (or --version), after a check of the
 release signature; then restart the server (sudo systemctl restart hostel).
 With --remote, on an admin's computer: the server updates itself and starts
-again with the new binary; the command waits until it runs the new version.`
+again with the new binary; the command waits until it runs the new version.
+With --machines, the new server then also updates each machine that joined
+(it ends the machine's leases; "hostel config machines update").`
 
 // remoteUpdateWait bounds the wait for the server's new version.
 const remoteUpdateWait = 25 * time.Minute
@@ -37,13 +39,17 @@ func serverUpdate(args []string, stdout, stderr io.Writer) int {
 	path := serverConfigFlag(fs)
 	want := fs.String("version", "", "the release to install (default: the latest)")
 	remote := fs.Bool("remote", false, "update the connected server from this computer (admin)")
+	machines := fs.Bool("machines", false, "with --remote: then update each machine that joined")
 	if rest, err := cli.Parse(fs, args); err != nil || len(rest) > 0 {
 		fmt.Fprintln(stderr, serverUpdateUsage)
 		return 2
 	}
 	var err error
 	if *remote {
-		err = remoteServerUpdate(*want, stdout)
+		err = remoteServerUpdate(*want, *machines, stdout)
+	} else if *machines {
+		fmt.Fprintln(stderr, serverUpdateUsage)
+		return 2
 	} else {
 		err = localServerUpdate(*path, *want, stdout)
 	}
@@ -115,7 +121,7 @@ func localServerUpdate(path, want string, stdout io.Writer) error {
 	return nil
 }
 
-func remoteServerUpdate(want string, stdout io.Writer) error {
+func remoteServerUpdate(want string, machines bool, stdout io.Writer) error {
 	g, err := config.LoadGuest()
 	if err != nil {
 		return err
@@ -128,7 +134,7 @@ func remoteServerUpdate(want string, stdout io.Writer) error {
 	defer cancel()
 	var st protocol.ServerUpdate
 	reqCtx, reqCancel := context.WithTimeout(ctx, time.Minute)
-	err = c.Do(reqCtx, http.MethodPost, "/v1/server/update", protocol.ServerUpdateRequest{Version: want}, &st)
+	err = c.Do(reqCtx, http.MethodPost, "/v1/server/update", protocol.ServerUpdateRequest{Version: want, Machines: machines}, &st)
 	reqCancel()
 	if err != nil {
 		return err
@@ -149,6 +155,9 @@ func remoteServerUpdate(want string, stdout io.Writer) error {
 		switch {
 		case infoErr == nil && info.Version == st.To:
 			fmt.Fprintf(stdout, "the server runs %s\n", st.To)
+			if machines {
+				fmt.Fprintln(stdout, "the server updates each machine that joined when it connects; \"hostel status\" shows them")
+			}
 			return nil
 		case stateErr == nil && cur.State == protocol.UpdateFailed:
 			return fmt.Errorf("the server did not update: %s", cur.Error)

@@ -81,17 +81,30 @@ func (m *model) runSelfUpdate(tag string) tea.Cmd {
 	}
 }
 
-// startServerUpdate asks the server to update itself to tag.
+// outOfDateMachines are the machines that joined and connect with an older
+// version than the server's.
+func (m *model) outOfDateMachines() []string {
+	var out []string
+	for _, ms := range m.st.Templates {
+		if m.outOfDate(ms) {
+			out = append(out, ms.Key)
+		}
+	}
+	return out
+}
+
+// startServerUpdate asks the server to update itself to tag, and then each
+// machine that joined (M13).
 func (m *model) startServerUpdate(tag string) tea.Cmd {
 	c, gen := m.c, m.gen
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		var st protocol.ServerUpdate
-		if err := c.Do(ctx, http.MethodPost, "/v1/server/update", protocol.ServerUpdateRequest{Version: tag}, &st); err != nil {
+		if err := c.Do(ctx, http.MethodPost, "/v1/server/update", protocol.ServerUpdateRequest{Version: tag, Machines: true}, &st); err != nil {
 			return actionMsg{gen: gen, err: err}
 		}
-		return actionMsg{gen: gen, text: fmt.Sprintf("The server updates from %s to %s. It starts again by itself; then This server shows the new version.", st.From, st.To)}
+		return actionMsg{gen: gen, text: fmt.Sprintf("The server updates from %s to %s. It starts again by itself, then updates each machine that joined.", st.From, st.To)}
 	}
 }
 

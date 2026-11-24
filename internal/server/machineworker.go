@@ -100,6 +100,8 @@ func (s *Server) runMachine(ctx context.Context, id int64) {
 			s.stepStopping(ctx, r, m)
 		case protocol.MachineDestroying:
 			s.stepDestroying(ctx, r)
+		case protocol.MachineUpdating:
+			s.stepUpdating(ctx, r, m)
 		default:
 			return
 		}

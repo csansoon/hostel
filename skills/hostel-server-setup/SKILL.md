@@ -218,12 +218,15 @@ release, replaces the server binary and the machine binaries in `helper_dir`, an
 refuses a release that is not newer. The server sends the new helper to each
 machine before its next lease.
 
-- **From the app** (an admin): Front desk › This server › Update the server shows when a
-  newer release exists. The server starts again by itself with the new binary.
+- **From the app** (an admin): Front desk › This server › Update everything shows when a
+  newer release exists. The server starts again by itself with the new binary,
+  then updates each machine that joined (the leases on a machine end when it
+  updates).
   Leases and their jobs continue; a `hostel run` that streams output at that
   moment loses the stream (`hostel attach <job>` continues it).
-- **From a connected computer** (an admin): `hostel server update --remote`.
-  It waits until the server runs the new version.
+- **From a connected computer** (an admin): `hostel server update --remote
+  [--machines]`. It waits until the server runs the new version; with
+  `--machines` the server then updates each machine that joined.
 - **On the server machine**, as the service's user (or with `sudo` when that
   user cannot write the files), then restart:
 
@@ -244,7 +247,8 @@ sudo systemctl restart hostel
 ```
 
 Machines that joined from behind NAT run their own copy of `hostel` for the
-connection: the app shows "Out of date" on them (`hostel-machines`).
+connection: the app shows "Out of date" on them; `hostel config machines update
+--all` updates them (`hostel-machines`).
 
 ## Next
 

@@ -97,6 +97,9 @@ func (s *Server) pass(ctx context.Context) error {
 	if err := s.warm(ctx); err != nil {
 		return fmt.Errorf("warm policy: %w", err)
 	}
+	if err := s.startUpdates(ctx); err != nil {
+		return fmt.Errorf("machine updates: %w", err)
+	}
 	if err := s.schedule(ctx); err != nil {
 		return fmt.Errorf("schedule: %w", err)
 	}
@@ -106,7 +109,8 @@ func (s *Server) pass(ctx context.Context) error {
 	}
 	for _, r := range machines {
 		switch r.State {
-		case protocol.MachineCreating, protocol.MachineProvisioning, protocol.MachineResuming, protocol.MachineStopping, protocol.MachineDestroying:
+		case protocol.MachineCreating, protocol.MachineProvisioning, protocol.MachineResuming, protocol.MachineStopping, protocol.MachineDestroying,
+			protocol.MachineUpdating:
 			id := r.ID
 			s.workers.start(ctx, fmt.Sprintf("machine:%d", id), func(ctx context.Context) { s.runMachine(ctx, id) }, s.kickScheduler)
 		}

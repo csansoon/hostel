@@ -185,7 +185,7 @@ func templateHardware(m *config.Template, measured map[string]string) *protocol.
 func machineStatus(cfg *config.Server, machine store.Machine, rooms []store.Room, rts []store.MachineTool) protocol.MachineStatus {
 	rs := protocol.MachineStatus{ID: machine.ID, Name: machine.Name, Provider: machine.Provider, Template: machine.Template,
 		OS: machine.OS, Arch: machine.Arch, State: machine.State, Reason: machine.BrokenReason, Drained: machine.Drained,
-		Rooms: []protocol.RoomStatus{}, Tools: []protocol.InventoryTool{}, Deadline: machine.ProviderDeadline}
+		Rooms: []protocol.RoomStatus{}, Tools: []protocol.InventoryTool{}, Deadline: machine.ProviderDeadline, UpdateTo: machine.UpdateTo}
 	for _, sl := range rooms {
 		if sl.MachineID == machine.ID {
 			rs.Rooms = append(rs.Rooms, protocol.RoomStatus{Name: sl.Name, State: sl.State, LeaseID: sl.LeaseID})

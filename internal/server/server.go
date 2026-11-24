@@ -81,6 +81,11 @@ type Server struct {
 	waiting   map[string]scheduler.Waiting
 	// lastReconcile and lastPresence are used only by the loop goroutine.
 	lastReconcile, lastPresence time.Time
+	// The machine updates after a server update (M13), also only for the
+	// loop goroutine: updateMachinesBy is the admin, until the end.
+	updateMachinesChecked bool
+	updateMachinesBy      string
+	updateMachinesUntil   time.Time
 	// leaseUserLocks has a *sync.Mutex for each machine: it orders lease-user
 	// creation and the sweep of lease users on the machine (M11).
 	leaseUserLocks sync.Map
@@ -284,6 +289,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/machines/{id}/undrain", s.auth(s.admin(s.handleMachineDrain(false))))
 	mux.HandleFunc("POST /v1/machines/{id}/repair", s.auth(s.admin(s.handleMachineRepair)))
 	mux.HandleFunc("POST /v1/machines/{id}/destroy", s.auth(s.admin(s.handleMachineDestroy)))
+	mux.HandleFunc("POST /v1/machines/{id}/update", s.auth(s.admin(s.handleMachineUpdate)))
+	mux.HandleFunc("POST /v1/machines/update", s.auth(s.admin(s.handleUpdateMachines)))
 	mux.HandleFunc("POST /v1/connect", s.handleConnect)
 	mux.HandleFunc("POST /v1/logins/{cli}", s.auth(s.admin(s.handleLogin)))
 	mux.HandleFunc("GET /v1/logins/{cli}", s.auth(s.admin(s.handleLoginState)))

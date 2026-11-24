@@ -51,9 +51,9 @@ func Default() (*Source, error) {
 			key = k
 		}
 	}
-	raw, err := base64.StdEncoding.DecodeString(key)
-	if err != nil || len(raw) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("the release key is not an Ed25519 public key in base64")
+	raw, err := ParseKey(key)
+	if err != nil {
+		return nil, err
 	}
 	return &Source{Base: base, Key: raw, http: &http.Client{
 		// The latest tag is the redirect itself.
@@ -94,11 +94,22 @@ func (s *Source) Latest(ctx context.Context) (string, error) {
 	return tag, nil
 }
 
-// Release is a verified SHA256SUMS: file name to SHA-256 (hex).
+// Release is a verified SHA256SUMS: file name to SHA-256 (hex). RawSums and
+// Sig are the signed files, which a server keeps for its machines (M13).
 type Release struct {
-	Tag  string
-	Sums map[string]string
+	Tag     string
+	Sums    map[string]string
+	RawSums []byte
+	Sig     []byte
 }
+
+// The files of a release that a server keeps in helper_dir and serves to its
+// machines (M13): the tag, SHA256SUMS, and its signature.
+const (
+	TagFile  = "RELEASE"
+	SumsFile = "SHA256SUMS"
+	SigFile  = "SHA256SUMS.sig"
+)
 
 // SignedText is the text that a release signature covers: the tag and
 // SHA256SUMS. The tag stops an old release that is served under a new tag.
@@ -119,11 +130,19 @@ func (s *Source) Release(ctx context.Context, tag string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w (a release before v0.2.0 has no signature: install it with the install command)", err)
 	}
+	return Verify(s.Key, tag, sums, sig)
+}
+
+// Verify checks the signature of a release's SHA256SUMS with key and parses it.
+func Verify(key ed25519.PublicKey, tag string, sums, sig []byte) (*Release, error) {
+	if _, ok := ParseTag(tag); !ok {
+		return nil, fmt.Errorf("the version %q is not vX.Y.Z", tag)
+	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
-	if err != nil || !ed25519.Verify(s.Key, SignedText(tag, sums), raw) {
+	if err != nil || !ed25519.Verify(key, SignedText(tag, sums), raw) {
 		return nil, fmt.Errorf("the signature of release %s is not valid: do not install it, and tell the Hostel maintainers", tag)
 	}
-	r := &Release{Tag: tag, Sums: map[string]string{}}
+	r := &Release{Tag: tag, Sums: map[string]string{}, RawSums: sums, Sig: sig}
 	sc := bufio.NewScanner(bytes.NewReader(sums))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
@@ -132,6 +151,21 @@ func (s *Source) Release(ctx context.Context, tag string) (*Release, error) {
 		}
 	}
 	return r, nil
+}
+
+// ReleaseKey is the release key of this binary.
+func ReleaseKey() ed25519.PublicKey {
+	k, _ := ParseKey(releaseKey)
+	return k
+}
+
+// ParseKey reads an Ed25519 public key in base64.
+func ParseKey(key string) (ed25519.PublicKey, error) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(key))
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("the release key is not an Ed25519 public key in base64")
+	}
+	return raw, nil
 }
 
 func (s *Source) url(tag, file string) string { return s.Base + "/download/" + tag + "/" + file }

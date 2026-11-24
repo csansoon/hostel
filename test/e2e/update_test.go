@@ -475,14 +475,22 @@ func TestMachineUpdate(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	a.in("\r")
-	a.waitFor(10*time.Second, `Connect\s+v1\.0\.0\s+◆ out of date`, `On the machine, as an administrator: sudo /etc/hostel/hostel machine update`)
+	a.waitFor(10*time.Second, `Connect\s+v1\.0\.0\s+◆ out of date`, `as an administrator on it: sudo /etc/hostel/hostel machine update`)
+	// An admin can also update it from the app (M13: TestRemoteMachineUpdate).
+	// Update is an action of a running machine.
+	s.waitMachine("home/box3", protocol.MachineRunning, machineReady)
+	a.waitFor(10*time.Second, `Vacant`)
+	a.in("a")
+	a.waitFor(10*time.Second, `Installs the server.s version v1\.1\.0; its leases end`)
+	a.in("\x1b")
+	a.waitGone(10*time.Second, `Installs the server`)
 	a.quit()
 
 	if out, err := docker("exec", "-u", "hostel", name, "/etc/hostel/hostel", "machine", "update"); err == nil || !strings.Contains(err.Error()+out, "as an administrator") {
 		t.Fatalf("machine update as the machine user: %v\n%s", err, out)
 	}
 	out, err = docker("exec", name, "/etc/hostel/hostel", "machine", "update")
-	if err != nil || !strings.Contains(out, "updated /etc/hostel/hostel from v1.0.0 to v1.1.0") || !strings.Contains(out, "no service is installed") {
+	if err != nil || !strings.Contains(out, "updated /etc/hostel/hostel from v1.0.0 to v1.1.0") || !strings.Contains(out, "No service is installed") {
 		t.Fatalf("machine update: %v\n%s", err, out)
 	}
 	if got, _ := docker("exec", name, "/etc/hostel/hostel", "--version"); got != "hostel v1.1.0" {
@@ -500,7 +508,7 @@ func TestMachineUpdate(t *testing.T) {
 
 // TestAppUpdate: the app reads the latest release in the background and
 // shows Update; Enter and y replace the app's binary. For an admin, Front
-// desk has Update the server; the server starts again with the new version.
+// desk has Update everything; the server starts again with the new version.
 func TestAppUpdate(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -533,12 +541,16 @@ func TestAppUpdate(t *testing.T) {
 	a.in("1")
 	a.waitFor(10*time.Second, `This server\s+v1\.1\.0 available`)
 	a.in("\x1b[B\r")
-	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `▌ \S+\s+Update the server`, `Update the server: install Hostel v1\.1\.0 on the server \(it runs v1\.0\.0\)`)
+	a.waitFor(10*time.Second, `Version\s+v1\.0\.0`, `▌ \S+\s+Update everything`, `Update everything: install Hostel v1\.1\.0 on the server \(it runs v1\.0\.0\)`)
 	a.in("\r")
-	a.waitFor(10*time.Second, `Update the server from v1\.0\.0 to v1\.1\.0\?`)
+	a.waitFor(10*time.Second, `Update the server from v1\.0\.0 to v1\.1\.0`)
 	a.in("y")
 	a.waitFor(time.Minute, `The server updates from v1\.0\.0 to v1\.1\.0`)
 	a.waitFor(2*time.Minute, `Version\s+v1\.1\.0`)
-	a.waitGone(10*time.Second, `Update the server`)
+	a.waitGone(10*time.Second, `Update everything`)
+	// Update everything also asked for the machines (M13).
+	e.waitFor("the new server reads the machine updates", time.Minute, func() bool {
+		return strings.Contains(f.s.log.String(), `"msg":"machine updates after the server update"`)
+	})
 	a.quit()
 }

@@ -56,6 +56,9 @@ func Server(ctx context.Context, s *Source, r *Release, exe, helperDir string) (
 	if err := checkRuns(ctx, tmp, r.Tag); err != nil {
 		return err
 	}
+	// The signed release files, for the machines (M13): after the helper
+	// files that they describe.
+	release := map[string][]byte{TagFile: []byte(r.Tag + "\n"), SumsFile: r.RawSums, SigFile: r.Sig}
 	for dst, tmp := range tmps {
 		if dst == exe {
 			continue
@@ -64,6 +67,24 @@ func Server(ctx context.Context, s *Source, r *Release, exe, helperDir string) (
 			return err
 		}
 		delete(tmps, dst)
+	}
+	for _, name := range []string{SumsFile, SigFile, TagFile} {
+		dst := filepath.Join(helperDir, name)
+		f, err := TempNext(dst)
+		if err != nil {
+			return err
+		}
+		_, err = f.Write(release[name])
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil {
+			err = Replace(f.Name(), dst)
+		}
+		if err != nil {
+			os.Remove(f.Name())
+			return fmt.Errorf("write %s: %w", dst, err)
+		}
 	}
 	delete(tmps, exe)
 	return Replace(tmp, exe)

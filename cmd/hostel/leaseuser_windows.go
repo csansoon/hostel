@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 
+	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
 )
 
@@ -60,6 +61,10 @@ var (
 	procNtUnloadKey2               = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtUnloadKey2")
 	procCancelSynchronousIo        = windows.NewLazySystemDLL("kernel32.dll").NewProc("CancelSynchronousIo")
 )
+
+// afterAnswer runs after the answer to the current request (the restarts of
+// a remote update).
+var afterAnswer func()
 
 type leaseRequest struct {
 	Op   string `json:"op"`
@@ -130,7 +135,7 @@ func callLeaseService(req leaseRequest) (json.RawMessage, error) {
 			break
 		}
 		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-			return nil, fmt.Errorf("the service %s does not run: run \"hostel machine join --lease-users\" as an administrator", leaseService)
+			return nil, fmt.Errorf("the service %s does not run: run \"hostel machine update\" as an administrator once (or \"hostel machine join --lease-users\")", leaseService)
 		}
 		if !errors.Is(err, windows.ERROR_PIPE_BUSY) || time.Now().After(deadline) {
 			return nil, fmt.Errorf("open %s: %w", leasePipe, err)
@@ -244,6 +249,11 @@ func servePipe(h windows.Handle) {
 			answerLeaseRequest(h)
 			// A client that does not read must not keep the one instance.
 			withTimeout(pipeTimeout, func() error { return windows.FlushFileBuffers(h) })
+			if f := afterAnswer; f != nil {
+				afterAnswer = nil
+				windows.DisconnectNamedPipe(h)
+				f()
+			}
 		} else {
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -389,6 +399,22 @@ func runLeaseOp(req leaseRequest) (any, error) {
 	case "list":
 		users, err := leaseUsersWindows()
 		return protocol.LeaseUserList{Users: users}, err
+	case "update":
+		// The root step of a remote update (M13). The connection restarts,
+		// and the service when the update replaced its binary, after the
+		// answer.
+		res, restart, err := updateSigned(config.OSWindows)
+		if err == nil && restart != nil {
+			afterAnswer = func() {
+				restart()
+				if selfReplaced {
+					// Ends the process without a stop: the recovery action
+					// starts the new binary.
+					os.Exit(3)
+				}
+			}
+		}
+		return res, err
 	case "create", "delete":
 		// Also an open that waits (an oplock of another user's file) ends
 		// at the deadline: the service does one request at a time.
@@ -1208,9 +1234,23 @@ func enablePrivileges(names ...string) error {
 // installLeaseUserService installs the root step on Windows: the service's
 // directory, a copy of this binary, the server key, and the service.
 func installLeaseUserService(serverKey string) error {
-	pk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(serverKey))
+	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("the server key: %w", err)
+		return err
+	}
+	return installRootService(self, serverKey)
+}
+
+// installRootService installs the SYSTEM service with the binary src. The
+// service does the lease-user operations only with serverKey (--lease-users:
+// it writes server_key.pub), and the root step of a remote update (M13).
+func installRootService(src, serverKey string) error {
+	var pk ssh.PublicKey
+	if serverKey != "" {
+		var err error
+		if pk, _, _, _, err = ssh.ParseAuthorizedKey([]byte(serverKey)); err != nil {
+			return fmt.Errorf("the server key: %w", err)
+		}
 	}
 	if err := powershell(`$d = $env:HOSTEL_DIR
 if (Test-Path $d) {
@@ -1243,11 +1283,7 @@ if ($LASTEXITCODE) { throw "icacls /setowner $d failed" }`, "HOSTEL_DIR="+leaseR
 		s = nil
 	}
 	exe := filepath.Join(leaseRootDir, "hostel.exe")
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(self)
+	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
@@ -1265,8 +1301,10 @@ if ($LASTEXITCODE) { throw "icacls /setowner $d failed" }`, "HOSTEL_DIR="+leaseR
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(leaseRootDir, "server_key.pub"), ssh.MarshalAuthorizedKey(pk), 0o644); err != nil {
-		return err
+	if pk != nil {
+		if err := os.WriteFile(filepath.Join(leaseRootDir, "server_key.pub"), ssh.MarshalAuthorizedKey(pk), 0o644); err != nil {
+			return err
+		}
 	}
 	if s == nil {
 		s, err = m.CreateService(leaseService, exe, mgr.Config{

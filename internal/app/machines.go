@@ -172,8 +172,8 @@ func (p *templatePage) body(m *model) string {
 			v += "   " + fg(colYellow).Render("◆ out of date")
 		}
 		about += line(field("Connect", v))
-		if m.outOfDate(ms) {
-			about += line(field("", mutedStyle.Render("On the machine, as an administrator: ")+accentStyle.Render(machineUpdateCommand(ms.OS))))
+		if m.outOfDate(ms) && m.admin() {
+			about += line(field("", mutedStyle.Render("Update: a › Update; or as an administrator on it: ")+accentStyle.Render(machineUpdateCommand(ms.OS))))
 		}
 	}
 	rms := p.machines(m)
@@ -321,8 +321,11 @@ func (p *templatePage) hint(m *model) string {
 // health check, a changed host key); the server destroys a broken on-demand
 // machine. An offline machine comes back by itself; a running machine needs no repair.
 func repairable(ms protocol.TemplateStatus, r protocol.MachineStatus) bool {
-	return ms.Kind == "static" && r.State == protocol.MachineBroken && r.Reason != "unreachable"
+	return fixedKind(ms.Kind) && r.State == protocol.MachineBroken && r.Reason != "unreachable"
 }
+
+// fixedKind: a provider with real machines (static, azure), not on demand.
+func fixedKind(kind string) bool { return kind == "static" || kind == "azure" }
 
 func (p *templatePage) canEnd(m *model, l protocol.LeaseStatus) bool {
 	return m.admin() || (m.st.User != "" && l.User == m.st.User)
@@ -383,12 +386,13 @@ func (p *templatePage) endLease(m *model, l protocol.LeaseStatus) {
 	})
 }
 
-// machineActions are the admin actions on the machine of a static machine: stop or
-// allow new leases, and repair. On-demand machines come and go (admins limit
-// them with max_machines).
+// machineActions are the admin actions on the machine of a static or azure
+// machine: stop or allow new leases, repair, and update (a machine that
+// joined, M13). On-demand machines come and go (admins limit them with
+// max_machines).
 func machineActions(m *model, ms protocol.TemplateStatus) []option {
 	rms := templateMachines(m.st, ms.Key)
-	if ms.Kind != "static" || len(rms) == 0 {
+	if !fixedKind(ms.Kind) || len(rms) == 0 {
 		return nil
 	}
 	r := rms[0]
@@ -423,6 +427,14 @@ func machineActions(m *model, ms protocol.TemplateStatus) []option {
 				return nil
 			}
 			m.ask("Repair", "Repair "+clean(r.Name)+"? The server checks the machine again.", repair(false))
+			return nil
+		}})
+	}
+	if m.outOfDate(ms) && r.State == protocol.MachineRunning && r.UpdateTo == "" {
+		out = append(out, option{label: "Update", sub: "Installs the server's version " + clean(m.info.Version) + "; its leases end", key: "u", run: func() tea.Cmd {
+			m.warn("Update the machine", fmt.Sprintf("Update %s from %s to %s? Its active leases end; it takes leases again after the update.", clean(r.Name), clean(ms.ConnectVersion), clean(m.info.Version)), func() tea.Cmd {
+				return m.do("POST", "/v1/machines/"+id+"/update", nil, "The update of "+clean(r.Name)+" started.")
+			})
 			return nil
 		}})
 	}
