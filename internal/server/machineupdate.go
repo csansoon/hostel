@@ -133,11 +133,6 @@ func (s *Server) startMachineUpdate(ctx context.Context, machine store.Machine, 
 	return rel.Tag, nil
 }
 
-// windowsServiceBinary is the binary of the SYSTEM service on Windows, the
-// pipe client of the root step: the machine user cannot read the directory
-// of the connect service (C:\ProgramData\hostel).
-const windowsServiceBinary = `C:\Program Files\Hostel\hostel.exe`
-
 // updateMachinesFile, in data_dir, asks the server that starts after a server
 // update to update its machines (POST /v1/server/update with "machines").
 const updateMachinesFile = "update-machines"
@@ -361,7 +356,7 @@ func (s *Server) runUpdateStep(ctx context.Context, machineID int64) (int, strin
 	defer machine.Conn.Close()
 	cmd := "sudo -n " + leaseUserRoot + " machine update --signed"
 	if machine.OS == config.OSWindows {
-		if cmd, err = shell.Command(machine.Shell, windowsServiceBinary, "machine", "update", "--signed"); err != nil {
+		if cmd, err = shell.Command(machine.Shell, update.WindowsRootStep, "machine", "update", "--signed"); err != nil {
 			return 0, "", err
 		}
 	}

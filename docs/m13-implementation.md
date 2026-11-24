@@ -193,3 +193,6 @@ command, without arguments that it chooses:
     copy in `C:\Program Files\Hostel`, which all users can run. The exact
     command of the server, as the machine user, answered "up to date (v0.5.0,
     the server's release)".
+  - The opt-in smoke test `TestSmokeWindowsRemoteUpdate` (`make
+    test-smoke-windows`) runs the server's command of the root step as the
+    machine user on a real Windows machine; with the old path it fails.

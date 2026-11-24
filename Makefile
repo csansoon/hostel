@@ -66,7 +66,7 @@ test-smoke-namespace: dist
 # Optional: HOSTEL_SMOKE_WINDOWS_ADMIN (an administrator's SSH destination) for
 # the checks that only an administrator can make.
 test-smoke-windows: dist
-	$(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeWindows(Desktop|LeaseUsers|CleanupAudit)?$$' -v ./test/e2e/...
+	$(GO) test -tags e2e -count=1 -timeout 30m -run '^TestSmokeWindows(Desktop|LeaseUsers|CleanupAudit|RemoteUpdate)?$$' -v ./test/e2e/...
 
 # Against a real Azure machine: it costs money (test/e2e/smoke_azure_test.go).
 test-smoke-azure: dist

@@ -111,6 +111,12 @@ const (
 	SigFile  = "SHA256SUMS.sig"
 )
 
+// WindowsRootStep is the binary that the server starts on a Windows machine,
+// as the machine user, for the root step of a remote update (M13): the copy of
+// the SYSTEM service, the pipe client. The machine user cannot read the
+// directory of the connect service (C:\ProgramData\hostel).
+const WindowsRootStep = `C:\Program Files\Hostel\hostel.exe`
+
 // SignedText is the text that a release signature covers: the tag and
 // SHA256SUMS. The tag stops an old release that is served under a new tag.
 func SignedText(tag string, sums []byte) []byte {
