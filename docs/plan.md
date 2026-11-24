@@ -524,3 +524,15 @@ lease. It does not create or delete machines.
 
 E2E scenarios: `m12-implementation.md`, section 6 (a fake Azure API in the
 harness).
+
+## M13. Remote machine update
+
+Status: planned (`m13-implementation.md`). Owner decisions of 2026-11-24
+(`requirements.md`, section 3).
+
+Goal: an admin updates a connected machine from the client, and the server and
+all connected machines from Front desk after a new release, with no step on the
+machines. Hostel ends the leases of the machine, updates it, and starts it
+again. The machine installs only signed releases.
+
+E2E scenarios: `m13-implementation.md`, section 6.
