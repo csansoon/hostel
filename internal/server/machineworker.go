@@ -302,11 +302,21 @@ func (s *Server) stepResuming(ctx context.Context, r store.Machine) {
 	case ctx.Err() != nil:
 	case err == nil:
 		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineResuming}, protocol.MachineProvisioning, "", time.Now())
-	case errors.Is(err, provider.ErrNotFound):
-		s.markLost(ctx, r, "the provider no longer has the machine")
 	default:
+		m, terr := s.templateOf(r)
+		if terr != nil {
+			return
+		}
+		// A power-managed machine that Azure does not find (a wrong vm) is
+		// not lost: it is broken, with the Azure message.
+		if errors.Is(err, provider.ErrNotFound) && m.OnDemand() {
+			s.markLost(ctx, r, "the provider no longer has the machine")
+			return
+		}
 		s.log.Warn("resume failed", "machine_id", r.ID, "err", err)
-		m, _ := s.templateOf(r)
+		if m.PowerManaged() {
+			err = fmt.Errorf("%s: %w", reasonStartFailed, err)
+		}
 		s.machineFailed(ctx, r, m, err)
 	}
 }
@@ -318,11 +328,24 @@ func (s *Server) stepStopping(ctx context.Context, r store.Machine, m *config.Te
 	switch {
 	case ctx.Err() != nil:
 	case err == nil:
-		if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineStopped, "", time.Now()); ok {
+		if m.PowerManaged() && strings.HasPrefix(r.BrokenReason, reasonKeepBroken) {
+			s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineBroken,
+				reasonDeallocated+strings.TrimPrefix(r.BrokenReason, reasonKeepBroken), time.Now())
+		} else if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineStopped, "", time.Now()); ok && m.OnDemand() {
 			s.store.SetWarmUntil(ctx, r.ID, time.Now().Add(m.WarmStopped.D()))
 		}
-	case errors.Is(err, provider.ErrNotFound):
+	case errors.Is(err, provider.ErrNotFound) && m.OnDemand():
 		s.markLost(ctx, r, "the provider no longer has the machine")
+	case m.PowerManaged():
+		// Hostel did not create the machine, so it is not destroyed. Broken, it
+		// takes no lease, and warm tries the stop again after warm_running.
+		s.log.Warn("stop failed", "machine_id", r.ID, "err", err)
+		reason := reasonStopFailed + ": " + err.Error()
+		if kept, ok := strings.CutPrefix(r.BrokenReason, reasonKeepBroken); ok {
+			// Still broken for its first reason; warm_running tries again.
+			reason = kept + " (" + reason + ")"
+		}
+		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineBroken, reason, time.Now())
 	default:
 		s.log.Warn("stop failed; destroy the machine", "machine_id", r.ID, "err", err)
 		s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopping}, protocol.MachineDestroying, "stop failed: "+err.Error(), time.Now())

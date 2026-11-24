@@ -49,12 +49,12 @@ func (s *Server) ensureStaticMachines(ctx context.Context, start bool) error {
 	now := time.Now()
 	byTemplate := map[string]store.Machine{}
 	for _, r := range machines {
-		if p := s.config().Providers[r.Provider]; (p != nil && p.Kind == config.ProviderStatic) || r.State == protocol.MachineRetired {
+		if p := s.config().Providers[r.Provider]; (p != nil && config.Fixed(p.Kind)) || r.State == protocol.MachineRetired {
 			byTemplate[r.Provider+"/"+r.Template] = r
 		}
 	}
 	for _, m := range s.config().Templates() {
-		if m.Kind != config.ProviderStatic {
+		if !config.Fixed(m.Kind) {
 			continue
 		}
 		r, ok := byTemplate[m.Key()]
@@ -91,6 +91,47 @@ func (s *Server) ensureStaticMachines(ctx context.Context, start bool) error {
 }
 
 const reasonUnreachable = "unreachable"
+
+// Reasons of a broken power-managed machine (azure): the provider did not
+// start or stop it.
+const (
+	reasonStartFailed = "start failed"
+	reasonStopFailed  = "stop failed"
+	// A broken machine for another reason is deallocated but stays broken
+	// until a repair: "keep broken: <reason>" while it stops, then
+	// "deallocated: <reason>".
+	reasonKeepBroken  = "keep broken: "
+	reasonDeallocated = "deallocated: "
+)
+
+// powerRecoverable reports whether a broken power-managed machine becomes
+// stopped (usable) when it is deallocated outside Hostel: its fault was only
+// that it did not answer or did not stop.
+func powerRecoverable(reason string) bool {
+	return reason == reasonUnreachable || strings.HasPrefix(reason, reasonUnreachable+" ("+reasonStopFailed) ||
+		strings.HasPrefix(reason, reasonStopFailed)
+}
+
+// unreachableReason reports whether a broken machine did not answer (also
+// after a failed stop of it).
+func unreachableReason(reason string) bool {
+	return reason == reasonUnreachable || strings.HasPrefix(reason, reasonUnreachable+" (")
+}
+
+// powerRetryStop reports whether warm_running deallocates a broken
+// power-managed machine and makes it stopped (usable): only after a failed
+// stop. A machine that Azure still reports running but that stayed
+// unreachable for warm_running stays broken after the deallocation (else
+// each waiting lease would start it again).
+func powerRetryStop(reason string) bool {
+	return strings.HasPrefix(reason, reasonStopFailed)
+}
+
+// powerDeallocated reports whether a broken power-managed machine is known to
+// be deallocated (it did not start, or Hostel deallocated it).
+func powerDeallocated(reason string) bool {
+	return strings.HasPrefix(reason, reasonStartFailed) || strings.HasPrefix(reason, reasonDeallocated)
+}
 
 // reasonHostKeyChanged: the machine answered with another SSH host key; an
 // admin repairs it and accepts the new key.
@@ -158,7 +199,7 @@ func (s *Server) doProvision(ctx context.Context, r store.Machine, m *config.Tem
 	// The helper and mise follow the probe. Tool scripts follow the
 	// machine's os: an external machine can declare another OS (the E2E tests
 	// run .macos.sh scripts in Linux containers this way).
-	if m.Kind == config.ProviderStatic && machine.OS != m.OS {
+	if config.Fixed(m.Kind) && machine.OS != m.OS {
 		return fmt.Errorf("the machine runs %s, but the configuration says os = %q", machine.OS, m.OS)
 	}
 	if err := s.store.SetMachineProbe(ctx, r.ID, machine.OS, machine.Arch, machine.Home, machine.Shell); err != nil {

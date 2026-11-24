@@ -256,8 +256,11 @@ func printQueue(w io.Writer, st protocol.Status, tool string, now time.Time) err
 func printMachineDetails(w io.Writer, d protocol.MachineDetails, now time.Time) {
 	r := d.Machine
 	kind := "on demand"
-	if d.Template != nil && d.Template.Kind == "static" {
-		kind = "static"
+	if d.Template != nil && (d.Template.Kind == "static" || d.Template.Kind == "azure") {
+		kind = d.Template.Kind
+		if d.Template.Kind == "azure" {
+			kind = "Azure, started when a lease needs it"
+		}
 		if d.Template.Connect {
 			kind += ", connects to the server"
 		}

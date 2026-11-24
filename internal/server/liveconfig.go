@@ -51,7 +51,7 @@ func (s *Server) toolUploads() map[string]map[string]machineops.Tool {
 // Providers whose settings did not change are reused (no login check again).
 func (s *Server) buildLive(ctx context.Context, cfg *config.Server, revision int, document string, tools map[string]map[string]string, toolsDir string, old *liveConfig) (*liveConfig, error) {
 	lc := &liveConfig{cfg: cfg, revision: revision, document: document, tools: tools, toolsDir: toolsDir, providers: map[string]provider.Provider{}}
-	fresh := &config.Server{ProviderOrder: nil, Providers: map[string]*config.Provider{}}
+	fresh := &config.Server{DataDir: cfg.DataDir, Providers: map[string]*config.Provider{}}
 	for _, name := range cfg.ProviderOrder {
 		if old != nil && old.providers[name] != nil && reflect.DeepEqual(old.cfg.Providers[name], cfg.Providers[name]) {
 			lc.providers[name] = old.providers[name]
@@ -212,6 +212,9 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 	if err := s.checkRemovals(ctx, cfg); err != nil {
 		return 0, err
 	}
+	if err := s.checkAzurePower(ctx, cfg); err != nil {
+		return 0, err
+	}
 	lc, err := s.buildLive(ctx, cfg, base+1, document, old.tools, old.toolsDir, old)
 	if err != nil {
 		return 0, errConfig{err.Error()}
@@ -226,6 +229,24 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 	rev, err := s.store.AddConfig(ctx, base, document, userID, time.Now())
 	if err != nil {
 		return 0, err
+	}
+	// The client secret goes only with the sign-in that it was given for:
+	// it is removed with its azure provider, and when the sign-in settings
+	// change (a new login_url must not get it). Before the swap: the new
+	// provider must not sign in with it.
+	for name, p := range old.cfg.Providers {
+		np := cfg.Providers[name]
+		if p.Kind != config.ProviderAzure || np != nil && np.Kind == config.ProviderAzure && np.Auth == p.Auth &&
+			np.Tenant == p.Tenant && np.ClientID == p.ClientID && np.LoginURL == p.LoginURL {
+			continue
+		}
+		err := os.Remove(providerSecretFile(cfg.DataDir, name))
+		switch {
+		case err == nil:
+			s.log.Info("client secret removed: the provider or its sign-in changed", "provider", name)
+		case !errors.Is(err, os.ErrNotExist):
+			s.log.Error("remove the client secret of a provider", "provider", name, "err", err)
+		}
 	}
 	s.live.Store(lc)
 	// The machine tokens of a removed machine stop working.
@@ -356,11 +377,11 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 		// A machine keeps its provider's reference: the provider's kind must not
 		// change under it.
 		if op, np := s.config().Providers[r.Provider], cfg.Providers[r.Provider]; op != nil && np != nil &&
-			(op.Kind != np.Kind || !slices.Equal(op.Command, np.Command) || !maps.Equal(op.CommandEnv, np.CommandEnv)) {
+			(op.Kind != np.Kind && !(config.Fixed(op.Kind) && config.Fixed(np.Kind)) || !slices.Equal(op.Command, np.Command) || !maps.Equal(op.CommandEnv, np.CommandEnv)) {
 			errs = append(errs, fmt.Sprintf("providers.%s: kind, command, and command_env stay while the provider has the machine %s (its machines belong to that backend); remove its machines, and change them when its machines are destroyed or retired", r.Provider, r.Name))
 			continue
 		}
-		if p := cfg.Providers[r.Provider]; p == nil && s.config().Providers[r.Provider] != nil && s.config().Providers[r.Provider].Kind != config.ProviderStatic {
+		if p := cfg.Providers[r.Provider]; p == nil && s.config().Providers[r.Provider] != nil && !config.Fixed(s.config().Providers[r.Provider].Kind) {
 			errs = append(errs, fmt.Sprintf("providers.%s: has the machine %s; remove its machines first, and remove the provider when its machines are destroyed", r.Provider, r.Name))
 			continue
 		}
@@ -368,6 +389,19 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 			fmt.Sprint(om.Spec["product"]) != fmt.Sprint(nm.Spec["product"]) {
 			// The machine's reference belongs to its product.
 			errs = append(errs, fmt.Sprintf("%s.spec.product: stays while the machine %s exists; remove the template, and add it again with the new product when its machines are destroyed", entryKey(r), r.Name))
+			continue
+		}
+		// An azure machine is removed, or gets another vm, only when it is
+		// deallocated: else its virtual machine would run on without Hostel.
+		if om, nm := s.config().Template(key), cfg.Template(key); om != nil && om.PowerManaged() && (nm == nil || nm.PowerManaged() && nm.VM != om.VM) &&
+			r.State != protocol.MachineStopped && !(r.State == protocol.MachineBroken && strings.HasPrefix(r.BrokenReason, reasonDeallocated)) {
+			errs = append(errs, fmt.Sprintf("%s: the azure machine %s is %s; remove it or change its vm when it is stopped (drain it, and wait for warm_running without a lease; after a failed start, drain it and repair it)", entryKey(r), r.Name, r.State))
+			continue
+		}
+		// The worker of a start or a deallocation needs the azure provider.
+		if om, nm := s.config().Template(key), cfg.Template(key); om != nil && om.PowerManaged() && nm != nil && !nm.PowerManaged() &&
+			(r.State == protocol.MachineResuming || r.State == protocol.MachineStopping) {
+			errs = append(errs, fmt.Sprintf("providers.%s: the azure machine %s is %s; change the kind when it is running or stopped", r.Provider, r.Name, r.State))
 			continue
 		}
 		if nm := cfg.Template(key); nm != nil {
@@ -405,6 +439,56 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 	return nil
 }
 
+// checkAzurePower reads the power state of each azure machine that the change
+// removes or moves to another vm: its row can be stopped while someone
+// started the virtual machine outside Hostel after the last reconcile, and it
+// would then run on without Hostel. Outside schedMu (Azure calls); the row
+// check under schedMu follows.
+func (s *Server) checkAzurePower(ctx context.Context, cfg *config.Server) error {
+	machines, err := s.store.Machines(ctx)
+	if err != nil {
+		return err
+	}
+	checked := map[string][]string{} // provider → machines
+	for _, r := range machines {
+		if r.State == protocol.MachineRetired || r.State == protocol.MachineDestroyed {
+			continue
+		}
+		key := r.Provider + "/" + r.Template
+		om, nm := s.config().Template(key), cfg.Template(key)
+		// A change to static keeps the machine running on purpose.
+		if om == nil || !om.PowerManaged() || nm != nil && (!nm.PowerManaged() || nm.VM == om.VM) {
+			continue
+		}
+		checked[r.Provider] = append(checked[r.Provider], r.Template)
+	}
+	var errs []string
+	for name, templates := range checked {
+		p := s.providerMap()[name]
+		if p == nil {
+			continue
+		}
+		lctx, cancel := context.WithTimeout(ctx, time.Minute)
+		listed, err := p.List(lctx, "")
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("providers.%s: read the power state of its machines before a removal or a vm change: %v", name, err))
+			continue
+		}
+		for _, ref := range listed {
+			// "" is a vm that Azure does not have.
+			if slices.Contains(templates, ref.Template) && ref.State != provider.PowerStopped && ref.State != "" {
+				errs = append(errs, fmt.Sprintf("%s/%s: its virtual machine is %s in Azure; remove it or change its vm when it is deallocated (drain it, and wait for warm_running without a lease)", name, ref.Template, ref.State))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		slices.Sort(errs)
+		return errConfig{strings.Join(errs, "\n")}
+	}
+	return nil
+}
+
 // templateHash is the hash of what a machine of the machine is provisioned with:
 // the settings that provisioning uses, the machine's tools, and the files of
 // its defined tools (for an on-demand machine, its software tools only: it
@@ -427,7 +511,8 @@ func templateHash(lc *liveConfig, m *config.Template) string {
 		Rooms       []config.Room
 		Mise        *config.Mise
 		Hashes      map[string]string
-	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Rooms, lc.cfg.Mise, hashes})
+		VM          string `json:",omitempty"`
+	}{m.Address, m.OS, m.Connect, m.Spec, m.Tools, m.Env, m.Rooms, lc.cfg.Mise, hashes, m.VM})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
@@ -462,7 +547,7 @@ func (s *Server) refreshMachines(ctx context.Context) error {
 		}
 		m := lc.cfg.Template(r.Provider + "/" + r.Template)
 		p := lc.cfg.Providers[r.Provider]
-		static := p != nil && p.Kind == config.ProviderStatic
+		static := p != nil && config.Fixed(p.Kind)
 		switch {
 		case m == nil && (p == nil || static):
 			if r.State != protocol.MachineRetired {
@@ -476,6 +561,15 @@ func (s *Server) refreshMachines(ctx context.Context) error {
 			// A machine from before M9 (also a stopped one, which can resume):
 			// its settings are the current ones at the first pass.
 			err = s.store.SetConfigSHA256(ctx, r.ID, templateHash(lc, m))
+		case r.State == protocol.MachineStopped && !m.PowerManaged() && static:
+			// An azure machine that became static: it cannot be started, so
+			// it is probed (it runs, or it is unreachable).
+			_, err = s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineStopped}, protocol.MachineProvisioning, "provider no longer azure", now)
+		case r.State == protocol.MachineStopped && m.PowerManaged() && r.ConfigSHA256 != templateHash(lc, m):
+			// Its rooms follow now; the rest at its next start.
+			if err = s.store.EnsureRooms(ctx, r.ID, roomNames(m)); err == nil {
+				err = s.store.RemoveFreeRooms(ctx, r.ID, roomNames(m))
+			}
 		case r.State != protocol.MachineRunning:
 		case r.ConfigSHA256 != templateHash(lc, m) && static:
 			if err = s.store.EnsureRooms(ctx, r.ID, roomNames(m)); err == nil {

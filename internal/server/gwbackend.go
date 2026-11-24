@@ -160,10 +160,22 @@ func (b gwBackend) MachineConnected(template string, token int64) error {
 		return nil
 	}
 	for _, r := range machines {
-		if r.Provider+"/"+r.Template != template || r.State != protocol.MachineBroken || r.BrokenReason != reasonUnreachable {
+		if r.Provider+"/"+r.Template != template {
 			continue
 		}
-		if _, err := b.s.store.SetMachineState(ctx, r.ID, []string{protocol.MachineBroken}, protocol.MachineProvisioning, "", time.Now()); err != nil {
+		// A stopped machine that Hostel did not create (azure) that connects
+		// was started outside Hostel.
+		m := b.s.config().Template(template)
+		stoppedOutside := r.State == protocol.MachineStopped && m != nil && m.PowerManaged()
+		if !stoppedOutside && (r.State != protocol.MachineBroken || r.BrokenReason != reasonUnreachable) {
+			continue
+		}
+		// Under schedMu: a configuration change checks that an azure machine
+		// is stopped before it removes it.
+		b.s.schedMu.Lock()
+		_, err := b.s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", time.Now())
+		b.s.schedMu.Unlock()
+		if err != nil {
 			b.s.log.Warn("machine connected: probe the machine", "machine", r.Name, "err", err)
 		}
 	}

@@ -2,7 +2,8 @@
 
 This guide adds a computer to Hostel as a machine: a Mac, a Windows computer,
 or a Linux computer. An administrator of that computer does these steps once.
-For on-demand machines from a provider (Namespace), see section 7.
+For on-demand machines from a provider (Namespace), see section 7. For an
+existing Azure virtual machine that runs only when leases need it, see section 9.
 
 Each part ends with a check. Do not continue before the check passes.
 
@@ -516,3 +517,116 @@ icacls C:\Users\hostel\.ssh\authorized_keys /inheritance:r /grant 'SYSTEM:F' /gr
 
 Cleanup restores `authorized_keys` from `~/hostel/authorized_keys.base` after the
 first lease; a new server key goes into both files.
+
+## 9. Azure machines
+
+An `azure` provider starts an existing Azure virtual machine when a lease needs
+it, and deallocates it after `warm_running` (default 30 minutes) without a
+lease. A deallocated machine costs only its disk. Hostel does not create or
+delete Azure machines. Set up the machine itself with sections 2 to 6 (Windows,
+macOS is not in Azure, or Linux); this section adds the Azure part.
+
+### 9.1 An application for Hostel
+
+If you cannot register an application, use the Azure CLI of the server
+instead (section 9.3) and skip this section.
+
+In the Azure portal:
+
+1. Microsoft Entra ID, App registrations, New registration. Keep the
+   **Application (client) ID** and the **Directory (tenant) ID**.
+2. The application, Certificates & secrets, New client secret. Keep the value
+   (the portal shows it once). Write down its end date: Hostel cannot start
+   the machine after it.
+3. A custom role with only these actions, assigned to the application on the
+   virtual machine only (the machine, Access control (IAM), Add role
+   assignment), not on the subscription:
+
+   ```json
+   {
+     "properties": {
+       "roleName": "Hostel machine power",
+       "description": "Start, deallocate, and read the power state of virtual machines.",
+       "assignableScopes": ["/subscriptions/<subscription ID>"],
+       "permissions": [{
+         "actions": [
+           "Microsoft.Compute/virtualMachines/read",
+           "Microsoft.Compute/virtualMachines/start/action",
+           "Microsoft.Compute/virtualMachines/deallocate/action",
+           "Microsoft.Compute/locations/operations/read"
+         ]
+       }]
+     }
+   }
+   ```
+
+   (Subscriptions, the subscription, Access control (IAM), Add custom role,
+   JSON.)
+4. The machine's **resource ID**: the machine, Overview, JSON View. It has the
+   form `/subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>`.
+
+### 9.2 The provider and the machine
+
+On your own computer, as a Hostel admin:
+
+```sh
+hostel config providers add cloud --kind azure --tenant <tenant ID> --client-id <client ID>
+hostel config providers login cloud          # asks for the client secret (not shown)
+hostel config machines add win --provider cloud --vm <resource ID> --tool windows-desktop
+```
+
+`providers login` keeps the secret on the server only (not in the
+configuration, which members can read) and checks it with Azure. Run it again
+with a new secret before the old one ends. The machine must run while you
+join it (the printed command, section 4.2 or 5).
+
+A machine that is already in a `static` provider can stay: change the provider
+to `kind = "azure"` with `tenant` and `client_id`, and add `vm` to the machine
+(`hostel config edit`). Then run `providers login`.
+
+### 9.3 Without an application: the Azure CLI
+
+The server can use the account of the Azure CLI instead of an application.
+Your account must be able to read, start, and deallocate the machine. The
+server has the rights of that account, which are often more than the custom
+role of section 9.1, so prefer an application when you can.
+
+1. Install the Azure CLI (`az`) on the server.
+2. Sign in as the user that runs the server (the sign-in stays in that user's
+   `~/.azure`):
+
+   ```sh
+   sudo -u hostel -H az login --use-device-code   # open the address and enter the code
+   ```
+
+3. As a Hostel admin:
+
+   ```sh
+   hostel config providers add cloud --kind azure --auth cli [--tenant <tenant ID>]
+   hostel config machines add win --provider cloud --vm <resource ID> --tool windows-desktop
+   ```
+
+The Azure sign-in can end (for example after a password change, or by a
+policy of your organization). Then Hostel cannot start the machine, and the
+server log says to run `az login` again.
+
+### 9.4 The idle time
+
+The idle time before the deallocation (`hostel config edit`):
+
+```toml
+[providers.cloud.machines.win]
+warm_running = "30m"
+```
+
+### 9.3 Auto-shutdown (recommended)
+
+Hostel deallocates the machine only while the Hostel server runs. As a limit
+for the time when it does not, set an auto-shutdown schedule on the machine
+(the machine, Operations, Auto-shutdown; for example each night). An
+auto-shutdown deallocates the machine; Hostel sees it at the next reconcile and
+starts the machine again when a lease needs it.
+
+Check: `hostel status <provider>/<machine>` shows the machine as `stopped`
+after `warm_running`, and `hostel acquire <tool>` starts it (a Windows machine
+takes about 1 to 3 minutes).

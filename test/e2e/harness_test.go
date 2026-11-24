@@ -165,11 +165,18 @@ func (r result) String() string {
 // hostel runs the hostel binary with a deadline and returns its result.
 func (e *env) hostel(args ...string) result {
 	e.t.Helper()
+	return e.hostelIn("", args...)
+}
+
+// hostelIn runs the hostel binary with stdin.
+func (e *env) hostelIn(stdin string, args ...string) result {
+	e.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, e.guestBin(), args...)
 	cmd.Env = e.environ()
 	cmd.Dir = e.cwd
+	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

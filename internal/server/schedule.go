@@ -145,7 +145,9 @@ func (s *Server) schedule(ctx context.Context) error {
 		}
 		// A machine whose machine settings changed gets no new lease; it
 		// provisions again when it is free (refreshMachines).
-		stale := r.ConfigSHA256 != "" && r.ConfigSHA256 != templateHash(lc, m)
+		// A deallocated azure machine provisions with the new settings when it
+		// starts, so it is not stale.
+		stale := r.ConfigSHA256 != "" && r.ConfigSHA256 != templateHash(lc, m) && !(m.PowerManaged() && r.State == protocol.MachineStopped)
 		sr := scheduler.Machine{ID: r.ID, Template: m.Key(), State: r.State, Drained: r.Drained || stale, CreatedAt: r.CreatedAt,
 			Tools: view.machineHaves(m, r.ID), Ready: machineReady(lc, view.rts, r, m)}
 		for _, sl := range rooms {

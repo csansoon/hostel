@@ -256,7 +256,7 @@ func TestTokens(t *testing.T) {
 	if r := e.hostel("admin", "token", "create", "--name", "agent", "--role", "guest"); r.code != 1 || !strings.Contains(r.stderr, "hostel config users invite") {
 		t.Fatalf("user token create: %s, want a refusal that names invites", r)
 	}
-	if r := e.hostel("admin", "token", "create", "--name", "r", "--role", "machine", "--machine", "home/nothing"); r.code != 1 || !strings.Contains(r.stderr, "static machine") {
+	if r := e.hostel("admin", "token", "create", "--name", "r", "--role", "machine", "--machine", "home/nothing"); r.code != 1 || !strings.Contains(r.stderr, "static or azure machine") {
 		t.Fatalf("machine token for an unknown machine: %s", r)
 	}
 	e.useGuestToken()

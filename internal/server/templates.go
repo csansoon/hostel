@@ -29,6 +29,7 @@ type machineInvite struct {
 	Provider string   `json:"provider"`
 	Name     string   `json:"name"`
 	Tools    []string `json:"tools"`
+	VM       string   `json:"vm,omitempty"`
 }
 
 func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +37,7 @@ func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	m := machineInvite{Provider: req.Provider, Name: req.Name, Tools: req.Tools}
+	m := machineInvite{Provider: req.Provider, Name: req.Name, Tools: req.Tools, VM: req.VM}
 	if m.Provider == "" {
 		m.Provider = joinProvider
 	}
@@ -45,8 +46,14 @@ func (s *Server) handleMachineInvite(w http.ResponseWriter, r *http.Request) {
 	case !config.ValidName(m.Name) || !config.ValidName(m.Provider):
 		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("%q is not a valid machine name: use lowercase letters, digits, and -, starting with a letter", m.Provider+"/"+m.Name))
 		return
-	case p != nil && p.Kind != config.ProviderStatic:
-		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("the provider %s is %s; a machine joins a static provider", m.Provider, p.Kind))
+	case p != nil && !config.Fixed(p.Kind):
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("the provider %s is %s; a machine joins a static or azure provider", m.Provider, p.Kind))
+		return
+	case (p != nil && p.Kind == config.ProviderAzure) != (m.VM != ""):
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("a machine of an azure provider needs --vm (its resource ID), and only such a machine takes it; the provider %s is not azure or does not exist", m.Provider))
+		return
+	case m.VM != "" && !config.ValidAzureVM(m.VM):
+		writeError(w, http.StatusBadRequest, "", fmt.Sprintf("%q is not the resource ID of an Azure virtual machine: /subscriptions/<id>/resourceGroups/<group>/providers/Microsoft.Compute/virtualMachines/<name>", m.VM))
 		return
 	case cfg.Template(m.Provider+"/"+m.Name) != nil:
 		writeError(w, http.StatusConflict, "", fmt.Sprintf("the machine %s/%s exists already", m.Provider, m.Name))
@@ -218,6 +225,9 @@ func addJoinedMachine(doc []byte, cfg *config.Server, m machineInvite, osName st
 	keys := [][2]string{{"address", `"hostel@localhost"`}, {"connect", "true"}, {"os", fmt.Sprintf("%q", osName)}}
 	if len(m.Tools) > 0 {
 		keys = append(keys, [2]string{"tools", quote(m.Tools)})
+	}
+	if m.VM != "" {
+		keys = append(keys, [2]string{"vm", fmt.Sprintf("%q", m.VM)})
 	}
 	for _, kv := range keys {
 		if doc, err = config.SetKey(doc, append(slices.Clone(path), kv[0]), kv[1]); err != nil {

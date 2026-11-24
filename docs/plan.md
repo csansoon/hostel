@@ -513,3 +513,14 @@ measures.
 E2E scenarios: a reverse-shell process without `HOSTEL_LEASE`, a crontab entry, a
 user LaunchAgent or systemd user unit, and a changed cache binary. None of them
 survives cleanup or reaches the next lease.
+
+## M12. Azure provider
+
+Status: implemented (`m12-implementation.md`; owner decisions of 2026-11-18). Waiting for the owner's approval.
+
+Goal: an existing Azure machine runs only when leases need it. The `azure`
+provider starts it for a lease and deallocates it after `warm_running` without a
+lease. It does not create or delete machines.
+
+E2E scenarios: `m12-implementation.md`, section 6 (a fake Azure API in the
+harness).

@@ -93,6 +93,8 @@ func newProviders(ctx context.Context, cfg *config.Server, serverKey ssh.Signer,
 		switch p.Kind {
 		case config.ProviderStatic:
 			out[name] = provider.NewStatic(p, serverKey, dialMachine)
+		case config.ProviderAzure:
+			out[name] = provider.NewAzure(p, providerSecretFile(cfg.DataDir, name), serverKey, dialMachine)
 		case config.ProviderNamespace:
 			for _, mn := range p.TemplateOrder {
 				m := p.Templates[mn]
@@ -285,6 +287,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/connect", s.handleConnect)
 	mux.HandleFunc("POST /v1/logins/{cli}", s.auth(s.admin(s.handleLogin)))
 	mux.HandleFunc("GET /v1/logins/{cli}", s.auth(s.admin(s.handleLoginState)))
+	mux.HandleFunc("PUT /v1/providers/{name}/secret", s.auth(s.admin(s.handleProviderSecret)))
 	mux.HandleFunc("POST /v1/machines/invites", s.auth(s.admin(s.handleMachineInvite)))
 	mux.HandleFunc("POST /v1/machines/join", s.handleMachineJoin)
 	mux.HandleFunc("GET /v1/download/{file}", s.handleDownload)
