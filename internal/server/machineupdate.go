@@ -324,7 +324,7 @@ func (s *Server) stepUpdating(ctx context.Context, r store.Machine, m *config.Te
 			case ctx.Err() != nil:
 				return
 			case err == nil && code != 0:
-				fail(fmt.Errorf("the update step on the machine (exit code %d): %s; a machine without the step of remote updates needs one \"hostel machine update\" as an administrator on it", code, out))
+				fail(fmt.Errorf("the update step on the machine (exit code %d): %s; a machine without the step of remote updates needs \"hostel machine update\" as an administrator on it (two times from a version before v0.5.0)", code, out))
 				return
 			}
 			// The connection ends when the service restarts with the new
@@ -361,9 +361,6 @@ func (s *Server) runUpdateStep(ctx context.Context, machineID int64) (int, strin
 	defer machine.Conn.Close()
 	cmd := "sudo -n " + leaseUserRoot + " machine update --signed"
 	if machine.OS == config.OSWindows {
-		// The service directory's binary is only the client of the SYSTEM
-		// service; it is from the join or the last update (the helper can
-		// be older).
 		if cmd, err = shell.Command(machine.Shell, windowsServiceBinary, "machine", "update", "--signed"); err != nil {
 			return 0, "", err
 		}
