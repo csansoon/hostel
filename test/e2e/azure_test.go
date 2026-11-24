@@ -579,14 +579,16 @@ tools = ["probe"]
 		t.Fatalf("add an on-demand provider: %s", r)
 	}
 	e.newRepoNamed("fresh", defaultRepoFiles())
+	if r := e.hostel("acquire", "probe", "--fresh", "--task", "fresh", "--background"); r.code != 75 {
+		t.Fatalf("acquire --fresh --background: %s, want exit code 75 (it waits)", r)
+	}
+	// Two reconcile passes (and more scheduler passes) while the lease waits.
 	views := az.viewCount()
-	if r := e.hostel("acquire", "probe", "--fresh", "--task", "fresh", "--wait", "6s"); r.code != 75 {
-		t.Fatalf("acquire --fresh: %s, want exit code 75 (it waits)", r)
+	e.waitFor("two reconcile passes", time.Minute, func() bool { return az.viewCount() >= views+2 })
+	if starts, _ := az.counts(); starts != 0 || s.machine("cloud/box").State != protocol.MachineStopped {
+		t.Fatalf("a queued lease that the machine cannot take: starts %d, machine %s; want 0, stopped", starts, s.machine("cloud/box").State)
 	}
-	if starts, _ := az.counts(); starts != 0 || s.machine("cloud/box").State != protocol.MachineStopped || az.viewCount() < views+2 {
-		t.Fatalf("a queued lease that the machine cannot take: starts %d, machine %s, power reads %d; want 0, stopped, at least 2",
-			starts, s.machine("cloud/box").State, az.viewCount()-views)
-	}
+	e.mustHostel("release")
 	if r := e.applyDoc(doc); r.code != 0 {
 		t.Fatalf("remove the on-demand provider: %s", r)
 	}
