@@ -81,7 +81,7 @@ Pure Go, with `net/http` (no Azure SDK, no `az` CLI on the server):
   `https://management.azure.com`, with a pinned `api-version`. A start or a
   deallocate answers `202` with an `Azure-AsyncOperation` URL; Hostel polls it
   until it ends.
-- Deadlines: 30 s for each HTTP request, 10 minutes for a start or a deallocate.
+- Deadlines: 30 s for each HTTP request, and the provider call deadline (5 minutes) for a start or a deallocate. A start that takes longer is a failed start; when Azure then reports the machine running, the reconcile probes it.
   Retries only for `429` and `5xx`, with backoff and the `Retry-After` header,
   inside the deadline.
 - The base addresses can be changed in the provider (`login_url`,
@@ -193,6 +193,13 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
 - **Not done.** Creating machines from an image; a certificate or a managed
   identity instead of a client secret; the auto-shutdown schedule (the owner
   sets it in the portal).
+
+- **Review of the pull request** (2026-11-24): a machine that stops answering
+  near the end of its idle time is deallocated only after `warm_running`
+  unreachable (counted from the change to `broken`), not at once; the client
+  secret is removed when the sign-in settings change; no change of `kind` while
+  a start or a deallocation runs; a connecting stopped machine changes state
+  under the scheduler lock.
 
 ## 9. Evidence (2026-11-19)
 

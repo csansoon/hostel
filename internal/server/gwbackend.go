@@ -170,7 +170,12 @@ func (b gwBackend) MachineConnected(template string, token int64) error {
 		if !stoppedOutside && (r.State != protocol.MachineBroken || r.BrokenReason != reasonUnreachable) {
 			continue
 		}
-		if _, err := b.s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", time.Now()); err != nil {
+		// Under schedMu: a configuration change checks that an azure machine
+		// is stopped before it removes it.
+		b.s.schedMu.Lock()
+		_, err := b.s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", time.Now())
+		b.s.schedMu.Unlock()
+		if err != nil {
 			b.s.log.Warn("machine connected: probe the machine", "machine", r.Name, "err", err)
 		}
 	}

@@ -358,13 +358,16 @@ func (s *Server) reconcilePower(ctx context.Context, name string, p provider.Pro
 			continue
 		}
 		broken := r.State == protocol.MachineBroken
+		m := s.config().Template(r.Provider + "/" + r.Template)
 		switch state := power[r.Template]; {
 		case state == provider.PowerRunning && (r.State == protocol.MachineStopped || broken && strings.HasPrefix(r.BrokenReason, reasonStartFailed)):
 			s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineProvisioning, "", now)
-		case state == provider.PowerRunning && broken && unreachableReason(r.BrokenReason) && !busy[r.ID] &&
-			!r.WarmUntil.IsZero() && now.After(r.WarmUntil):
-			// It runs but did not answer for warm_running: deallocated, and
-			// broken until a repair (else each waiting lease would start it).
+		case state == provider.PowerRunning && broken && unreachableReason(r.BrokenReason) && !busy[r.ID] && m != nil &&
+			!r.WarmUntil.IsZero() && now.After(r.WarmUntil) && now.After(r.StateChangedAt.Add(m.WarmRunning.D())):
+			// It runs but did not answer for warm_running (counted from when
+			// it became broken, not from the start of its idle time: a
+			// reboot is not a hang): deallocated, and broken until a repair
+			// (else each waiting lease would start it).
 			if ok, _ := s.store.SetMachineState(ctx, r.ID, []string{r.State}, protocol.MachineStopping, reasonKeepBroken+reasonUnreachable, now); ok {
 				s.store.SetWarmUntil(ctx, r.ID, time.Time{})
 			}

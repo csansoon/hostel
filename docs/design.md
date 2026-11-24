@@ -636,7 +636,10 @@ signs in again once.
   `<data_dir>/provider-secrets/<provider>` (file `0600`, directory `0700`),
   adds the event "client secret of provider X set" (no value), and tries it with
   `List`. The provider reads the file at each sign-in. The value is never in a
-  log, an event, or an answer.
+  log, an event, or an answer. The server removes the file when the provider
+  is removed or its `kind`, `auth`, `tenant`, `client_id`, or `login_url`
+  changes (a new `login_url` must not get the secret); then run
+  `providers login` again.
 - **Azure CLI sign-in.** With `auth = "cli"` (owner decision, 2026-11-23), no
   application or client secret is necessary: the provider runs `az account
   get-access-token --resource <management_url>/ --output json [--tenant

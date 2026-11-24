@@ -235,7 +235,7 @@ func (s *Server) idleMachines(ctx context.Context, machines []store.Machine) (ma
 	out := map[int64]bool{}
 	for _, r := range machines {
 		m := s.config().Template(r.Provider + "/" + r.Template)
-		if m == nil || !m.OnDemand() && !m.PowerManaged() || busy[r.ID] {
+		if m == nil || !m.OnDemand() || busy[r.ID] {
 			continue
 		}
 		if r.State == protocol.MachineStopped || r.State == protocol.MachineRunning {

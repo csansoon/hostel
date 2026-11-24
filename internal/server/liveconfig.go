@@ -227,20 +227,30 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 	if err != nil {
 		return 0, err
 	}
+	// The client secret goes only with the sign-in that it was given for:
+	// it is removed with its azure provider, and when the sign-in settings
+	// change (a new login_url must not get it). Before the swap: the new
+	// provider must not sign in with it.
+	for name, p := range old.cfg.Providers {
+		np := cfg.Providers[name]
+		if p.Kind != config.ProviderAzure || np != nil && np.Kind == config.ProviderAzure && np.Auth == p.Auth &&
+			np.Tenant == p.Tenant && np.ClientID == p.ClientID && np.LoginURL == p.LoginURL {
+			continue
+		}
+		err := os.Remove(providerSecretFile(cfg.DataDir, name))
+		switch {
+		case err == nil:
+			s.log.Info("client secret removed: the provider or its sign-in changed", "provider", name)
+		case !errors.Is(err, os.ErrNotExist):
+			s.log.Error("remove the client secret of a provider", "provider", name, "err", err)
+		}
+	}
 	s.live.Store(lc)
 	// The machine tokens of a removed machine stop working.
 	for _, m := range old.cfg.Templates() {
 		if m.Connect && cfg.Template(m.Key()) == nil {
 			if err := s.revokeTemplateTokens(ctx, m.Key(), time.Now()); err != nil {
 				s.log.Error("revoke the machine tokens of a removed machine", "machine", m.Key(), "err", err)
-			}
-		}
-	}
-	// The client secret of a removed azure provider goes with it.
-	for name, p := range old.cfg.Providers {
-		if np := cfg.Providers[name]; p.Kind == config.ProviderAzure && (np == nil || np.Kind != config.ProviderAzure) {
-			if err := os.Remove(providerSecretFile(cfg.DataDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				s.log.Error("remove the client secret of a removed provider", "provider", name, "err", err)
 			}
 		}
 	}
@@ -382,7 +392,13 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 		// deallocated: else its virtual machine would run on without Hostel.
 		if om, nm := s.config().Template(key), cfg.Template(key); om != nil && om.PowerManaged() && (nm == nil || nm.PowerManaged() && nm.VM != om.VM) &&
 			r.State != protocol.MachineStopped && !(r.State == protocol.MachineBroken && strings.HasPrefix(r.BrokenReason, reasonDeallocated)) {
-			errs = append(errs, fmt.Sprintf("%s: the azure machine %s is %s; remove it or change its vm when it is stopped (drain it, and wait for warm_running without a lease)", entryKey(r), r.Name, r.State))
+			errs = append(errs, fmt.Sprintf("%s: the azure machine %s is %s; remove it or change its vm when it is stopped (drain it, and wait for warm_running without a lease; after a failed start, drain it and repair it)", entryKey(r), r.Name, r.State))
+			continue
+		}
+		// The worker of a start or a deallocation needs the azure provider.
+		if om, nm := s.config().Template(key), cfg.Template(key); om != nil && om.PowerManaged() && nm != nil && !nm.PowerManaged() &&
+			(r.State == protocol.MachineResuming || r.State == protocol.MachineStopping) {
+			errs = append(errs, fmt.Sprintf("providers.%s: the azure machine %s is %s; change the kind when it is running or stopped", r.Provider, r.Name, r.State))
 			continue
 		}
 		if nm := cfg.Template(key); nm != nil {

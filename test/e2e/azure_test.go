@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -413,16 +414,44 @@ func TestAzure(t *testing.T) {
 		t.Fatalf("providers remove cloud2: %s", r)
 	}
 
-	// Runs in Azure but does not answer: after warm_running it is
+	// Runs in Azure but does not answer (here: an idle running machine that
+	// stops answering): after warm_running unreachable, counted from when it
+	// became unreachable (not from the start of the idle time), it is
 	// deallocated and stays broken (a waiting lease does not start it again)
 	// until a repair.
 	e.adminHostel("config", "machines", "undrain", "cloud/box")
+	f.acquire("probe")
+	e.mustHostel("release")
+	e.waitFor("the room is free", time.Minute, func() bool {
+		m := s.machine("cloud/box")
+		return m.State == protocol.MachineRunning && len(m.Rooms) > 0 && m.Rooms[0].State == protocol.RoomFree
+	})
+	// Part of warm_running passes idle (not an assertion: if the machine is
+	// deallocated first, the check below still holds).
+	time.Sleep(2 * time.Second)
 	az.setHung(true)
-	m = s.waitMachine("cloud/box", protocol.MachineBroken, 2*time.Minute)
+	c.stop()
 	e.waitFor("deallocated and still broken", 2*time.Minute, func() bool {
 		m = s.machine("cloud/box")
 		return m.State == protocol.MachineBroken && m.Reason == "deallocated: unreachable"
 	})
+	var brokenAt, stoppingAt time.Time
+	var d protocol.MachineDetails
+	if code := s.get("/v1/machines/cloud/box", s.token, &d); code != 200 {
+		t.Fatalf("GET /v1/machines/cloud/box: HTTP %d", code)
+	}
+	for _, ev := range d.Events {
+		switch {
+		case strings.HasSuffix(ev.Message, "running → broken: unreachable"):
+			brokenAt = ev.Time
+		case strings.HasSuffix(ev.Message, "broken → stopping: keep broken: unreachable") && !brokenAt.IsZero():
+			stoppingAt = ev.Time
+		}
+	}
+	if brokenAt.IsZero() || stoppingAt.IsZero() || stoppingAt.Sub(brokenAt) < 4*time.Second {
+		t.Fatalf("an idle machine that stopped answering was deallocated %s after it became unreachable, want at least warm_running (4s); events:\n%s",
+			stoppingAt.Sub(brokenAt), s.machineEvents("cloud/box"))
+	}
 	before, _ = az.counts()
 	e.newRepoNamed("hung", defaultRepoFiles())
 	if r := e.hostel("acquire", "probe", "--task", "hung", "--wait", "5s"); r.code != 75 {
@@ -445,6 +474,20 @@ func TestAzure(t *testing.T) {
 		if strings.Contains(text, azureSecret) {
 			t.Fatalf("the client secret is in the %s", what)
 		}
+	}
+
+	// A change of the sign-in settings (here login_url) removes the stored
+	// client secret: it never goes to another address.
+	secretFile := filepath.Join(e.dataDir(), "provider-secrets", "cloud")
+	if _, err := os.Stat(secretFile); err != nil {
+		t.Fatalf("the client secret before the change: %v", err)
+	}
+	other := strings.Replace(az.srv.URL, "127.0.0.1", "localhost", 1)
+	if r := e.applyDoc(strings.Replace(doc, fmt.Sprintf("login_url = %q", az.srv.URL), fmt.Sprintf("login_url = %q", other), 1)); r.code != 0 {
+		t.Fatalf("change login_url: %s", r)
+	}
+	if _, err := os.Stat(secretFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the client secret after a change of login_url: %v, want removed", err)
 	}
 }
 
