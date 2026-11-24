@@ -1,6 +1,7 @@
 # M10h implementation plan: desktop app follow-ups
 
-Status: approved (2026-11-12), phase 6.
+Status: merged (pull request #10). Phase 6: the second Windows test flight is
+not recorded.
 Milestone M10h in `plan.md`. Owner decisions: `requirements.md`, section 3,
 2026-11-12.
 

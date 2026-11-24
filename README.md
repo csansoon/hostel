@@ -14,8 +14,9 @@ computers, or an on-demand cloud machine), and cleans the room when the lease en
 
 - Many agents, many people, few machines: leases are exclusive and wait in line, with
   priorities and wait estimates.
-- Your own computers (a Mac, a Windows PC, a Linux box; also behind NAT) and
-  on-demand machines (Namespace, or your own provider script).
+- Your own computers (a Mac, a Windows PC, a Linux box; also behind NAT),
+  Azure virtual machines that run only when a lease needs them, and on-demand
+  machines (Namespace, or your own provider script).
 - Tools for Android, iOS, macOS, Windows, and Linux: a build needs no screen,
   and a lease that asks for one gets a clean emulator, simulator, or desktop,
   with screenshots, desktop app control, and tunnels from the machine to your local
@@ -114,8 +115,9 @@ skill fits a task.
   (`hostel config edit`), backups, updates (`hostel server update`).
 - [**`hostel-machines`**](skills/hostel-machines/SKILL.md): add machines: over SSH, from
   behind NAT (`hostel config machines add`, then `hostel machine join` on the
-  machine), or on demand (Namespace, or an `external` provider); limits, warm
-  machines, drain, repair, remove; offline machines.
+  machine), Azure virtual machines that Hostel starts and deallocates, or on
+  demand (Namespace, or an `external` provider); limits, warm machines, drain,
+  repair, remove; offline machines.
 - [**`hostel-tools`**](skills/hostel-tools/SKILL.md): the tools of a machine
   (`android-sdk`, `android-emulator`, `xcode`, `ios-simulator`, `macos-desktop`,
   `windows-desktop`, and any mise tool such as `jdk:21`), what each needs on the
@@ -167,8 +169,8 @@ only for the tools that you need; ask for a screen tool only to see the app. Alw
 | [docs/plan.md](docs/plan.md) | Milestones |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents that work on Hostel itself |
 
-Status: version 0.3. Milestones M0 to M10e are done; M11 (hardening against
-backdoors) is planned. See [docs/plan.md](docs/plan.md).
+Status: release v0.4.0. Milestones M10h to M12 are merged after it (see their
+status lines). See [docs/plan.md](docs/plan.md).
 
 ## License
 
