@@ -464,8 +464,9 @@ passes.
 
 ## M10h. Desktop app follow-ups
 
-Status: planned (`m10h-implementation.md`). Owner decisions of 2026-11-12
-(`requirements.md`, section 3).
+Status: merged (pull request #10; release v0.5.0). The second Windows test
+flight of phase 6 is not recorded (`m10h-implementation.md`). Owner decisions of
+2026-11-12 (`requirements.md`, section 3).
 
 - A Windows test flight of a real app through Hostel, before the fixes; its
   findings go into this milestone.
@@ -489,14 +490,16 @@ decisions of 2026-11-13 and 2026-11-16 (`requirements.md`, section 3).
 
 Still to do (owner decision, 2026-11-16: merge first, do these later):
 
-- The 10-run CI gate (`e2e-10`), when CI runs again.
+- Done (2026-11-24): the 10-run CI gate (`e2e-10`) passed on GitHub with M11
+  and M12 (pull request #16).
 - A real check of the audit's stops: systemd user units with a running user
   manager on Linux, and LaunchAgents of the machine user on macOS; `at` jobs.
 - `--lease-users` on the machines that should use it.
 - Windows lease users and the cleanup audit on Windows (owner decision,
   2026-11-16). The root step is a Hostel service that runs as SYSTEM, with a named
   pipe that only the machine user can open, for `lease-user` only; `machine join
-  --lease-users` installs it. `windows-desktop` leases keep the desktop user. Done, waiting for approval: `m11w-implementation.md`.
+  --lease-users` installs it. `windows-desktop` leases keep the desktop user. Done: `m11w-implementation.md`
+  (pull requests #14 and #15).
 
 Goal: a guest cannot keep access to a room after its lease, even with a backdoor
 that it installed during the lease. Design section 18, "Backdoors", lists the
@@ -516,7 +519,8 @@ survives cleanup or reaches the next lease.
 
 ## M12. Azure provider
 
-Status: implemented (`m12-implementation.md`; owner decisions of 2026-11-18). Waiting for the owner's approval.
+Status: done (2026-11-24; pull request #16; release v0.5.0). Owner decisions of
+2026-11-18 and 2026-11-23 (`m12-implementation.md`).
 
 Goal: an existing Azure machine runs only when leases need it. The `azure`
 provider starts it for a lease and deallocates it after `warm_running` without a
