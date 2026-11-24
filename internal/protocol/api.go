@@ -228,6 +228,14 @@ type MachineStatus struct {
 	// LastSeen is the last presence check that the machine answered; only for
 	// an offline machine (broken, reason "unreachable"; M10b).
 	LastSeen time.Time `json:"last_seen,omitzero"`
+	// UpdateTo is the release of a remote update that waits or runs (M13).
+	UpdateTo string `json:"update_to,omitempty"`
+}
+
+// MachineUpdate is the answer of POST /v1/machines/{id}/update (M13).
+type MachineUpdate struct {
+	Machine string `json:"machine"`
+	To      string `json:"to"`
 }
 
 // MachineDetails is GET /v1/machines/{name} (M10): the machine, its template, the jobs
@@ -480,6 +488,16 @@ type ServerUpdate struct {
 // latest release).
 type ServerUpdateRequest struct {
 	Version string `json:"version,omitempty"`
+	// Machines: after the restart, the server also updates each machine
+	// that connects with an older version (M13).
+	Machines bool `json:"machines,omitempty"`
+}
+
+// MachineUpdates is the answer of POST /v1/machines/update (M13): the
+// updates that started, and the machines that were skipped, with the reason.
+type MachineUpdates struct {
+	Started []MachineUpdate `json:"started"`
+	Skipped []string        `json:"skipped"`
 }
 
 const (

@@ -23,10 +23,12 @@ const (
 	MachineStopping     = "stopping"
 	MachineStopped      = "stopped"
 	MachineResuming     = "resuming"
-	MachineDestroying   = "destroying"
-	MachineDestroyed    = "destroyed"
-	MachineBroken       = "broken"
-	MachineRetired      = "retired"
+	// MachineUpdating: a remote update of the machine's software (M13).
+	MachineUpdating   = "updating"
+	MachineDestroying = "destroying"
+	MachineDestroyed  = "destroyed"
+	MachineBroken     = "broken"
+	MachineRetired    = "retired"
 )
 
 // Room states.

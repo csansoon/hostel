@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -76,11 +78,17 @@ func (s *Server) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
 	st := s.update.state
 	s.update.mu.Unlock()
 	s.log.Info("server update started", "from", version.Version, "to", tag, "by", requestToken(r).Name)
-	go s.runUpdate(src, tag)
+	admin := ""
+	if req.Machines {
+		admin = requestToken(r).Name
+	}
+	go s.runUpdate(src, tag, admin)
 	writeJSON(w, http.StatusAccepted, st)
 }
 
-func (s *Server) runUpdate(src *update.Source, tag string) {
+// runUpdate updates the server; with machinesBy (the admin), the new server
+// also updates the machines (updateMachinesFile).
+func (s *Server) runUpdate(src *update.Source, tag, machinesBy string) {
 	ctx, cancel := context.WithTimeout(s.runCtx, updateTimeout)
 	defer cancel()
 	err := func() error {
@@ -88,7 +96,13 @@ func (s *Server) runUpdate(src *update.Source, tag string) {
 		if err != nil {
 			return err
 		}
-		return update.Server(ctx, src, rel, s.exe, s.config().HelperDir)
+		if err := update.Server(ctx, src, rel, s.exe, s.config().HelperDir); err != nil {
+			return err
+		}
+		if machinesBy == "" {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(s.config().DataDir, updateMachinesFile), []byte(machinesBy+"\n"), 0o600)
 	}()
 	s.update.mu.Lock()
 	defer s.update.mu.Unlock()

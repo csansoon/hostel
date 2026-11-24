@@ -19,6 +19,7 @@ import (
 	"github.com/csansoon/hostel/internal/invite"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/store"
+	"github.com/csansoon/hostel/internal/update"
 )
 
 // joinProvider is the static provider of machines that join with a code.
@@ -243,6 +244,11 @@ var downloadRE = regexp.MustCompile(`^hostel-(linux|darwin|windows)-(amd64|arm64
 // the release binaries). "hostel machine join" installs from here.
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
+	if name == update.TagFile || name == update.SumsFile || name == update.SigFile {
+		// The signed release of helper_dir, for "machine update --signed" (M13).
+		http.ServeFile(w, r, filepath.Join(s.config().HelperDir, name))
+		return
+	}
 	if m := downloadRE.FindStringSubmatch(name); m == nil || (m[1] == "windows") != (m[3] == ".exe") {
 		writeError(w, http.StatusNotFound, "", "no such file; the files are hostel-<linux|darwin|windows>-<amd64|arm64>[.exe]")
 		return

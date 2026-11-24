@@ -33,6 +33,10 @@ type Machine struct {
 	BrokenReason     string
 	CreatedAt        time.Time
 	StateChangedAt   time.Time
+	// UpdateTo is the release of a remote update (M13), or ""; UpdateDrained
+	// is the drain state before it.
+	UpdateTo      string
+	UpdateDrained bool
 }
 
 type Room struct {
@@ -67,14 +71,14 @@ const (
 )
 
 const machineColumns = `id, name, provider, template, provider_ref, state, os, arch, home, shell, ssh_host_key,
-	helper_sha256, config_sha256, hardware, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at, last_seen_at`
+	helper_sha256, config_sha256, hardware, provider_deadline, warm_until, drained, broken_reason, created_at, state_changed_at, last_seen_at, update_to, update_drained`
 
 func scanMachine(row interface{ Scan(...any) error }) (Machine, error) {
 	var r Machine
 	var deadline, warm sql.NullInt64
 	var created, changed, seen int64
 	err := row.Scan(&r.ID, &r.Name, &r.Provider, &r.Template, &r.ProviderRef, &r.State, &r.OS, &r.Arch, &r.Home, &r.Shell,
-		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &r.Hardware, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed, &seen)
+		&r.SSHHostKey, &r.HelperSHA256, &r.ConfigSHA256, &r.Hardware, &deadline, &warm, &r.Drained, &r.BrokenReason, &created, &changed, &seen, &r.UpdateTo, &r.UpdateDrained)
 	r.ProviderDeadline, r.WarmUntil = fromMS(deadline), fromMS(warm)
 	if seen > 0 {
 		r.LastSeenAt = time.UnixMilli(seen)
@@ -457,8 +461,32 @@ func (s *Store) SetWarmUntil(ctx context.Context, id int64, t time.Time) error {
 	return err
 }
 
+// StartMachineUpdate records a remote update to tag (M13) and drains the
+// machine; it keeps the drain state of before. False when an update runs
+// already.
+func (s *Store) StartMachineUpdate(ctx context.Context, id int64, tag string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE machines SET update_to = ?, update_drained = drained, drained = 1 WHERE id = ? AND update_to = ''`, tag, id)
+	if err != nil {
+		return false, fmt.Errorf("start the update of machine %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// EndMachineUpdate clears the update and gives the machine its drain state of
+// before.
+func (s *Store) EndMachineUpdate(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = update_drained, update_to = '', update_drained = 0 WHERE id = ? AND update_to != ''`, id); err != nil {
+		return fmt.Errorf("end the update of machine %d: %w", id, err)
+	}
+	return nil
+}
+
+// SetDrained sets the drain state; during a remote update, the state that
+// the machine gets after it (the update keeps the machine drained).
 func (s *Store) SetDrained(ctx context.Context, id int64, drained bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = ? WHERE id = ?`, drained, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = CASE WHEN update_to = '' THEN ? ELSE 1 END,
+		update_drained = CASE WHEN update_to = '' THEN update_drained ELSE ? END WHERE id = ?`, drained, drained, id)
 	return err
 }
 

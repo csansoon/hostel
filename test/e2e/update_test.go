@@ -482,7 +482,7 @@ func TestMachineUpdate(t *testing.T) {
 		t.Fatalf("machine update as the machine user: %v\n%s", err, out)
 	}
 	out, err = docker("exec", name, "/etc/hostel/hostel", "machine", "update")
-	if err != nil || !strings.Contains(out, "updated /etc/hostel/hostel from v1.0.0 to v1.1.0") || !strings.Contains(out, "no service is installed") {
+	if err != nil || !strings.Contains(out, "updated /etc/hostel/hostel from v1.0.0 to v1.1.0") || !strings.Contains(out, "No service is installed") {
 		t.Fatalf("machine update: %v\n%s", err, out)
 	}
 	if got, _ := docker("exec", name, "/etc/hostel/hostel", "--version"); got != "hostel v1.1.0" {
