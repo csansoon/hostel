@@ -667,12 +667,16 @@ signs in again once.
   find is a failed start, not a lost machine.
 - **Settings.** A deallocated machine whose settings changed is not stale: it
   provisions with them at its next start. A deallocated machine with a `dirty`
-  room (deallocated during a lease) is started when a lease waits for its
-  tools, so that its cleanup runs.
+  room (deallocated during a lease) is started when a queued lease can use it
+  (the scheduler's rules: tools, pool ports, `fresh`), so that its cleanup
+  runs.
 - **Reconcile.** Each pass reads the power state of each machine (1 minute
   deadline; a `vm` that Azure does not find has no state). A machine that runs
   while its row is `stopped` (started in the portal), or `broken` after a failed
-  start, is probed (`provisioning`). A deallocated machine without an active
+  start, is probed (`provisioning`). A machine that runs but stays
+  unreachable for `warm_running` (counted from the change to `broken`, not
+  from the start of its idle time) is deallocated and stays `broken` until a
+  repair. A deallocated machine without an active
   room whose row is `running`, or `broken` for "unreachable" or a failed stop,
   becomes `stopped` ("deallocated outside Hostel"). A machine that is stopped
   but not deallocated (Azure `PowerState/stopped`, for example a shutdown inside
@@ -680,9 +684,13 @@ signs in again once.
 - **Change of kind, removal, `vm`.** A `static` provider can become `azure` in
   place (add `tenant`, `client_id`, and each machine's `vm`): the rows and
   machine tokens stay. An azure machine is removed, or gets another `vm`, only
-  while it is `stopped` or `broken` ("deallocated: ..."); else its virtual machine would run on without Hostel.
-  A `stopped` row of a provider that becomes `static` is probed. The client
-  secret of a removed azure provider is deleted. An azure provider cannot be
+  while it is `stopped` or `broken` ("deallocated: ..."), and while Azure
+  reports it deallocated (the change reads the power state, outside the
+  scheduler lock: the row can be `stopped` while someone started the machine
+  after the last reconcile); else its virtual machine would run on without
+  Hostel. A change to `static` keeps the machine running on purpose (it is
+  refused only during a start or a deallocation). A `stopped` row of a
+  provider that becomes `static` is probed. An azure provider cannot be
   named `namespace` (the name of the Namespace login).
 - **Limits.** Hostel does not create Azure machines or manage the
   auto-shutdown schedule. A ready lease on a machine that was deallocated outside

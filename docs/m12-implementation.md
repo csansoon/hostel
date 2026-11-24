@@ -199,7 +199,9 @@ The guide (`machine-setup.md`, "Azure") tells the owner to:
   unreachable (counted from the change to `broken`), not at once; the client
   secret is removed when the sign-in settings change; no change of `kind` while
   a start or a deallocation runs; a connecting stopped machine changes state
-  under the scheduler lock.
+  under the scheduler lock; a removal or a `vm` change reads the power state in
+  Azure (Codex); a dirty deallocated machine starts only for a queued lease
+  that it can take, by the scheduler's rules (Codex).
 
 ## 9. Evidence (2026-11-19)
 

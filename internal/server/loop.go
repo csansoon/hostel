@@ -14,6 +14,7 @@ import (
 	"github.com/csansoon/hostel/internal/config"
 	"github.com/csansoon/hostel/internal/protocol"
 	"github.com/csansoon/hostel/internal/provider"
+	"github.com/csansoon/hostel/internal/scheduler"
 	"github.com/csansoon/hostel/internal/store"
 )
 
@@ -234,10 +235,19 @@ func (s *Server) warm(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// waitsFor reports whether a queued lease asks only for tools of m.
+	// waitsFor reports whether a queued lease can use m, by the rules of the
+	// scheduler (tools, pool ports, fresh).
+	var view *toolView
 	waitsFor := func(m *config.Template) bool {
+		if view == nil {
+			if view, err = s.loadToolView(ctx); err != nil {
+				view = nil
+				return false
+			}
+		}
+		templates := view.schedTemplates()
 		return slices.ContainsFunc(leases, func(l store.Lease) bool {
-			return l.State == protocol.LeaseQueued && !slices.ContainsFunc(toolNamesOf(l.Tools), func(t string) bool { return m.Tool(t) == nil })
+			return l.State == protocol.LeaseQueued && slices.Contains(scheduler.Candidates(templates, leaseRequest(view.lc.cfg, l)), m.Key())
 		})
 	}
 	now := time.Now()

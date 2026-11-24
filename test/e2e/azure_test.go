@@ -566,6 +566,30 @@ tools = ["probe"]
 		m := s.machine("cloud/box")
 		return m.State == protocol.MachineStopped && len(m.Rooms) == 1 && m.Rooms[0].State == protocol.RoomDirty
 	})
+	// A lease that the machine cannot take (here --fresh: only an on-demand
+	// machine; the on-demand provider is at its limit, so the lease waits)
+	// does not start it.
+	doc = s.configDoc().Document
+	if r := e.applyDoc(doc + e.externalProvider("od", "", map[string]string{"FAKE_LIMIT": "0"}, `
+[providers.od.templates.small]
+os = "linux"
+spec = { image = "machine" }
+tools = ["probe"]
+`)); r.code != 0 {
+		t.Fatalf("add an on-demand provider: %s", r)
+	}
+	e.newRepoNamed("fresh", defaultRepoFiles())
+	views := az.viewCount()
+	if r := e.hostel("acquire", "probe", "--fresh", "--task", "fresh", "--wait", "6s"); r.code != 75 {
+		t.Fatalf("acquire --fresh: %s, want exit code 75 (it waits)", r)
+	}
+	if starts, _ := az.counts(); starts != 0 || s.machine("cloud/box").State != protocol.MachineStopped || az.viewCount() < views+2 {
+		t.Fatalf("a queued lease that the machine cannot take: starts %d, machine %s, power reads %d; want 0, stopped, at least 2",
+			starts, s.machine("cloud/box").State, az.viewCount()-views)
+	}
+	if r := e.applyDoc(doc); r.code != 0 {
+		t.Fatalf("remove the on-demand provider: %s", r)
+	}
 	e.newRepoNamed("after", defaultRepoFiles())
 	f.acquire("probe")
 	if starts, _ := az.counts(); starts != 1 {
@@ -657,5 +681,26 @@ warm_running = "4s"
 	}
 	if strings.Contains(s.log.String(), "cli-token-Zq8") || strings.Contains(s.log.String(), "a warning of az") {
 		t.Fatal("the server log has the access token or a warning of az")
+	}
+
+	// Started outside Hostel after the last reconcile (the next one is in an
+	// hour): the row is still stopped, but the removal reads the power state
+	// in Azure and is refused, else the machine would run on without Hostel.
+	doc := s.configDoc().Document
+	slow := strings.Replace(doc, `reconcile = "2s"`, `reconcile = "1h"`, 1)
+	if r := e.applyDoc(slow); r.code != 0 {
+		t.Fatalf("reconcile 1h: %s", r)
+	}
+	c.start()
+	removed := slow[:strings.Index(slow, "[providers.cloud.machines.box]")]
+	if r := e.applyDoc(removed); r.code == 0 || !strings.Contains(r.stderr, "cloud/box: its virtual machine is running in Azure") {
+		t.Fatalf("remove a machine that runs in Azure with a stopped row: %s", r)
+	}
+	if m := s.machine("cloud/box"); m.State != protocol.MachineStopped {
+		t.Fatalf("the row: %s, want still stopped (the check, not the row, refused it)", m.State)
+	}
+	c.stop()
+	if r := e.applyDoc(removed); r.code != 0 {
+		t.Fatalf("remove the deallocated machine: %s", r)
 	}
 }

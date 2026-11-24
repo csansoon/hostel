@@ -212,6 +212,9 @@ func (s *Server) applyConfig(ctx context.Context, base int, document string, use
 	if err := s.checkRemovals(ctx, cfg); err != nil {
 		return 0, err
 	}
+	if err := s.checkAzurePower(ctx, cfg); err != nil {
+		return 0, err
+	}
 	lc, err := s.buildLive(ctx, cfg, base+1, document, old.tools, old.toolsDir, old)
 	if err != nil {
 		return 0, errConfig{err.Error()}
@@ -431,6 +434,56 @@ func (s *Server) checkRemovals(ctx context.Context, cfg *config.Server) error {
 		}
 	}
 	if len(errs) > 0 {
+		return errConfig{strings.Join(errs, "\n")}
+	}
+	return nil
+}
+
+// checkAzurePower reads the power state of each azure machine that the change
+// removes or moves to another vm: its row can be stopped while someone
+// started the virtual machine outside Hostel after the last reconcile, and it
+// would then run on without Hostel. Outside schedMu (Azure calls); the row
+// check under schedMu follows.
+func (s *Server) checkAzurePower(ctx context.Context, cfg *config.Server) error {
+	machines, err := s.store.Machines(ctx)
+	if err != nil {
+		return err
+	}
+	checked := map[string][]string{} // provider → machines
+	for _, r := range machines {
+		if r.State == protocol.MachineRetired || r.State == protocol.MachineDestroyed {
+			continue
+		}
+		key := r.Provider + "/" + r.Template
+		om, nm := s.config().Template(key), cfg.Template(key)
+		// A change to static keeps the machine running on purpose.
+		if om == nil || !om.PowerManaged() || nm != nil && (!nm.PowerManaged() || nm.VM == om.VM) {
+			continue
+		}
+		checked[r.Provider] = append(checked[r.Provider], r.Template)
+	}
+	var errs []string
+	for name, templates := range checked {
+		p := s.providerMap()[name]
+		if p == nil {
+			continue
+		}
+		lctx, cancel := context.WithTimeout(ctx, time.Minute)
+		listed, err := p.List(lctx, "")
+		cancel()
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("providers.%s: read the power state of its machines before a removal or a vm change: %v", name, err))
+			continue
+		}
+		for _, ref := range listed {
+			// "" is a vm that Azure does not have.
+			if slices.Contains(templates, ref.Template) && ref.State != provider.PowerStopped && ref.State != "" {
+				errs = append(errs, fmt.Sprintf("%s/%s: its virtual machine is %s in Azure; remove it or change its vm when it is deallocated (drain it, and wait for warm_running without a lease)", name, ref.Template, ref.State))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		slices.Sort(errs)
 		return errConfig{strings.Join(errs, "\n")}
 	}
 	return nil
