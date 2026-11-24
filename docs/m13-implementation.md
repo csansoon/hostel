@@ -143,3 +143,20 @@ command, without arguments that it chooses:
   first check is on the Windows machine after v0.5.0: one manual update, then
   a remote update (with the release, the root step answers "up to date" and
   restarts the connection; the full path at the next release).
+- Review fixes (subagent, 2026-11-24):
+  - The root step checks the SHA-256 of the server's binary before it runs it
+    (`--version`); before, a server that someone took over could run its own
+    program as root with copied signed files. The E2E test serves a script
+    and checks that it did not run as root.
+  - The root step sets its own `PATH` (macOS sudo keeps the caller's).
+  - On Windows the SYSTEM service downloads into `C:\Program Files\Hostel`,
+    checks there, and copies only the checked bytes; it never runs or copies
+    the binary in `C:\ProgramData\hostel`, which the connection's account can
+    change. The installed version is the version of the running root step.
+  - The end of an update (state and drain) is one transaction.
+  - Each loop pass ends the leases of a machine that waits for its update (a
+    lease that the scheduler assigned meanwhile, or after a restart).
+  - A connection with a newer version than the server's release is up to
+    date; the step waits for "not older", not for the same tag.
+  - Tests: another release key, an older release, a drained machine, and the
+    app's Update everything (machines).
