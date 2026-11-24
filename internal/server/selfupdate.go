@@ -41,6 +41,15 @@ func (s *Server) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "", "a server on Windows cannot restart itself; update it on the server machine")
 		return
 	}
+	// A machine update reads helper_dir, which the server update replaces.
+	if machines, err := s.store.Machines(r.Context()); err == nil {
+		for _, m := range machines {
+			if m.UpdateTo != "" {
+				writeError(w, http.StatusConflict, "", fmt.Sprintf("machine %s updates to %s now; update the server when it ends", m.Name, m.UpdateTo))
+				return
+			}
+		}
+	}
 	s.update.mu.Lock()
 	running := s.update.state.State == protocol.UpdateRunning
 	if !running {
@@ -119,6 +128,13 @@ func (s *Server) runUpdate(src *update.Source, tag, machinesBy string) {
 	}
 	s.log.Info("server updated; restarting", "from", version.Version, "to", tag)
 	s.restart()
+}
+
+// serverUpdating reports that a remote update of the server runs.
+func (s *Server) serverUpdating() bool {
+	s.update.mu.Lock()
+	defer s.update.mu.Unlock()
+	return s.update.state.State == protocol.UpdateRunning
 }
 
 // handleServerUpdateState is GET /v1/server/update (admin).

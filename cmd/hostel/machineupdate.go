@@ -183,6 +183,8 @@ func updateServiceBinary(osName string) (res string, restart func() (string, err
 	}
 	res = fmt.Sprintf("updated %s from %s to %s", bin, have, newer)
 	if err := installUpdateStep(osName, bin, tmp); err != nil {
+		// The service runs the new binary anyway (on Windows it is stopped).
+		restartService(osName)
 		return "", nil, fmt.Errorf("%s, but the step of a remote update was not installed: %w", res, err)
 	}
 	return res, restartFunc(osName), nil
@@ -263,6 +265,7 @@ func updateSigned(osName string) (res string, restart func() (string, error), er
 			return "", nil, err
 		}
 		if err := installUpdateStep(osName, bin, ""); err != nil {
+			restartService(osName)
 			return "", nil, fmt.Errorf("updated %s to %s, but the step of a remote update was not installed: %w", bin, rel.Tag, err)
 		}
 	}

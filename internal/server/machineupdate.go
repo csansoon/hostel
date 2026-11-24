@@ -93,6 +93,11 @@ func (s *Server) startMachineUpdate(ctx context.Context, machine store.Machine, 
 	if machine.UpdateTo != "" {
 		return machine.UpdateTo, nil
 	}
+	// The server's own update replaces helper_dir: a machine must not read
+	// a mix of two releases.
+	if s.serverUpdating() {
+		return "", errors.New("the server updates itself now; update the machines when it runs the new version")
+	}
 	rel, err := s.serverRelease()
 	if err != nil {
 		return "", err
@@ -104,9 +109,17 @@ func (s *Server) startMachineUpdate(ctx context.Context, machine store.Machine, 
 	case machine.State != protocol.MachineRunning:
 		return "", fmt.Errorf("machine %s is %s; Hostel updates a running machine (repair it first)", machine.Name, machine.State)
 	}
-	if started, err := s.store.StartMachineUpdate(ctx, machine.ID, rel.Tag); err != nil || !started {
-		// !started: another request started an update just now.
-		return rel.Tag, err
+	started, err := s.store.StartMachineUpdate(ctx, machine.ID, rel.Tag)
+	if err != nil {
+		return "", err
+	}
+	if !started {
+		// Another request started an update just now: its release.
+		cur, err := s.store.Machine(ctx, machine.ID)
+		if err != nil {
+			return "", err
+		}
+		return cur.UpdateTo, nil
 	}
 	s.store.AddEvent(ctx, time.Now(), "", machine.ID, "admin", fmt.Sprintf("machine %s: update from %s to %s by %s", machine.Name, have, rel.Tag, admin))
 	// Also each loop pass (startUpdates): a lease that the scheduler
