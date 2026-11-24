@@ -131,8 +131,10 @@ them on the server machine.
   (state `updating`), and runs the root step as the machine user:
   `sudo -n /etc/hostel/hostel machine update --signed` (the join writes
   `/etc/sudoers.d/hostel-update`, which allows only this command), or on
-  Windows `C:\\ProgramData\\hostel\\hostel.exe` as the client of the SYSTEM service `HostelLeaseUsers`
-  (the join installs it on each Windows machine; op `update`). The root step
+  Windows `C:\\Program Files\\Hostel\\hostel.exe` (the SYSTEM service's
+  copy; the machine user cannot read `C:\\ProgramData\\hostel`) as the client
+  of the SYSTEM service `HostelLeaseUsers` (the join installs it on each
+  Windows machine; op `update`). The root step
   checks the signature with the release key of the installed binary (or the
   root-owned `release-key` next to it), refuses a release that is not newer,
   checks the binary's SHA-256 and version, replaces it (on Windows also the
@@ -145,7 +147,11 @@ them on the server machine.
   /v1/server/update` with `"machines": true` (`hostel server update --remote
   --machines`, the app's Update everything) writes `data_dir/update-machines`;
   for 15 minutes after its start, the new server updates each machine that
-  connects with an older version.
+  connects with an older version. The update runs the code of the installed
+  binary: a server or machine before v0.5.0 does not write the files of M13.
+  Such a server gets the three release files at its next update; such a
+  machine needs a second `hostel machine update` (as an administrator), which
+  installs the root step.
 - **The app** reads the latest tag at start and every 6 hours
   (`HOSTEL_NO_UPDATE_CHECK=1` turns it off; errors are silent): Update in the
   main menu, Update everything in Front desk (admins: the server, then the

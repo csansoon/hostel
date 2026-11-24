@@ -77,8 +77,10 @@ leases again after the update:
 hostel config machines update <machine>     # or --all; the app: machine actions › Update
 ```
 
-A machine that joined before remote updates (M13) needs one update on the
-machine, as an administrator; it also installs the step of remote updates:
+A machine that joined before remote updates (v0.5.0) needs an update on the
+machine, as an administrator, two times: the first run is the code of the old
+binary and installs the new binary; the second run installs the step of remote
+updates and answers "up to date":
 
 ```sh
 sudo /etc/hostel/hostel machine update                 # macOS, Linux
