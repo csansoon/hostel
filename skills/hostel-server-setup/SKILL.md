@@ -235,6 +235,19 @@ machine before its next lease.
   sudo systemctl restart hostel
   ```
 
+A server that updates from a version before v0.5.0 gets the signed release
+files (`RELEASE`, `SHA256SUMS`, `SHA256SUMS.sig` in `helper_dir`) only at its
+next update; until then a remote machine update refuses with "RELEASE is
+missing". To add them at once, as the service's user (the binaries in
+`helper_dir` must be the same release):
+
+```sh
+cd <helper_dir>
+curl -fsSLO https://github.com/csansoon/hostel/releases/download/vX.Y.Z/SHA256SUMS
+curl -fsSLO https://github.com/csansoon/hostel/releases/download/vX.Y.Z/SHA256SUMS.sig
+echo vX.Y.Z > RELEASE
+```
+
 A remote update needs that the service's user can write the binary's directory
 and `helper_dir` (section 2); otherwise it fails with "this user cannot write
 …". `--version vX.Y.Z` selects a release. A server before v0.2.0, or one

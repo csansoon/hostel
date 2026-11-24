@@ -21,7 +21,7 @@ import (
 )
 
 const machinesUsage = `hostel: usage:
-  hostel config machines                                the machines and their machines
+  hostel config machines                                the machines, their tools and state
   hostel config machines add <name> [--tool t] [--provider p] [--vm <Azure resource ID>]
                                                      a code for "hostel machine join" on the new machine
   hostel config machines set <machine> <key>=<value> ...  for example tools=xcode,ios-simulator,jdk:21

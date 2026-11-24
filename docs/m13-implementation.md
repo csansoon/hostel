@@ -41,8 +41,8 @@ command, without arguments that it chooses:
   installs the service on each Windows machine (also without `--lease-users`;
   the lease-user operations still need `server_key.pub`, which only
   `--lease-users` writes). The server runs
-  `C:\ProgramData\hostel\hostel.exe machine update --signed`, which is only the
-  pipe client.
+  `C:\Program Files\Hostel\hostel.exe machine update --signed`, which is only
+  the pipe client (the machine user cannot read `C:\ProgramData\hostel`).
 - `hostel machine join` installs the root step. `hostel machine update` (as an
   administrator, M10d) also installs it, so one manual update after this release
   makes the machine remote-updatable.
@@ -181,3 +181,18 @@ command, without arguments that it chooses:
   client checks that SYSTEM owns the pipe).
 - The E2E tests use the root-owned `release-key`; the release key in the
   binary is used only with real releases.
+- After the release v0.5.0 (2026-11-24):
+  - An update runs the code of the installed binary. A server that updated
+    from v0.4.0 had no release files in `helper_dir` (they come with its next
+    update, or by hand: server setup skill, section 9). A machine that updated
+    by hand from v0.4.0 needs a second `hostel machine update`, which installs
+    the root step.
+  - The first check on a real Windows machine found that the machine user
+    cannot read `C:\ProgramData\hostel` (only SYSTEM, the administrators, and
+    LOCAL SERVICE). The server now starts the step with the SYSTEM service's
+    copy in `C:\Program Files\Hostel`, which all users can run. The exact
+    command of the server, as the machine user, answered "up to date (v0.5.0,
+    the server's release)".
+  - The opt-in smoke test `TestSmokeWindowsRemoteUpdate` (`make
+    test-smoke-windows`) runs the server's command of the root step as the
+    machine user on a real Windows machine; with the old path it fails.
