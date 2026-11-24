@@ -141,8 +141,11 @@ func (p *serverPage) body(m *model) string {
 	var b strings.Builder
 	b.WriteString(head("This server", clean(m.guest.URL()), ""))
 	if tag := m.serverUpdateAvailable(); tag != "" {
-		b.WriteString(iconItem(w, true, "⬆️", "Update the server", fmt.Sprintf("Install %s; the server starts again; leases and jobs continue", tag),
+		b.WriteString(iconItem(w, true, "⬆️", "Update everything", fmt.Sprintf("Install %s on the server, then on each machine that joined (its leases end)", tag),
 			fg(colYellow).Render(tag+" available"), "") + "\n\n\n")
+	} else if old := m.outOfDateMachines(); m.admin() && len(old) > 0 {
+		b.WriteString(iconItem(w, true, "⬆️", "Update the machines", fmt.Sprintf("Install %s on %s (their leases end)", clean(m.info.Version), clean(strings.Join(old, ", "))),
+			fg(colYellow).Render(fmt.Sprintf("%d out of date", len(old))), "") + "\n\n\n")
 	}
 	b.WriteString(section("Server", w, false))
 	b.WriteString(line(field("Address", boldStyle.Render(clean(m.guest.URL())))))
@@ -166,21 +169,34 @@ func (p *serverPage) body(m *model) string {
 
 func (p *serverPage) hint(m *model) string {
 	if tag := m.serverUpdateAvailable(); tag != "" {
-		return fmt.Sprintf("Update the server: install Hostel %s on the server (it runs %s); it starts again by itself; leases and jobs continue.", tag, m.info.Version)
+		return fmt.Sprintf("Update everything: install Hostel %s on the server (it runs %s), which starts again by itself, then on each machine that joined. The leases on a machine end when it updates.", tag, m.info.Version)
+	}
+	if m.admin() && len(m.outOfDateMachines()) > 0 {
+		return fmt.Sprintf("Update the machines: install the server's Hostel %s on each machine that joined with an older version. The leases on a machine end when it updates.", m.info.Version)
 	}
 	return "This server and you."
 }
 
 func (p *serverPage) keys(m *model) []binding {
 	if m.serverUpdateAvailable() != "" {
-		return []binding{{"enter", "update the server"}}
+		return []binding{{"enter", "update everything"}}
+	}
+	if m.admin() && len(m.outOfDateMachines()) > 0 {
+		return []binding{{"enter", "update the machines"}}
 	}
 	return nil
 }
 
 func (p *serverPage) key(m *model, k tea.KeyMsg) tea.Cmd {
-	if tag := m.serverUpdateAvailable(); tag != "" && k.String() == "enter" {
-		m.ask("Update the server", fmt.Sprintf("Update the server from %s to %s?", m.info.Version, tag), func() tea.Cmd { return m.startServerUpdate(tag) })
+	if k.String() != "enter" {
+		return nil
+	}
+	if tag := m.serverUpdateAvailable(); tag != "" {
+		m.warn("Update everything", fmt.Sprintf("Update the server from %s to %s, then each machine that joined? The leases on a machine end when it updates.", m.info.Version, tag), func() tea.Cmd { return m.startServerUpdate(tag) })
+	} else if old := m.outOfDateMachines(); m.admin() && len(old) > 0 {
+		m.warn("Update the machines", fmt.Sprintf("Update %s to %s? Their leases end.", strings.Join(old, ", "), m.info.Version), func() tea.Cmd {
+			return m.do("POST", "/v1/machines/update", nil, "The updates of the machines started.")
+		})
 	}
 	return nil
 }
