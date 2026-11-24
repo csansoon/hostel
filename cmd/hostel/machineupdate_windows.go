@@ -20,11 +20,12 @@ func callUpdateService() (string, error) {
 	return res, nil
 }
 
-// installUpdateStep installs the SYSTEM service with bin (an administrator's
-// "hostel machine update" or join; the signed update in the service replaces
-// the service's binary itself).
-func installUpdateStep(_, bin string) error {
-	return installRootService(bin, "")
+// installUpdateStep installs the SYSTEM service with a copy of src, a file
+// that only administrators can change (an administrator's "hostel machine
+// update" or join; the signed update in the service replaces the service's
+// binary itself). Not bin: the connection's account can change it.
+func installUpdateStep(_, _, src string) error {
+	return installRootService(src, "")
 }
 
 // updateStepDir is the directory of the root step's files (release-key): the

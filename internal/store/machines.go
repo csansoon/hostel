@@ -473,6 +473,18 @@ func (s *Store) StartMachineUpdate(ctx context.Context, id int64, tag string) (b
 	return n == 1, err
 }
 
+// CancelMachineUpdate clears an update that has not started (the machine is
+// not updating) and gives the machine its drain state of before.
+func (s *Store) CancelMachineUpdate(ctx context.Context, id int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE machines SET drained = update_drained, update_to = '', update_drained = 0
+		WHERE id = ? AND update_to != '' AND state != 'updating'`, id)
+	if err != nil {
+		return false, fmt.Errorf("cancel the update of machine %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // FinishMachineUpdate ends an update in one transaction: the machine goes
 // from updating to the state to (with reason), and gets its drain state of
 // before.

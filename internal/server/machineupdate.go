@@ -104,8 +104,9 @@ func (s *Server) startMachineUpdate(ctx context.Context, machine store.Machine, 
 	case machine.State != protocol.MachineRunning:
 		return "", fmt.Errorf("machine %s is %s; Hostel updates a running machine (repair it first)", machine.Name, machine.State)
 	}
-	if _, err := s.store.StartMachineUpdate(ctx, machine.ID, rel.Tag); err != nil {
-		return "", err
+	if started, err := s.store.StartMachineUpdate(ctx, machine.ID, rel.Tag); err != nil || !started {
+		// !started: another request started an update just now.
+		return rel.Tag, err
 	}
 	s.store.AddEvent(ctx, time.Now(), "", machine.ID, "admin", fmt.Sprintf("machine %s: update from %s to %s by %s", machine.Name, have, rel.Tag, admin))
 	// Also each loop pass (startUpdates): a lease that the scheduler
@@ -240,7 +241,21 @@ func (s *Server) startUpdates(ctx context.Context) error {
 		}
 	}
 	for _, r := range machines {
-		if r.UpdateTo == "" || r.State != protocol.MachineRunning {
+		if r.UpdateTo == "" {
+			continue
+		}
+		switch r.State {
+		case protocol.MachineRunning, protocol.MachineUpdating, protocol.MachineProvisioning:
+		default:
+			// The machine left running before its update started (a failed
+			// cleanup, a deallocation): the update does not wait forever,
+			// and the machine gets its drain state back.
+			if ok, _ := s.store.CancelMachineUpdate(ctx, r.ID); ok {
+				s.store.AddEvent(ctx, time.Now(), "", r.ID, "machine", fmt.Sprintf("machine %s: update to %s cancelled: the machine is %s; update it again when it runs", r.Name, r.UpdateTo, r.State))
+			}
+			continue
+		}
+		if r.State != protocol.MachineRunning {
 			continue
 		}
 		if !busy[r.ID] {

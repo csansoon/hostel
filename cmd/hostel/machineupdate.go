@@ -145,18 +145,27 @@ func updateServiceBinary(osName string) (res string, restart func() (string, err
 	defer cancel()
 	have := binaryVersion(ctx, bin)
 	name := update.BinaryName(runtime.GOOS, runtime.GOARCH)
-	tmp, err := downloadFromServer(ctx, hc, st.Server, name, bin)
+	// Into a directory of this administrator only: on Windows the connection's
+	// account can change the service directory, and the SYSTEM service gets
+	// a copy of this file.
+	priv, err := os.MkdirTemp("", "hostel-update-")
+	if err != nil {
+		return "", nil, err
+	}
+	defer os.RemoveAll(priv)
+	tmp, err := downloadFromServer(ctx, hc, st.Server, name, filepath.Join(priv, filepath.Base(bin)))
 	if err != nil {
 		return "", nil, err
 	}
 	newer := binaryVersion(ctx, tmp)
+	data, err := os.ReadFile(tmp)
 	switch {
+	case err != nil:
+		return "", nil, err
 	case newer == "":
-		os.Remove(tmp)
 		return "", nil, fmt.Errorf("the server's %s does not run on this machine", name)
 	case update.FileSHA256(tmp) == update.FileSHA256(bin):
-		os.Remove(tmp)
-		if err := installUpdateStep(osName, bin); err != nil {
+		if err := installUpdateStep(osName, bin, tmp); err != nil {
 			return "", nil, fmt.Errorf("install the step of a remote update: %w", err)
 		}
 		return fmt.Sprintf("%s is up to date (%s, the same as the server's)", bin, newer), nil, nil
@@ -165,7 +174,7 @@ func updateServiceBinary(osName string) (res string, restart func() (string, err
 		// A running service holds the file.
 		runSetup("schtasks.exe", "/End", "/TN", "Hostel machine connect")
 	}
-	if err := update.Replace(tmp, bin); err != nil {
+	if err := writeReplace(bin, data); err != nil {
 		if osName == config.OSWindows {
 			// The old binary is in place again: start the service again.
 			restartService(osName)
@@ -173,7 +182,7 @@ func updateServiceBinary(osName string) (res string, restart func() (string, err
 		return "", nil, err
 	}
 	res = fmt.Sprintf("updated %s from %s to %s", bin, have, newer)
-	if err := installUpdateStep(osName, bin); err != nil {
+	if err := installUpdateStep(osName, bin, tmp); err != nil {
 		return "", nil, fmt.Errorf("%s, but the step of a remote update was not installed: %w", res, err)
 	}
 	return res, restartFunc(osName), nil
@@ -209,7 +218,7 @@ func updateSigned(osName string) (res string, restart func() (string, error), er
 	}
 	if rel.Tag == have && update.FileSHA256(bin) == want {
 		if osName != config.OSWindows {
-			if err := installUpdateStep(osName, bin); err != nil {
+			if err := installUpdateStep(osName, bin, ""); err != nil {
 				return "", nil, fmt.Errorf("install the step of a remote update: %w", err)
 			}
 		}
@@ -245,6 +254,7 @@ func updateSigned(osName string) (res string, restart func() (string, error), er
 			return "", nil, err
 		}
 		if err := update.Replace(tmp, trusted); err != nil {
+			restartService(osName)
 			return "", nil, err
 		}
 		selfReplaced = true
@@ -252,7 +262,7 @@ func updateSigned(osName string) (res string, restart func() (string, error), er
 		if err := update.Replace(tmp, bin); err != nil {
 			return "", nil, err
 		}
-		if err := installUpdateStep(osName, bin); err != nil {
+		if err := installUpdateStep(osName, bin, ""); err != nil {
 			return "", nil, fmt.Errorf("updated %s to %s, but the step of a remote update was not installed: %w", bin, rel.Tag, err)
 		}
 	}
@@ -392,6 +402,8 @@ func restartService(osName string) (bool, error) {
 		if runSetup("schtasks.exe", "/Query", "/TN", "Hostel machine connect") != nil {
 			return false, nil
 		}
+		// A running task ignores /Run: end the old process first.
+		runSetup("schtasks.exe", "/End", "/TN", "Hostel machine connect")
 		return true, runSetup("schtasks.exe", "/Run", "/TN", "Hostel machine connect")
 	}
 	return false, fmt.Errorf("unsupported OS %s", osName)

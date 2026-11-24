@@ -160,3 +160,24 @@ command, without arguments that it chooses:
     date; the step waits for "not older", not for the same tag.
   - Tests: another release key, an older release, a drained machine, and the
     app's Update everything (machines).
+- Second review (2026-11-24):
+  - An administrator's `hostel machine update` (and the join) gives the
+    SYSTEM service only a copy of a file that only administrators can change
+    (a private temporary directory, or the running binary), never the file in
+    `C:\ProgramData\hostel`.
+  - On Windows a failed replacement of the service's binary starts the
+    connection again, and a restart ends the old connect process first (a
+    running task ignores `/Run`).
+  - An update that waits while its machine leaves `running` (a failed
+    cleanup, a deallocation) is cancelled, with an event, and the machine gets
+    its drain state back; the admin starts it again.
+  - Tests: sudo refuses with its own message; a `release-key` that the machine
+    user owns is refused.
+- Limits on Windows: a remote update replaces the binary of the SYSTEM
+  service but does not change the service's settings (a release that changes
+  them needs a manual update). While the service restarts after an update
+  (about 5 s), a process of the machine user can take the pipe's name; then
+  the service cannot start until that process ends (no access is gained: the
+  client checks that SYSTEM owns the pipe).
+- The E2E tests use the root-owned `release-key`; the release key in the
+  binary is used only with real releases.

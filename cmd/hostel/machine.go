@@ -210,15 +210,19 @@ func machineJoin(args []string, stdout, stderr io.Writer) int {
 	}
 	// The root step of a remote update (M13); on Windows the SYSTEM service,
 	// which --lease-users installed already.
+	self, err := os.Executable()
+	if err != nil {
+		return fail("find this binary", err)
+	}
 	switch {
 	case osName != config.OSWindows:
 		fmt.Fprintln(stdout, "   Remote updates: the sudo rule for \"hostel machine update --signed\".")
-		if err := installUpdateStep(osName, bin); err != nil {
+		if err := installUpdateStep(osName, bin, self); err != nil {
 			return fail("install the sudo rule for remote updates", err)
 		}
 	case !*leaseUsers && !*noService:
 		fmt.Fprintln(stdout, "   Remote updates: the service HostelLeaseUsers.")
-		if err := installUpdateStep(osName, bin); err != nil {
+		if err := installUpdateStep(osName, bin, self); err != nil {
 			return fail("install the service for remote updates", err)
 		}
 	}

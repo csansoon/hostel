@@ -19,7 +19,7 @@ func callUpdateService() (string, error) {
 
 // installUpdateStep writes the sudo rule that lets the machine user run only
 // "<bin> machine update --signed" as root, checked with visudo.
-func installUpdateStep(_, bin string) error {
+func installUpdateStep(_, bin, _ string) error {
 	rule := fmt.Sprintf("%s ALL=(root) NOPASSWD: %s machine update --signed\n", machineUser, bin)
 	tmp := "/etc/sudoers.d/.hostel-update.tmp"
 	if err := os.WriteFile(tmp, []byte(rule), 0o440); err != nil {

@@ -93,8 +93,8 @@ func TestRemoteMachineUpdate(t *testing.T) {
 	s.waitMachine("home/box", protocol.MachineRunning, machineReady)
 
 	// The machine user may run only the root step, with its fixed argument.
-	if out, err := docker("exec", "-u", "hostel", name, "sudo", "-n", "/etc/hostel/hostel", "machine", "update"); err == nil {
-		t.Fatalf("sudo machine update without --signed as the machine user: %s", out)
+	if out, err := docker("exec", "-u", "hostel", name, "sudo", "-n", "/etc/hostel/hostel", "machine", "update"); err == nil || !strings.Contains(err.Error()+out, "sudo: a password is required") {
+		t.Fatalf("sudo machine update without --signed as the machine user: %v\n%s", err, out)
 	}
 
 	// A server that is not a release cannot update machines.
@@ -208,7 +208,15 @@ func TestRemoteMachineUpdate(t *testing.T) {
 		!strings.Contains(err.Error()+out, "the signature of release v1.2.0 is not valid") {
 		t.Fatalf("the root step with another release key: %v\n%s", err, out)
 	}
-	if _, err := docker("exec", name, "sh", "-c", "printf '%s\\n' '"+key+"' > /etc/hostel/release-key"); err != nil {
+	// A release-key that the machine user can change is refused.
+	if _, err := docker("exec", name, "sh", "-c", "printf '%s\\n' '"+key+"' > /etc/hostel/release-key && chown hostel /etc/hostel/release-key"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := docker("exec", "-u", "hostel", name, "sudo", "-n", "/etc/hostel/hostel", "machine", "update", "--signed"); err == nil ||
+		!strings.Contains(err.Error()+out, "must be a regular file that only root can write") {
+		t.Fatalf("the root step with a release-key of the machine user: %v\n%s", err, out)
+	}
+	if _, err := docker("exec", name, "chown", "root", "/etc/hostel/release-key"); err != nil {
 		t.Fatal(err)
 	}
 	signed := func(tag string, files map[string]string) {
