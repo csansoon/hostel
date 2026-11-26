@@ -93,6 +93,8 @@ All other terms are plain technical words.
 | 2026-11-16 | When CI cannot run, the local E2E runs are the gate: `make test-e2e` before a pull request is ready, `make test-e2e-10` when a milestone ends. |
 | 2026-11-16 | Windows gets lease users and the cleanup audit (an extension of M11; `plan.md`, `m11w-implementation.md`). Its root step is a Hostel service that runs as SYSTEM, with a named pipe that only the machine user can open, for `lease-user` only. |
 | 2026-11-16 | M11: the audit of leases on the machine user stays best effort; its known limits are recorded (`m11-implementation.md`, section 12) instead of more review rounds on it. |
+| 2026-11-26 | Signing secrets (M14, `m14-implementation.md`): all guests of a server may use one shared signing identity (a development certificate and an App Store Connect API key only for Hostel). The server stores it in a secret store; a lease that asks for the tool `apple-signing` gets it for the lease only, and cleanup removes it. Nothing about signing is installed on the Mac. This replaces the M10h rule that signing material is part of the machine setup. |
+| 2026-11-26 | Hostel never registers Macs in the Apple team (100 Macs for each membership year). An administrator registers each Mac by hand, once. Signing is for machines with a fixed Provisioning UDID (static Macs); on-demand Macs get no signing. |
 | 2026-11-24 | M13: an admin updates a connected machine from the client (`hostel config machines update`), and the server and all connected machines from Front desk in the app. Hostel ends the active leases of the machine, updates it, and starts it again. This replaces the M10d rule that only an administrator on the machine updates the connect service: a fixed root step (a sudo rule; on Windows the SYSTEM service of M11w) installs only signed releases, checked with the release key of the installed binary, and no older release. The release v0.5.0 waits for M13 (`m13-implementation.md`). |
 | 2026-11-23 | M12: an `azure` provider can also sign in with the account of the Azure CLI on the server (`auth = "cli"`, after `az login` as the server's user), for an owner who cannot register an application. The server then has the rights of that account. The application with a client secret stays the default. |
 | 2026-11-18 | M12: an `azure` provider starts an existing Azure machine when a lease needs it and deallocates it after `warm_running` without a lease (default 30 minutes). It does not create or delete machines. It signs in with an application and a client secret that stays on the server, with a custom role on the machine only. The guide recommends an Azure auto-shutdown schedule as a backstop (`m12-implementation.md`). |
@@ -287,5 +289,6 @@ experiment.
    Screen Recording on a Namespace devbox (passwordless `sudo`, image
    permissions)? How do on-demand machines get team signing for Mac Catalyst builds
    (a shared `.p12` and an App Store Connect API key, given to the machine as
-   secrets)? Static machines: an administrator installs them at setup (M10h,
-   2026-11-12). On-demand machines: not planned yet (a later secret store).
+   secrets)? Static machines: the server gives them to each lease that asks
+   for `apple-signing` (M14, 2026-11-26). On-demand machines: no signing,
+   because each new virtual machine has a new Provisioning UDID (2026-11-26).
