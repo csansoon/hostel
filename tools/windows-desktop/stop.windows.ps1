@@ -34,6 +34,9 @@ foreach ($p in Get-AppxPackage | Where-Object { -not $_.IsFramework }) {
 	try {
 		Remove-AppxPackage -Package $p.PackageFullName
 	} catch {
+		# A removal that the lease queued can end after the lease's processes
+		# ended, and then this one fails with "not installed" (0x80073CF1).
+		if (-not (Get-AppxPackage | Where-Object PackageFullName -eq $p.PackageFullName)) { continue }
 		$failed += "$($p.PackageFullName): $($_.Exception.Message)"
 	}
 }
