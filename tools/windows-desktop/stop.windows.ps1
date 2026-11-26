@@ -34,7 +34,17 @@ foreach ($p in Get-AppxPackage | Where-Object { -not $_.IsFramework }) {
 	try {
 		Remove-AppxPackage -Package $p.PackageFullName
 	} catch {
-		$failed += "$($p.PackageFullName): $($_.Exception.Message)"
+		# A removal that the lease queued can end after the lease's processes
+		# ended, and then this one fails with "not installed" (0x80073CF1).
+		# By family, as above: a queued update can have replaced the version.
+		$err = $_.Exception.Message
+		try {
+			foreach ($l in @(Get-AppxPackage | Where-Object PackageFamilyName -eq $p.PackageFamilyName)) {
+				Remove-AppxPackage -Package $l.PackageFullName
+			}
+			continue
+		} catch {}
+		$failed += "$($p.PackageFullName): $err"
 	}
 }
 if ($failed) {
