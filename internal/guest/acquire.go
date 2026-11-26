@@ -538,7 +538,7 @@ func printFacts(st *State, rc *config.Repo, w io.Writer) {
 		}
 	}
 	next := "Next: hostel run -- <command>   hostel sync   hostel release"
-	if len(st.Started) > 0 {
+	if slices.ContainsFunc(st.Started, func(s protocol.StartedTool) bool { return !s.NoScreen }) {
 		next = "Next: hostel run -- <command>   hostel sync   hostel screenshot   hostel release"
 	}
 	fmt.Fprintln(w, next)

@@ -378,3 +378,36 @@ func (h *helper) shell(args []string, stderr io.Writer) error {
 	path, argv := interactiveShell(env)
 	return execProcess(path, argv, env)
 }
+
+// secretsDir holds the secrets of a lease's tools (M14). Only start and stop
+// scripts get its path; cleanup deletes it with the room.
+func (h *helper) secretsDir(room string) string { return filepath.Join(h.roomDir(room), "secrets") }
+
+// secrets writes the secrets of the lease's tools to the room, each file only
+// for the user. A repeated call replaces them.
+func (h *helper) secrets(args []string, stdin io.Reader) (struct{}, error) {
+	room, _, err := roomFlag("secrets", args)
+	if err != nil {
+		return struct{}{}, err
+	}
+	var req protocol.SecretsRequest
+	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
+		return struct{}{}, fmt.Errorf("read the request: %w", err)
+	}
+	dir := h.secretsDir(room)
+	if err := os.RemoveAll(dir); err != nil {
+		return struct{}{}, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return struct{}{}, err
+	}
+	for name, data := range req.Files {
+		if !config.SecretNameRE.MatchString(name) {
+			return struct{}{}, fmt.Errorf("invalid secret name %q", name)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			return struct{}{}, fmt.Errorf("write the secret %s: %w", name, err)
+		}
+	}
+	return struct{}{}, nil
+}

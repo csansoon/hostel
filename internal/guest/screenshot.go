@@ -95,7 +95,13 @@ func Screenshot(args []string, stdout, stderr io.Writer) int {
 
 // screenOf selects the screen of a screenshot: the --tool value, or the only
 // screen of the lease.
-func screenOf(started []protocol.StartedTool, flag string) (string, string, error) {
+func screenOf(all []protocol.StartedTool, flag string) (string, string, error) {
+	var started []protocol.StartedTool
+	for _, st := range all {
+		if !st.NoScreen {
+			started = append(started, st)
+		}
+	}
 	var names []string
 	for _, st := range started {
 		for _, o := range st.Options {

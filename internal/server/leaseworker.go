@@ -340,6 +340,17 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err := s.store.SetBegan(ctx, l.ID, time.Now()); err != nil {
 		return err
 	}
+	// The secrets of the lease's tools, for their start and stop scripts
+	// (M14). Cleanup deletes them with the room.
+	if names := leaseSecretNames(lc.cfg, l.Tools); len(names) > 0 {
+		files, err := leaseSecrets(lc.cfg, l.Tools)
+		if err != nil {
+			return err
+		}
+		if err := machine.Helper(ctx, []string{"secrets", "--room", l.RoomName}, protocol.SecretsRequest{Files: files}, nil); err != nil {
+			return err
+		}
+	}
 	// A repeated step (after a restart) keeps what started before: the
 	// start scripts are idempotent, and cleanup must stop those tools.
 	started := slices.Clone(l.Started)

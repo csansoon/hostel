@@ -52,6 +52,8 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		out, err = h.begin(args[1:], stdin)
 	case "cleanup":
 		out, err = h.cleanup(args[1:], stdin)
+	case "secrets":
+		out, err = h.secrets(args[1:], stdin)
 	case "set-env":
 		out, err = h.setEnv(args[1:], stdin)
 	case "sync-plan":

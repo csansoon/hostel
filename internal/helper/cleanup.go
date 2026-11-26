@@ -32,8 +32,18 @@ func (h *helper) toolInfo(name string) (config.Tool, error) {
 	if err != nil {
 		return t, err
 	}
-	err = toml.NewDecoder(bytes.NewReader(data)).Decode(&t)
-	return t, err
+	if err := toml.NewDecoder(bytes.NewReader(data)).Decode(&t); err != nil {
+		return t, err
+	}
+	// The machine has only this OS's scripts; PerLease needs to know them.
+	t.Scripts = map[string]map[string]string{h.os: {}}
+	for _, step := range []string{config.StepStart, config.StepStop} {
+		name := step + "." + h.os + config.ScriptExt(h.os)
+		if _, err := os.Stat(filepath.Join(h.toolDir(t.Name), name)); err == nil {
+			t.Scripts[h.os][step] = name
+		}
+	}
+	return t, nil
 }
 
 // cleanup deletes what a lease left in its room (design, section 17). Each step runs

@@ -314,6 +314,7 @@ const (
 	CodeUnknownOption  = "unknown_option"
 	CodeTooManyOptions = "too_many_options"
 	CodeNoTemplate     = "no_machine"
+	CodeMissingSecret  = "missing_secret"
 	// CodeLeaseEnded: POST /v1/leases/{id}/touch for a lease that ended (HTTP 409).
 	CodeLeaseEnded = "lease_ended"
 )
@@ -592,3 +593,20 @@ const (
 	LoginDone    = "done"
 	LoginFailed  = "failed"
 )
+
+// Secret is an entry of GET /v1/secrets (admin, M14). It never has the value.
+type Secret struct {
+	Name string `json:"name"`
+	// Set: the server has a value; else a tool declares it, and leases with
+	// that tool cannot start.
+	Set   bool      `json:"set"`
+	Size  int64     `json:"size,omitempty"`
+	SetAt time.Time `json:"set_at,omitempty"`
+	// Tools are the tools that declare the secret.
+	Tools []string `json:"tools"`
+}
+
+// SetSecret is the body of PUT /v1/secrets/{name} (admin, M14).
+type SetSecret struct {
+	Value []byte `json:"value"`
+}

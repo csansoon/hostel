@@ -208,6 +208,9 @@ func (h *helper) scriptEnv(tool, room, step string, reqEnv map[string]string) ([
 		env["HOSTEL_ROOM_DIR"] = h.roomDir(room)
 		env["HOSTEL_WORK_DIR"] = filepath.Join(h.roomDir(room), "work")
 	}
+	if room != "" && (step == config.StepStart || step == config.StepStop) {
+		env["HOSTEL_SECRETS_DIR"] = h.secretsDir(room)
+	}
 	if step == config.StepScreenshot || step == config.StepStop {
 		facts, err := readEnvFile(filepath.Join(h.roomDir(room), "tool.env"))
 		if err != nil {
@@ -219,7 +222,8 @@ func (h *helper) scriptEnv(tool, room, step string, reqEnv map[string]string) ([
 }
 
 // addToolEnv adds the env and path of the tools in hostel/tools (design,
-// section 8): of each software tool, and of the screen tools in screens.
+// section 8): of each tool that does not start for each lease, and of the
+// started tools in screens.
 // {cache} is HOSTEL_CACHE_DIR, {home} the machine user's home directory. The
 // tools are in name order; each tool's path entries go first on PATH in
 // their order.
@@ -245,7 +249,7 @@ func (h *helper) addToolEnv(env map[string]string, screens map[string]bool) erro
 		if err != nil {
 			return fmt.Errorf("tool %s: %w", de.Name(), err)
 		}
-		if t.Screen && !screens[t.Name] {
+		if t.PerLease() && !screens[t.Name] {
 			continue
 		}
 		for _, k := range sortedNames(t.Env) {
