@@ -101,6 +101,11 @@ type model struct {
 	// one counts (an older answer can come later).
 	toolsSeq int
 	info     protocol.Info
+	// infoWait is the server version that an update started from: the app
+	// reads the info again until the server reports another one. A restart
+	// does not always fail a status poll (the old server can answer it, and
+	// the next poll reaches the new one).
+	infoWait string
 	// latest is the tag of the latest release (the background check);
 	// updated is true after the app's Update installed it.
 	latest  string
@@ -238,6 +243,8 @@ type (
 		gen  int
 		text string
 		err  error
+		// from: the version that a server update leaves.
+		from string
 	}
 )
 
@@ -281,7 +288,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds := []tea.Cmd{m.pollStatus(msg.st.Revision), m.readTools(), m.frame()}
 		// The server info, until a read of it works.
-		if m.info.Version == "" || reconnected {
+		if m.info.Version == "" || reconnected || (m.infoWait != "" && m.info.Version == m.infoWait) {
 			cmds = append(cmds, m.readInfo())
 		}
 		if l, ok := m.top().(loader); ok {
@@ -371,6 +378,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case infoMsg:
 		if msg.gen == m.gen {
 			m.info = msg.info
+			if m.info.Version != m.infoWait {
+				m.infoWait = ""
+			}
 		}
 		return m, nil
 	case latestMsg:
@@ -407,6 +417,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.msg = msg.text
 		if msg.err != nil {
 			m.msg = "Failed: " + msg.err.Error()
+		}
+		if msg.from != "" {
+			m.infoWait = msg.from
 		}
 		if l, ok := m.top().(loader); ok {
 			return m, l.load(m)

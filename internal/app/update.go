@@ -104,7 +104,7 @@ func (m *model) startServerUpdate(tag string) tea.Cmd {
 		if err := c.Do(ctx, http.MethodPost, "/v1/server/update", protocol.ServerUpdateRequest{Version: tag, Machines: true}, &st); err != nil {
 			return actionMsg{gen: gen, err: err}
 		}
-		return actionMsg{gen: gen, text: fmt.Sprintf("The server updates from %s to %s. It starts again by itself, then updates each machine that joined.", st.From, st.To)}
+		return actionMsg{gen: gen, from: st.From, text: fmt.Sprintf("The server updates from %s to %s. It starts again by itself, then updates each machine that joined.", st.From, st.To)}
 	}
 }
 
