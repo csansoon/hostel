@@ -197,7 +197,9 @@ the tool can read them.
    openssl pkcs12 -export -legacy -inkey hostel-dev.key -in hostel-dev.pem -out hostel-signing.p12
    ```
 
-   Use a random password for the `.p12`. The certificate is valid for one year.
+   The last command needs OpenSSL 3 or later (for example from Homebrew): the
+   `openssl` of macOS (LibreSSL) has no `-legacy`. Use a random password for
+   the `.p12`. The certificate is valid for one year.
 2. **The App Store Connect API key** (once; an Admin or the Account Holder makes
    it). App Store Connect > Users and Access > Integrations > App Store Connect
    API > **Team Keys** (not an individual key) > +, with the role Developer. Note
@@ -208,7 +210,7 @@ the tool can read them.
 
    ```sh
    hostel config secrets set apple-signing-p12 hostel-signing.p12
-   hostel config secrets set apple-signing-p12-password -     # type it, then Ctrl-D
+   pbpaste | hostel config secrets set apple-signing-p12-password -   # copied from the password manager
    hostel config secrets set asc-key AuthKey_<KEY_ID>.p8
    echo <KEY_ID> | hostel config secrets set asc-key-id -
    echo <ISSUER_ID> | hostel config secrets set asc-issuer-id -
@@ -234,6 +236,10 @@ Check: `hostel acquire xcode apple-signing --task "check signing"`, then
 `hostel run -- 'security find-identity -v -p codesigning "$HOSTEL_SIGNING_KEYCHAIN"'`
 lists one valid identity. Each job that signs unlocks the keychain first
 (`security unlock-keychain -p "$HOSTEL_SIGNING_KEYCHAIN_PASSWORD" "$HOSTEL_SIGNING_KEYCHAIN"`). `tools/apple-signing/GUIDE.md` shows the build.
+
+Use one room on a Mac that signs, or lease users (`lease_users`): two leases
+with `apple-signing` at the same time as the same OS user put two keychains
+with the same identity in one search list.
 
 Replace the certificate before it expires, and the key when it changes, with
 `hostel config secrets set`: the next lease gets the new one. When Hostel no

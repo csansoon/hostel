@@ -824,8 +824,8 @@ hostel/
   rooms/<room>/
     work/                    the lease's files; a stable path for each room
     baseline.git/            git directory for the baseline commits
-    lease.json               lease ID, requested tools, started screen tools with their options
-    tool.env                 KEY=VALUE lines that the start scripts write (for example SIMULATOR_UDID)
+    lease.json               lease ID, requested tools, started tools (screens and lease tools) with their options
+    tool.env                 KEY=VALUE lines that the start scripts write (for example SIMULATOR_UDID; mode 0600)
     secrets/                 the secrets of the lease's tools (M14; directory 0700, files 0600)
     lease.env                KEY=VALUE lines that the guest sets (section 10)
     manifest.json            files of the last sync
@@ -886,7 +886,7 @@ success; else stdout has `{"error": "..."}`.
 | `begin` | server | `{"lease_id", "tools", "started"}` | `{}`. Writes `rooms/<room>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other room of the machine has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another room, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
 | `run-script <tool> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "last_line", "missing", "timed_out"}`; `missing` when the tool has no script for this step and OS; `last_line` is the version that a `check` prints |
 | `secrets` | server | `{"files": {"<name>": "<base64>"}}` | `{}`. Writes `rooms/<room>/secrets/` again, before the `start` scripts (M14). |
-| `cleanup` | server | `{"lease_id", "started", "ports", "check"}` (from the database, so a repeated cleanup does not need `lease.json`; `started` are the screen tools of the lease with their options, stopped in reverse order; the server sets `check` at the time of the cleanup: the tools that the machine has installed) | `{"steps": [...]}` (section 17) |
+| `cleanup` | server | `{"lease_id", "started", "ports", "check"}` (from the database, so a repeated cleanup does not need `lease.json`; `started` are the started tools of the lease (screens and lease tools) with their options, stopped in reverse order; the server sets `check` at the time of the cleanup: the tools that the machine has installed) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `mise-current` | guest | — | `[{"name", "version"}]`: the tools that the mise files in the work directory select now (for the lease facts). |
 | `sync-plan` | guest | manifest (section 12) | plan (section 12) |
@@ -1086,7 +1086,13 @@ guide shows only the guides of the tools that the server has.
   `HOSTEL_SIGNING_TEAM`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_KEY_PATH`. Each
   SSH session has its own security session, so the unlock in `start` does not
   reach the jobs: a job that signs unlocks the keychain first (found on a real
-  Mac: `codesign` failed with `errSecInternalComponent`). `stop` removes the keychain from the list
+  Mac: `codesign` failed with `errSecInternalComponent`). Limits: two leases
+  with `apple-signing` at the same time on one Mac, as the same OS user, put
+  two keychains with the same identity in one search list, and a job can find
+  the one that is locked in its session (not checked; use one room for
+  signing, or lease users, which have their own search lists); `security`
+  takes the `.p12` and keychain passwords only as arguments, so `ps` shows
+  them to other local users while `security` runs. `stop` removes the keychain from the list
   and deletes it. Builds use automatic signing with `-allowProvisioningUpdates`
   and the key; Hostel never registers devices (owner decision, 2026-11-26).
 - **`windows-desktop`** (screen; Windows; `whole_machine = true`): section 9,
@@ -1828,8 +1834,8 @@ A `ready` lease includes the access data and the lease facts: gateway address,
 gateway host key, gateway user, helper path, room name, work directory, tunnel
 ports, provider and template names, machine OS, OS version, architecture, and
 hardware, the machine's inventory (each tool with its option, state, and
-environment names), the started screen tools with their options and `tool.env`
-names, `lease_tools` (the names of the requested tools and their needs, in the
+environment names), the started tools (screens, and lease tools with
+`no_screen`) with their options and `tool.env` names, `lease_tools` (the names of the requested tools and their needs, in the
 order of needs: the `[tool.<name>]` sections of `hostel.toml` that apply),
 `tunnel_check`, `expires_at`, and `idle_expires_at`. Each lease (also
 queued) has `tools` (the request), `waiting_behind` (queued), and `started`.
@@ -2352,7 +2358,8 @@ Warm policy after cleanup:
 - **Provider credentials.** Only the server has them.
 - **Secrets** (M14). Admins store files for tools: `hostel config secrets set
   <name> <file|->` writes `<data_dir>/secrets/<name>` (file `0600`, directory
-  `0700`), with the event "secret X set" (no value). A tool declares the secrets
+  `0700`; from stdin, a one-line text value loses its final line break, and
+  any other value, for example a `.p12`, stays as it is), with the event "secret X set" (no value). A tool declares the secrets
   that it needs (`secrets` in `tool.toml`); a repository cannot ask for one.
   The server sends the secrets of the lease's tools to the room (helper
   `secrets`) after `begin` and before `start`; only the `start` and `stop`

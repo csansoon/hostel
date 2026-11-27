@@ -274,3 +274,13 @@ lease tools with a test tool. The Apple scripts get a check on a Mac
   lease took the Mac at once; on a local Mac, `stop` gave back the same list).
 - **E2E on a Mac with OrbStack:** the harness now passes `DOCKER_HOST`; without
   `/var/run/docker.sock`, the fake provider could not reach Docker.
+- **Review of pull request #22** (a subagent, and Codex): `tool.env` is now
+  mode 0600 and `start` uses `umask 077` (the keychain password and the
+  keychain were readable by other lease users); a value from stdin loses its
+  final line break only when it is one line of text (a `.p12` stays as it is);
+  the leak check also looks for the base64 form; the guide names OpenSSL 3 for
+  `-legacy` and pastes the password. Recorded limits: two signing leases as the
+  same OS user on one Mac share the search list, and `ps` shows the passwords
+  of `security` for a moment. No E2E scenario reaches the second missing-secret
+  check (at preparing): the scheduler check comes first (scenario 9), and a
+  test cannot open the short time between them in a reliable way.

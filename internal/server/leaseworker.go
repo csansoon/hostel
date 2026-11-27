@@ -625,7 +625,7 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	for _, st := range resp.Steps {
 		// The deletion of a lease user ends all its processes and removes all
 		// its files; only the tools' stop scripts must have worked.
-		if st.Error != "" && (!leaseUser || st.Name == "stop screen tools") {
+		if st.Error != "" && (!leaseUser || st.Name == "stop tools") {
 			failed = append(failed, st.Name+": "+st.Error)
 		}
 	}

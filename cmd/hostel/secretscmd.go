@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/csansoon/hostel/internal/cli"
 	"github.com/csansoon/hostel/internal/protocol"
@@ -16,7 +17,8 @@ import (
 
 const secretsUsage = `hostel: usage:
   hostel config secrets                         the secrets: name, size, when set, the tools that use them (never the values)
-  hostel config secrets set <name> <file|->     set a secret from a file, or from stdin with -
+  hostel config secrets set <name> <file|->     set a secret from a file, or from stdin with - (a one-line
+                                                text loses its final line break; other values stay as they are)
   hostel config secrets remove <name>           remove a secret (no tool may use it)`
 
 // maxSecretFile matches the server's limit (server.MaxSecretSize).
@@ -96,9 +98,9 @@ func secretSet(name, file string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "hostel: read the secret:", err)
 		return 1
 	}
-	if file == "-" {
-		// A password from a pipe or a terminal ends with a line break that is
-		// not part of it.
+	if file == "-" && oneLineText(value) {
+		// A password or an ID from echo or a terminal ends with a line break
+		// that is not part of it. Other values (a .p12) stay as they are.
 		value = []byte(strings.TrimRight(string(value), "\r\n"))
 	}
 	switch {
@@ -111,6 +113,16 @@ func secretSet(name, file string, stdout, stderr io.Writer) int {
 	}
 	return secretRequest("PUT", name, protocol.SetSecret{Value: value},
 		fmt.Sprintf("Stored the secret %s (%d B) on the server. Leases get it when they start a tool that uses it.", name, len(value)), stdout, stderr)
+}
+
+// oneLineText reports a value that is valid UTF-8 text with no line break or
+// control character before its final line breaks.
+func oneLineText(v []byte) bool {
+	s := strings.TrimRight(string(v), "\r\n")
+	if !utf8.ValidString(s) {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 && r != '\t' || r == 0x7f })
 }
 
 func secretRequest(method, name string, body any, done string, stdout, stderr io.Writer) int {

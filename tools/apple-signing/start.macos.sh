@@ -4,6 +4,7 @@
 # Connect API key. Each room of a Mac changes the same keychain search list, so
 # the keychain steps hold a lock. A repeated start makes the keychain again.
 set -eu
+umask 077 # the keychain and tool.env only for this user
 if [ -z "${HOSTEL_SIGNING_LOCKED:-}" ]; then
 	HOSTEL_SIGNING_LOCKED=1 exec lockf -k -t 120 "$HOSTEL_CACHE_DIR/apple-signing.lock" /bin/sh "$0" "$@"
 fi

@@ -144,7 +144,9 @@ func writeEnvFile(path string, env map[string]string) error {
 	for _, k := range sortedNames(env) {
 		b.WriteString(k + "=" + env[k] + "\n")
 	}
-	return writeFileAtomic(path, []byte(b.String()), 0o644)
+	// Facts can be secrets (for example a keychain password, M14); only the
+	// room's user reads them.
+	return writeFileAtomic(path, []byte(b.String()), 0o600)
 }
 
 // lastLine returns the last line of out that is not empty, without spaces at

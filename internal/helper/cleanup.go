@@ -91,7 +91,7 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		return os.WriteFile(h.leaseEndedFile(room), nil, 0o644)
 	})
 	step("stop processes", func() error { return h.stopLeaseProcesses(room, req.LeaseID) })
-	step("stop screen tools", func() error { return h.stopTools(room, req) })
+	step("stop tools", func() error { return h.stopTools(room, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
 	// Before "check": a new unit or agent can hold a room port. Again after
 	// it: a process of the lease that "check" ended can have added an entry.
@@ -205,8 +205,8 @@ func (h *helper) stopLeaseProcesses(room, leaseID string) error {
 	return nil
 }
 
-// stopTools runs the stop scripts of the screen tools that started for the
-// lease, in reverse order of their start. Each one runs, also after a failure
+// stopTools runs the stop scripts of the tools that started for the lease
+// (screen tools and lease tools), in reverse order of their start. Each one runs, also after a failure
 // of another.
 func (h *helper) stopTools(room string, req protocol.CleanupRequest) error {
 	if len(req.Started) == 0 {

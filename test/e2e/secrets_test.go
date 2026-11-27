@@ -5,6 +5,7 @@ package e2e
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"io/fs"
 	"os"
@@ -96,6 +97,13 @@ func TestSecrets(t *testing.T) {
 	password := randomHex(t)
 	if r := adminIn(password+"\n", "config", "secrets", "set", "other-secret", "-"); r.code != 0 || !strings.Contains(r.stdout, "Stored the secret other-secret (48 B)") {
 		t.Fatalf("config secrets set from stdin: %s", r)
+	}
+	// A binary value from stdin keeps its last bytes, also a line break.
+	if r := adminIn("\x00\x01\xff\n", "config", "secrets", "set", "binary-secret", "-"); r.code != 0 || !strings.Contains(r.stdout, "Stored the secret binary-secret (4 B)") {
+		t.Fatalf("config secrets set of a binary value from stdin: %s", r)
+	}
+	if r := e.adminHostel("config", "secrets", "remove", "binary-secret"); r.code != 0 {
+		t.Fatalf("remove the binary secret: %s", r)
 	}
 	if r := e.adminHostel("config", "secrets", "set", "Bad_Name", file); r.code == 0 || !strings.Contains(r.stderr, "must match") {
 		t.Fatalf("config secrets set with an invalid name: %s", r)
@@ -200,10 +208,15 @@ func TestSecrets(t *testing.T) {
 		t.Fatalf("the machine after a lease with a missing secret: %s (%s)", m.State, m.Reason)
 	}
 
-	// The values are only in the secret files of the server.
+	// The values are only in the secret files of the server, also not in
+	// the base64 form of the API and the helper.
+	values := []string{value, password, newValue}
+	for _, v := range []string{value, password, newValue} {
+		values = append(values, base64.StdEncoding.EncodeToString([]byte(v)))
+	}
 	hist := e.adminHostel("config", "history")
 	for what, text := range map[string]string{"server log": f.s.log.String(), "config history": hist.stdout + hist.stderr} {
-		for _, v := range []string{value, password, newValue} {
+		for _, v := range values {
 			if strings.Contains(text, v) {
 				t.Fatalf("a secret value is in the %s", what)
 			}
@@ -218,7 +231,7 @@ func TestSecrets(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for _, v := range []string{value, password, newValue} {
+		for _, v := range values {
 			if strings.Contains(string(data), v) {
 				t.Fatalf("a secret value is in %s", path)
 			}
