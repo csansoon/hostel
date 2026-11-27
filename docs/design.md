@@ -2236,7 +2236,10 @@ failed; the result lists each step.
    A new or changed entry is stopped first (`systemctl --user disable --now`;
    for a drop-in, its parent unit;
    `launchctl bootout` of the plist's label, by the name in the audited
-   location also when the file is a link; the step fails when the unit or
+   location also when the file is a link; a launchd service gets up to 10 s to
+   go after `bootout`, then SIGKILL (`launchctl kill`) and 5 s more: an app
+   that a lease opened (`application.<bundle id>.<n>.<n>`) can take seconds to
+   quit; the step fails when the unit or
    agent still runs afterwards, and all stops have one deadline of 2 minutes;
    a machine without a systemd user manager, whose private socket
    `/run/user/<uid>/systemd/private` does not exist, has no running unit; with

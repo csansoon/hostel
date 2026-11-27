@@ -471,8 +471,7 @@ func unloadAgents(path string, deadline time.Time) error {
 				return fmt.Errorf("read the label of %s: %w", f, err)
 			}
 			for _, domain := range []string{"gui/" + uid, "user/" + uid} {
-				runQuiet("launchctl", "bootout", domain+"/"+label)
-				if err := agentGone(domain + "/" + label); err != nil {
+				if err := bootout(domain + "/" + label); err != nil {
 					return err
 				}
 			}
@@ -614,6 +613,30 @@ func unitFile(f string) bool {
 	return false
 }
 
+// bootout unloads a launchd service and waits until it is gone. An app that
+// a lease opened (a service "application.<bundle id>.<n>.<n>") can take some
+// seconds to quit after bootout, for example with an open document; one that
+// still runs after 10 s gets SIGKILL.
+func bootout(target string) error {
+	runQuiet("launchctl", "bootout", target)
+	err := waitAgentGone(target, 10*time.Second)
+	if err == nil {
+		return nil
+	}
+	runQuiet("launchctl", "kill", "SIGKILL", target)
+	return waitAgentGone(target, 5*time.Second)
+}
+
+// waitAgentGone checks agentGone until it succeeds or the time is over.
+func waitAgentGone(target string, d time.Duration) error {
+	for deadline := time.Now().Add(d); ; time.Sleep(250 * time.Millisecond) {
+		err := agentGone(target)
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+	}
+}
+
 // agentGone checks that a launchd service is not loaded: print exits with 113
 // ("Could not find service") or 112 (no such domain); another failure is no
 // answer.
@@ -679,8 +702,7 @@ func stopNewServices(before []string) ([]string, error) {
 			if !present[domain] || strings.HasPrefix(label, "com.apple.") {
 				continue
 			}
-			runQuiet("launchctl", "bootout", n)
-			if err := agentGone(n); err != nil {
+			if err := bootout(n); err != nil {
 				failed = append(failed, err.Error())
 				continue
 			}
