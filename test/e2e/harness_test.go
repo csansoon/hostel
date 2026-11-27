@@ -144,6 +144,11 @@ func newEnv(t *testing.T) *env {
 
 func (e *env) environ() []string {
 	out := []string{"HOME=" + e.home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir()}
+	// The test's HOME hides the docker CLI's context, for example OrbStack
+	// without /var/run/docker.sock: the fake provider then needs DOCKER_HOST.
+	if v := os.Getenv("DOCKER_HOST"); v != "" {
+		out = append(out, "DOCKER_HOST="+v)
+	}
 	for k, v := range e.vars {
 		out = append(out, k+"="+v)
 	}
