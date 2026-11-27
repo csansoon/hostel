@@ -174,6 +174,11 @@ hostel config settings           # the settings that are not defaults
 hostel config settings set idle_timeout=20m
 ```
 
+Secrets for tools (for example the signing identity of `apple-signing`) are
+not in the document: `hostel config secrets set <name> <file|->` stores one on
+the server, `hostel config secrets` lists them without values
+(`docs/machine-setup.md`, section 3.7).
+
 Settings: `idle_timeout` (10m), `poll_timeout` (5m), `limit_retry` (2m),
 `port_process_offline` (10m), `intervals.scheduler` (10s),
 `intervals.reconcile` (5m), `intervals.tunnel_check` (30s),

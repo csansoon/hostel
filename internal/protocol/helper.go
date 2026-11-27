@@ -86,6 +86,9 @@ type StartedTool struct {
 	Name    string   `json:"name"`
 	Options []string `json:"options"`
 	Facts   []string `json:"facts,omitempty"`
+	// NoScreen: a tool that starts for the lease but has no screen (M14);
+	// screenshots ignore it. Leases before M14 started only screens.
+	NoScreen bool `json:"no_screen,omitempty"`
 }
 
 // BeginRequest is the input of "hostel helper begin".
@@ -93,11 +96,17 @@ type BeginRequest struct {
 	LeaseID string `json:"lease_id"`
 	// Tools are the lease's tools with their options (HOSTEL_TOOLS).
 	Tools []string `json:"tools"`
-	// Started are the screen tools that start for the lease, in the order of
-	// their start.
+	// Started are the tools that start for the lease (screens and other
+	// tools with a start script), in the order of their start.
 	Started []StartedTool `json:"started"`
 	// Exclusive: the lease holds the whole machine (for example the desktop).
 	Exclusive bool `json:"exclusive,omitempty"`
+}
+
+// SecretsRequest is the input of "hostel helper secrets" (M14): the secrets of
+// the lease's tools, for their start and stop scripts.
+type SecretsRequest struct {
+	Files map[string][]byte `json:"files"`
 }
 
 // CleanupRequest is the input of "hostel helper cleanup". It comes from the

@@ -348,16 +348,27 @@ func leaseUses(cfg *config.Server, l store.Lease, name string) bool {
 		slices.ContainsFunc(l.Started, func(st protocol.StartedTool) bool { return st.Name == name })
 }
 
-// planStarts returns the screen tools that start for a lease on a machine, with
-// their options, in the order of needs: the requested options, else the first
-// option that the machine has.
-func planStarts(cfg *config.Server, l store.Lease, machine map[string]scheduler.Have) []protocol.StartedTool {
+// planStarts returns the tools that start for a lease on a machine (screen
+// tools and other tools with a start script), in the order of needs. A screen
+// tool gets the requested options, else the first option that the machine has.
+func planStarts(cfg *config.Server, l store.Lease, osName string, machine map[string]scheduler.Have) []protocol.StartedTool {
 	var out []protocol.StartedTool
 	for _, t := range leaseClosure(cfg, l.Tools) {
-		if !t.Screen {
+		if !t.StartsOn(osName) {
 			continue
 		}
 		st := protocol.StartedTool{Name: t.Name, Options: []string{}}
+		if !t.Screen {
+			// The requested version stays in HOSTEL_TOOLS.
+			for _, w := range toolWants(l.Tools) {
+				if w.Name == t.Name && w.Option != "" {
+					st.Options = append(st.Options, w.Option)
+				}
+			}
+			st.NoScreen = true
+			out = append(out, st)
+			continue
+		}
 		for _, w := range toolWants(l.Tools) {
 			if w.Name == t.Name && w.Option != "" && !slices.Contains(st.Options, w.Option) {
 				st.Options = append(st.Options, w.Option)

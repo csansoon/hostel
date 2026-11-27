@@ -294,9 +294,10 @@ func (s *Server) provisionTool(ctx context.Context, l store.Lease) error {
 }
 
 // stepPreparing checks the helper and scripts by hash, writes the lease data
-// on the machine, and runs the start script of each screen tool of the lease, in
-// the order of needs (design, section 8). It records each screen tool that
-// started, so that cleanup stops only those.
+// and the secrets of the lease's tools on the machine, and runs the start script
+// of each tool of the lease that starts for it, in the order of needs (design,
+// section 8). It records each tool that started, so that cleanup stops only
+// those.
 func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	lc := s.live.Load()
 	timeout := leaseStepTimeout
@@ -305,6 +306,16 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// A missing secret is a configuration error, not a machine failure: the
+	// lease ends and the machine stays as it is (M14).
+	if msg := missingSecret(lc.cfg, l.Tools); msg != "" {
+		if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeasePreparing}, protocol.LeaseFailed, msg, time.Now()); err != nil {
+			return err
+		}
+		s.gateway.CloseLease(l.ID)
+		s.kickScheduler()
+		return nil
+	}
 	if err := s.store.SetRooms(ctx, l.ID, protocol.RoomPreparing); err != nil {
 		return err
 	}
@@ -331,7 +342,7 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	if err != nil {
 		return err
 	}
-	starts := planStarts(lc.cfg, l, view.machineHaves(m, r.ID))
+	starts := planStarts(lc.cfg, l, m.OS, view.machineHaves(m, r.ID))
 	begin := protocol.BeginRequest{LeaseID: l.ID, Tools: leaseToolEntries(l.Tools, starts), Started: starts,
 		Exclusive: leaseRequest(lc.cfg, l).Exclusive}
 	if err := machine.Helper(ctx, []string{"begin", "--room", l.RoomName}, begin, nil); err != nil {
@@ -339,6 +350,17 @@ func (s *Server) stepPreparing(ctx context.Context, l store.Lease) error {
 	}
 	if err := s.store.SetBegan(ctx, l.ID, time.Now()); err != nil {
 		return err
+	}
+	// The secrets of the lease's tools, for their start and stop scripts
+	// (M14). Cleanup deletes them with the room.
+	if names := leaseSecretNames(lc.cfg, l.Tools, m.OS); len(names) > 0 {
+		files, err := leaseSecrets(lc.cfg, l.Tools, m.OS)
+		if err != nil {
+			return err
+		}
+		if err := machine.Helper(ctx, []string{"secrets", "--room", l.RoomName}, protocol.SecretsRequest{Files: files}, nil); err != nil {
+			return err
+		}
 	}
 	// A repeated step (after a restart) keeps what started before: the
 	// start scripts are idempotent, and cleanup must stop those tools.
@@ -603,7 +625,7 @@ func (s *Server) runCleanup(ctx context.Context, machine *machineops.Machine, ma
 	for _, st := range resp.Steps {
 		// The deletion of a lease user ends all its processes and removes all
 		// its files; only the tools' stop scripts must have worked.
-		if st.Error != "" && (!leaseUser || st.Name == "stop screen tools") {
+		if st.Error != "" && (!leaseUser || st.Name == "stop tools") {
 			failed = append(failed, st.Name+": "+st.Error)
 		}
 	}

@@ -34,8 +34,8 @@ const (
 
 var steps = []string{StepInstall, StepCheck, StepStart, StepScreenshot, StepStop}
 
-// screenSteps run for each lease; only screen tools have them.
-var screenSteps = []string{StepStart, StepScreenshot, StepStop}
+// SecretNameRE is the form of a secret name (M14).
+var SecretNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // Files of a tool directory besides its scripts.
 const (
@@ -54,7 +54,10 @@ type Tool struct {
 	WholeMachine bool     `toml:"whole_machine,omitempty"`
 	// MachineUser: the tool needs the machine user's account (its desktop
 	// session or what install made there); a lease with it gets no lease user.
-	MachineUser    bool                `toml:"machine_user,omitempty"`
+	MachineUser bool `toml:"machine_user,omitempty"`
+	// Secrets are the names of server secrets that the start and stop
+	// scripts get in HOSTEL_SECRETS_DIR (M14).
+	Secrets        []string            `toml:"secrets,omitempty"`
 	Env            map[string]string   `toml:"env,omitempty"`
 	Path           []string            `toml:"path,omitempty"`
 	ScriptTimeouts map[string]Duration `toml:"script_timeouts,omitempty"`
@@ -66,6 +69,27 @@ type Tool struct {
 	// Scripts maps an OS and a step to the script file name.
 	Scripts map[string]map[string]string `toml:"-"`
 	Guide   string                       `toml:"-"`
+}
+
+// PerLease reports a tool that starts for each lease that has it: a screen
+// tool, or a tool with a start script (M14). Its env and path apply only to
+// those leases.
+func (t *Tool) PerLease() bool {
+	if t.Screen {
+		return true
+	}
+	for _, s := range t.Scripts {
+		if s[StepStart] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// StartsOn reports whether the tool starts for each lease on a machine with
+// this OS: a screen tool, or a tool with a start script for the OS.
+func (t *Tool) StartsOn(osName string) bool {
+	return t.Screen || t.Script(osName, StepStart) != ""
 }
 
 // ScriptTimeout returns the deadline of a script step.
@@ -199,6 +223,14 @@ func ParseTool(name string, files map[string]string) (*Tool, error) {
 		}
 		checkToolPlaceholders(fail, fmt.Sprintf("path[%d]", i), p)
 	}
+	for i, n := range t.Secrets {
+		if !SecretNameRE.MatchString(n) {
+			fail("secrets[%d]: secret name %q must match %s", i, n, SecretNameRE)
+		}
+		if slices.Index(t.Secrets, n) != i {
+			fail("secrets[%d]: duplicate secret %q", i, n)
+		}
+	}
 	for step := range t.ScriptTimeouts {
 		if !slices.Contains(steps, step) {
 			fail("script_timeouts.%s: unknown step; steps are %s", step, strings.Join(steps, ", "))
@@ -230,14 +262,22 @@ func ParseTool(name string, files map[string]string) (*Tool, error) {
 			errs = append(errs, fmt.Errorf("%s: script %q: %s scripts use %s", where, n, scriptOS, ScriptExt(scriptOS)))
 			continue
 		}
-		if !t.Screen && slices.Contains(screenSteps, step) {
-			errs = append(errs, fmt.Errorf("%s: script %q: only a screen tool (screen = true) has %s scripts", where, n, strings.Join(screenSteps, ", ")))
+		if !t.Screen && step == StepScreenshot {
+			errs = append(errs, fmt.Errorf("%s: script %q: only a screen tool (screen = true) has %s scripts", where, n, StepScreenshot))
 			continue
 		}
 		if t.Scripts[scriptOS] == nil {
 			t.Scripts[scriptOS] = map[string]string{}
 		}
 		t.Scripts[scriptOS][step] = n
+	}
+	for _, osName := range OSNames {
+		if !t.Screen && t.Scripts[osName][StepStop] != "" && t.Scripts[osName][StepStart] == "" {
+			errs = append(errs, fmt.Errorf("%s: a %s script needs %s", where, StepStop+"."+osName+ScriptExt(osName), StepStart+"."+osName+ScriptExt(osName)))
+		}
+	}
+	if len(t.Secrets) > 0 && !t.PerLease() {
+		errs = append(errs, fmt.Errorf("%s: secrets: only a tool with a start script gets secrets", where))
 	}
 	if t.Screen {
 		if len(t.Scripts) == 0 {

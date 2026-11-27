@@ -1,0 +1,3 @@
+description = "Signing for Apple apps: the team's development certificate and App Store Connect API key, for this lease only"
+needs = ["xcode"]
+secrets = ["apple-signing-p12", "apple-signing-p12-password", "asc-key", "asc-key-id", "asc-issuer-id"]

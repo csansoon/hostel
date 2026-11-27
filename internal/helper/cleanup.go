@@ -32,8 +32,18 @@ func (h *helper) toolInfo(name string) (config.Tool, error) {
 	if err != nil {
 		return t, err
 	}
-	err = toml.NewDecoder(bytes.NewReader(data)).Decode(&t)
-	return t, err
+	if err := toml.NewDecoder(bytes.NewReader(data)).Decode(&t); err != nil {
+		return t, err
+	}
+	// The machine has only this OS's scripts; PerLease needs to know them.
+	t.Scripts = map[string]map[string]string{h.os: {}}
+	for _, step := range []string{config.StepStart, config.StepStop} {
+		name := step + "." + h.os + config.ScriptExt(h.os)
+		if _, err := os.Stat(filepath.Join(h.toolDir(t.Name), name)); err == nil {
+			t.Scripts[h.os][step] = name
+		}
+	}
+	return t, nil
 }
 
 // cleanup deletes what a lease left in its room (design, section 17). Each step runs
@@ -81,7 +91,7 @@ func (h *helper) cleanup(args []string, stdin io.Reader) (protocol.CleanupRespon
 		return os.WriteFile(h.leaseEndedFile(room), nil, 0o644)
 	})
 	step("stop processes", func() error { return h.stopLeaseProcesses(room, req.LeaseID) })
-	step("stop screen tools", func() error { return h.stopTools(room, req) })
+	step("stop tools", func() error { return h.stopTools(room, req) })
 	step("restore authorized_keys", h.restoreAuthorizedKeys)
 	// Before "check": a new unit or agent can hold a room port. Again after
 	// it: a process of the lease that "check" ended can have added an entry.
@@ -195,8 +205,8 @@ func (h *helper) stopLeaseProcesses(room, leaseID string) error {
 	return nil
 }
 
-// stopTools runs the stop scripts of the screen tools that started for the
-// lease, in reverse order of their start. Each one runs, also after a failure
+// stopTools runs the stop scripts of the tools that started for the lease
+// (screen tools and lease tools), in reverse order of their start. Each one runs, also after a failure
 // of another.
 func (h *helper) stopTools(room string, req protocol.CleanupRequest) error {
 	if len(req.Started) == 0 {

@@ -84,6 +84,10 @@ func (s *Server) handleCreateLease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, code, msg)
 		return
 	}
+	if msg := missingSecret(cfg, tools); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, protocol.CodeMissingSecret, msg)
+		return
+	}
 	priority := protocol.PriorityNormal
 	if req.Priority != "" {
 		v, ok := protocol.PriorityNames[req.Priority]

@@ -1,6 +1,6 @@
 ---
 name: hostel-tools
-description: Understand and change Hostel tools - the defaults (android-sdk, android-emulator, xcode, ios-simulator, macos-desktop, windows-desktop), mise tools (jdk:21, node:22), what each tool needs on the machine, options, and your own tools with their scripts. Use it when the user says "add iOS/Android to a machine", "what does the Mac need for the simulator", "Android emulator does not start", "add a phone or tablet", "make my own tool" (for example a tvOS simulator), or "change the install/start script".
+description: Understand and change Hostel tools - the defaults (android-sdk, android-emulator, xcode, ios-simulator, macos-desktop, windows-desktop, apple-signing), mise tools (jdk:21, node:22), what each tool needs on the machine, options, and your own tools with their scripts. Use it when the user says "add iOS/Android to a machine", "what does the Mac need for the simulator", "Android emulator does not start", "add a phone or tablet", "make my own tool" (for example a tvOS simulator), or "change the install/start script".
 ---
 
 # Tools
@@ -64,6 +64,7 @@ The binary has these tools built in.
 | `ios-simulator` | screen; needs `xcode` | `iphone-17-pro`, `ipad-pro-13` (max 2) | macOS | An iOS Simulator runtime. Optional `env`: `HOSTEL_IOS_RUNTIME` (for example `26.5`). |
 | `macos-desktop` | screen; whole machine | none | macOS | An automatic login of the machine user, an unlocked screen, Screen Recording for `/usr/libexec/sshd-keygen-wrapper`, and Automation Mode without a password (`sudo automationmodetool enable-automationmode-without-authentication`). |
 | `windows-desktop` | screen; whole machine | none | Windows | The "Hostel desktop" task in a signed-in, unlocked desktop session. |
+| `apple-signing` | lease tool; needs `xcode` | none | macOS | Nothing on the Mac: the Mac registered in the Apple team, and the server's secrets `apple-signing-p12`, `apple-signing-p12-password`, `asc-key`, `asc-key-id`, `asc-issuer-id` (`docs/machine-setup.md`, section 3.7). Hostel never registers a Mac. |
 
 What the tools give to commands:
 
@@ -112,6 +113,7 @@ screen = true                      # a screen tool: start, screenshot, and stop 
 options = ["apple-tv-4k"]          # screen tools: the first is the default
 max_options = 1                    # options in one lease (default 1)
 whole_machine = false              # true: the lease takes all rooms of the machine
+secrets = []                       # server secrets for start and stop (hostel config secrets)
 env = { TVOS_HOME = "{cache}/tvos-sim" }   # {cache} is $HOSTEL_CACHE_DIR, {home} the machine user's home
 path = ["{cache}/tvos-sim/bin"]
 script_timeouts = { install = "20m", start = "5m" }   # defaults: install 20m, others 3m
@@ -121,6 +123,14 @@ script_timeouts = { install = "20m", start = "5m" }   # defaults: install 20m, o
   prints.
 - The `env` and `path` of a software tool apply to every lease on a machine
   that has it. Those of a screen tool apply when the lease started it.
+- A **lease tool** is not a screen but has a `start` script (for example
+  `apple-signing`): it starts only for a lease that has it, its `stop` runs at
+  cleanup, and its `env` and `path` apply only then. Only a tool with `start`
+  can have `secrets`: files that an admin stores on the server (`hostel config
+  secrets set <name> <file>`). The `start` and `stop` scripts find them in
+  `$HOSTEL_SECRETS_DIR/<name>`; cleanup deletes them with the room. A lease
+  for a tool whose secret is not set fails at once. Guests of the lease can
+  read the files: use secrets only for material that the team may use.
 
 ### `GUIDE.md`
 
@@ -140,15 +150,14 @@ it has no scripts at all (a tool that only sets `env` and `path`).
 |---|---|---|
 | `install` | once for each machine, and again when the tool's files or the machine's options of a screen tool change (after the `install` of its needs) | `hostel/` |
 | `check` | after install, after each cleanup, at repair, before a warm machine takes a lease: exit non-zero if the tool does not work; print the version (or several versions, or the options of a screen tool, comma-separated) on the last line | `hostel/` |
-| `start` | screen tools only: each lease that asks for the tool, before it is ready, after the `start` of its needs; write the facts to `tool.env` | `rooms/<room>/` |
+| `start` | screen tools and lease tools: each lease that has the tool, before it is ready, after the `start` of its needs; write the facts to `tool.env` | `rooms/<room>/` |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output PNG path, `$2` the option | `rooms/<room>/` |
-| `stop` | screen tools only: at cleanup, in reverse order of `start`; stop and delete what `start` started | `rooms/<room>/` |
+| `stop` | screen tools and lease tools: at cleanup, in reverse order of `start`; stop and delete what `start` started | `rooms/<room>/` |
 
 Rules:
 
 - Every step is optional, except `start` for a screen tool on each OS that it
-  is available on. A software tool must not have `start`, `screenshot`, or
-  `stop`.
+  is available on. Only a screen tool has `screenshot`; `stop` needs `start`.
 - Each step must be safe to run again.
 - A non-zero exit code is a failure. The last 4 KB of output go to the event
   log (`hostel status <machine>`). A failed `start` stops the tools that already
@@ -165,8 +174,9 @@ the machine lists it without one), `HOSTEL_TOOLS` (all tools of the lease), `HOS
 for `start`, `screenshot`, and `stop`: `HOSTEL_TOOL_OPTIONS` (the lease's
 options of this tool, comma-separated) and `HOSTEL_EXCLUSIVE` (`1` for a
 whole-machine lease). Also the `MISE_*` variables, the `env` and `path` of the
-machine's software tools, the provider, machine, and room `env`, and `tool.env`
-(for `screenshot` and `stop`). Use machine `env` to vary a script between
+machine's software tools, the provider, machine, and room `env`, `tool.env`
+(for `screenshot` and `stop`), and `HOSTEL_SECRETS_DIR` (for `start` and `stop`
+of a tool with `secrets`). Use machine `env` to vary a script between
 machines.
 
 `tool.env` lines (`NAME=value`) go into the environment of every lease command.

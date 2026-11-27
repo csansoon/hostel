@@ -543,3 +543,18 @@ machines. Hostel ends the leases of the machine, updates it, and starts it
 again. The machine installs only signed releases.
 
 E2E scenarios: `m13-implementation.md`, section 6.
+
+## M14. Signing secrets
+
+Status: implemented and checked on a real Mac (`m14-implementation.md`,
+section 10); the 10-run E2E gate is next. Owner decisions of 2026-11-26 (`requirements.md`, section 3).
+
+Goal: a lease builds and runs signed Mac apps (for example Mac Catalyst apps with
+restricted entitlements) on a registered static Mac, with no signing setup on
+the Mac. The server stores one shared signing identity in a secret store and
+gives it to each lease that asks for the tool `apple-signing`; cleanup removes
+it. Hostel never registers Macs in the Apple team.
+
+E2E scenarios: `m14-implementation.md`, section 7 (a test tool with a secret on
+the Linux machines). The Apple scripts: a check on a real Mac (section 9, phase
+6).
