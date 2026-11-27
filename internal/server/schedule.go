@@ -174,6 +174,13 @@ func (s *Server) schedule(ctx context.Context) error {
 		m := lc.cfg.Template(a.Template)
 		// The ports come first: a lease whose tunnels cannot be placed fails
 		// before any machine is resumed or created for it.
+		// A tool can get a new secret after the lease was created (M14).
+		if msg := missingSecret(lc.cfg, l.Tools); msg != "" {
+			if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeaseQueued}, protocol.LeaseFailed, msg, now); err != nil {
+				return err
+			}
+			continue
+		}
 		ports, err := tunnelPorts(l.Tunnels, roomConfig(m, a.Rooms[0]).Ports)
 		if err != nil {
 			if _, err := s.store.EndLease(ctx, l.ID, []string{protocol.LeaseQueued}, protocol.LeaseFailed, err.Error(), now); err != nil {

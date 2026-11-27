@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // secretTool is a tool that is not a screen but starts for each lease (M14):
@@ -55,8 +56,9 @@ func sha256Hex(s string) string {
 // secrets with the room; a removal is refused while a tool uses the secret.
 func TestSecrets(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "secret-tool"},
-		tools: map[string]map[string]string{"secret-tool": secretTool}})
+	f := newFixture(t, &fixtureOpts{templateTools: []string{"fake-screen", "secret-tool", "secret-user"},
+		tools: map[string]map[string]string{"secret-tool": secretTool,
+			"secret-user": {"tool.toml": "description = \"Needs the tool with a secret\"\nneeds = [\"secret-tool\"]\n"}}})
 	e := f.e
 	log := func() string { return f.c.sh("cat " + cacheDir + "/secret-tool.log 2>/dev/null; true") }
 	adminIn := func(stdin string, args ...string) result {
@@ -170,6 +172,32 @@ func TestSecrets(t *testing.T) {
 	}
 	if r := e.adminHostel("config", "secrets"); strings.Contains(r.stdout, "other-secret") {
 		t.Fatalf("config secrets after a removal: %s", r)
+	}
+
+	// A tool that needs secret-tool: its secret comes with the need.
+	f.acquire("secret-user")
+	if r := e.mustHostel("run", "--", "echo $SECRET_SHA256"); r.stdout != sha256Hex(newValue)+"\n" {
+		t.Fatalf("the hash in a lease for a tool that needs secret-tool: %q", r.stdout)
+	}
+	e.mustHostel("release")
+	f.waitRoomFree()
+
+	// The tool gets a new secret while a lease for it waits: the lease fails
+	// with the reason when its turn comes, and the machine stays healthy.
+	f.acquire("fake-screen")
+	e.newRepoNamed("waiting", defaultRepoFiles())
+	waiting := f.queued("secret-tool")
+	e.writeTool("secret-tool", map[string]string{"tool.toml": strings.Replace(secretTool["tool.toml"], `"e2e-secret"]`, `"e2e-secret", "late-secret"]`, 1)})
+	e.pushTool("secret-tool")
+	f.useRepo("repo")
+	e.mustHostel("release")
+	e.waitFor("the waiting lease failed", time.Minute, func() bool { return f.lease(waiting).State == "failed" })
+	if l := f.lease(waiting); !strings.Contains(l.EndReason, "the tool secret-tool needs the secret late-secret, which is not set") {
+		t.Fatalf("the end reason of the waiting lease: %q", l.EndReason)
+	}
+	f.waitRoomFree()
+	if m := f.s.machine("home/box"); m.State != "running" {
+		t.Fatalf("the machine after a lease with a missing secret: %s (%s)", m.State, m.Reason)
 	}
 
 	// The values are only in the secret files of the server.

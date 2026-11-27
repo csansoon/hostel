@@ -1,6 +1,6 @@
 // Package tools embeds the default tool definitions (android-sdk,
-// android-emulator, xcode, ios-simulator, macos-desktop, windows-desktop) in
-// the binary. A server uses each default until an admin replaces or removes it
+// android-emulator, xcode, ios-simulator, macos-desktop, windows-desktop,
+// apple-signing) in the binary. A server uses each default until an admin replaces or removes it
 // (design, section 8, "Tool directories").
 package tools
 
@@ -9,7 +9,7 @@ import (
 	"io/fs"
 )
 
-//go:embed android-sdk android-emulator xcode ios-simulator macos-desktop windows-desktop
+//go:embed android-sdk android-emulator xcode ios-simulator macos-desktop windows-desktop apple-signing
 var files embed.FS
 
 // Defaults returns the files of each default tool: name → file → content.

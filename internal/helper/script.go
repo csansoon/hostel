@@ -209,7 +209,9 @@ func (h *helper) scriptEnv(tool, room, step string, reqEnv map[string]string) ([
 		env["HOSTEL_WORK_DIR"] = filepath.Join(h.roomDir(room), "work")
 	}
 	if room != "" && (step == config.StepStart || step == config.StepStop) {
-		env["HOSTEL_SECRETS_DIR"] = h.secretsDir(room)
+		if t, err := h.toolInfo(tool); err == nil && len(t.Secrets) > 0 {
+			env["HOSTEL_SECRETS_DIR"] = h.secretsDir(room)
+		}
 	}
 	if step == config.StepScreenshot || step == config.StepStop {
 		facts, err := readEnvFile(filepath.Join(h.roomDir(room), "tool.env"))

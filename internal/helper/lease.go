@@ -396,10 +396,10 @@ func (h *helper) secrets(args []string, stdin io.Reader) (struct{}, error) {
 	}
 	dir := h.secretsDir(room)
 	if err := os.RemoveAll(dir); err != nil {
-		return struct{}{}, err
+		return struct{}{}, fmt.Errorf("remove the earlier secrets: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return struct{}{}, err
+		return struct{}{}, fmt.Errorf("make the secrets directory: %w", err)
 	}
 	for name, data := range req.Files {
 		if !config.SecretNameRE.MatchString(name) {

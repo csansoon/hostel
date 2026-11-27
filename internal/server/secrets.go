@@ -115,10 +115,14 @@ func (s *Server) handleRemoveSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
-// leaseSecretNames returns the secrets of a lease's tools and their needs.
-func leaseSecretNames(cfg *config.Server, tools []string) []string {
+// leaseSecretNames returns the secrets of a lease's tools and their needs that
+// start on a machine with this OS.
+func leaseSecretNames(cfg *config.Server, tools []string, osName string) []string {
 	var out []string
 	for _, t := range leaseClosure(cfg, tools) {
+		if !t.StartsOn(osName) {
+			continue
+		}
 		for _, n := range t.Secrets {
 			if !slices.Contains(out, n) {
 				out = append(out, n)
@@ -129,7 +133,8 @@ func leaseSecretNames(cfg *config.Server, tools []string) []string {
 }
 
 // missingSecret returns the message for the first secret of a lease's tools
-// that is not set, or "".
+// that is not set, or "". It does not know the machine yet, so it checks the
+// secrets of the tools for each OS.
 func missingSecret(cfg *config.Server, tools []string) string {
 	for _, t := range leaseClosure(cfg, tools) {
 		for _, n := range t.Secrets {
@@ -142,9 +147,9 @@ func missingSecret(cfg *config.Server, tools []string) string {
 }
 
 // leaseSecrets reads the secrets of a lease's tools.
-func leaseSecrets(cfg *config.Server, tools []string) (map[string][]byte, error) {
+func leaseSecrets(cfg *config.Server, tools []string, osName string) (map[string][]byte, error) {
 	out := map[string][]byte{}
-	for _, n := range leaseSecretNames(cfg, tools) {
+	for _, n := range leaseSecretNames(cfg, tools, osName) {
 		data, err := os.ReadFile(secretFile(cfg.DataDir, n))
 		if err != nil {
 			return nil, fmt.Errorf("read the secret %s (an admin sets it with \"hostel config secrets set %s <file>\"): %w", n, n, err)

@@ -86,6 +86,12 @@ func (t *Tool) PerLease() bool {
 	return false
 }
 
+// StartsOn reports whether the tool starts for each lease on a machine with
+// this OS: a screen tool, or a tool with a start script for the OS.
+func (t *Tool) StartsOn(osName string) bool {
+	return t.Screen || t.Script(osName, StepStart) != ""
+}
+
 // ScriptTimeout returns the deadline of a script step.
 func (t *Tool) ScriptTimeout(step string) time.Duration {
 	if d, ok := t.ScriptTimeouts[step]; ok {
