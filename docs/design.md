@@ -1082,8 +1082,11 @@ guide shows only the guides of the tools that the server has.
   `.p12` (`-x`, no `-T /usr/bin/security`: `security export` cannot give out
   the key), deletes the `.p12` and its password, and adds the keychain to the
   user's search list under a lock (`lockf`; the rooms of a Mac share the list).
-  It writes `HOSTEL_SIGNING_KEYCHAIN`, `HOSTEL_SIGNING_TEAM`, `ASC_KEY_ID`,
-  `ASC_ISSUER_ID`, and `ASC_KEY_PATH`. `stop` removes the keychain from the list
+  It writes `HOSTEL_SIGNING_KEYCHAIN`, `HOSTEL_SIGNING_KEYCHAIN_PASSWORD`,
+  `HOSTEL_SIGNING_TEAM`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_KEY_PATH`. Each
+  SSH session has its own security session, so the unlock in `start` does not
+  reach the jobs: a job that signs unlocks the keychain first (found on a real
+  Mac: `codesign` failed with `errSecInternalComponent`). `stop` removes the keychain from the list
   and deletes it. Builds use automatic signing with `-allowProvisioningUpdates`
   and the key; Hostel never registers devices (owner decision, 2026-11-26).
 - **`windows-desktop`** (screen; Windows; `whole_machine = true`): section 9,

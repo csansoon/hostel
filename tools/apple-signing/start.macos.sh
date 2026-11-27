@@ -90,6 +90,9 @@ key_id=$(tr -d '[:space:]' < "$s/asc-key-id")
 cp "$s/asc-key" "$s/AuthKey_$key_id.p8"
 {
 	echo "HOSTEL_SIGNING_KEYCHAIN=$kc"
+	# Each SSH session has its own security session: the unlock above does not
+	# reach the jobs. A job unlocks the keychain with this random password.
+	echo "HOSTEL_SIGNING_KEYCHAIN_PASSWORD=$pw"
 	echo "HOSTEL_SIGNING_TEAM=$team"
 	echo "ASC_KEY_ID=$key_id"
 	echo "ASC_ISSUER_ID=$(tr -d '[:space:]' < "$s/asc-issuer-id")"

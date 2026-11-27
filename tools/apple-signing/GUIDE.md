@@ -5,11 +5,14 @@ run with their entitlements (push, keychain groups, app groups, extensions),
 for example a Mac Catalyst app on the macOS desktop:
 
   hostel acquire xcode macos-desktop apple-signing --task "QA the Mac app"
-  hostel run -- 'xcodebuild -scheme MyApp -destination "platform=macOS,variant=Mac Catalyst" \
+  hostel run -- 'security unlock-keychain -p "$HOSTEL_SIGNING_KEYCHAIN_PASSWORD" "$HOSTEL_SIGNING_KEYCHAIN" &&
+    xcodebuild -scheme MyApp -destination "platform=macOS,variant=Mac Catalyst" \
     -derivedDataPath build -allowProvisioningUpdates \
     -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" \
     -authenticationKeyIssuerID "$ASC_ISSUER_ID" build'
 
+Unlock the keychain in each command that signs: every "hostel run" is a new
+session, and in a locked keychain codesign fails with errSecInternalComponent.
 Use the project's automatic signing ("Apple Development"). The profiles that
 Xcode makes stay on the machine for later leases; the certificate and the key
 are only in this lease. HOSTEL_SIGNING_KEYCHAIN is the keychain, and

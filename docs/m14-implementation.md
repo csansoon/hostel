@@ -127,7 +127,10 @@ Secrets (names in the default `tool.toml`):
    the same list, so the change is under a lock, and it keeps the other entries.
 4. Check that `security find-identity -v -p codesigning <keychain>` finds the
    identity. Else fail with the reason (for example an expired certificate).
-5. Write `tool.env`: `HOSTEL_SIGNING_KEYCHAIN`, `HOSTEL_SIGNING_TEAM` (the team
+5. Write `tool.env`: `HOSTEL_SIGNING_KEYCHAIN`,
+   `HOSTEL_SIGNING_KEYCHAIN_PASSWORD` (random for each lease; each SSH session
+   has its own security session, so a job unlocks the keychain before it
+   signs), `HOSTEL_SIGNING_TEAM` (the team
    ID, from the certificate), `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_KEY_PATH`
    (a copy of the `.p8` in `secrets/` as `AuthKey_<key ID>.p8`). These are the names of `machine-setup.md`,
    section 3.7.

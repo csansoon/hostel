@@ -232,7 +232,8 @@ the tool can read them.
 
 Check: `hostel acquire xcode apple-signing --task "check signing"`, then
 `hostel run -- 'security find-identity -v -p codesigning "$HOSTEL_SIGNING_KEYCHAIN"'`
-lists one valid identity. `tools/apple-signing/GUIDE.md` shows the build.
+lists one valid identity. Each job that signs unlocks the keychain first
+(`security unlock-keychain -p "$HOSTEL_SIGNING_KEYCHAIN_PASSWORD" "$HOSTEL_SIGNING_KEYCHAIN"`). `tools/apple-signing/GUIDE.md` shows the build.
 
 Replace the certificate before it expires, and the key when it changes, with
 `hostel config secrets set`: the next lease gets the new one. When Hostel no
