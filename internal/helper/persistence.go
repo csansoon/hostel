@@ -270,7 +270,7 @@ func (h *helper) restorePersistenceLocked(room string) ([]string, error) {
 	// Services loaded since the copy, also from a changed file or with no
 	// file (systemd-run --user).
 	if before, err := os.ReadFile(filepath.Join(base, "services")); err == nil {
-		stopped, err := stopNewServices(strings.Split(string(before), "\n"))
+		stopped, err := stopNewServices(strings.Split(string(before), "\n"), deadline)
 		items = append(items, stopped...)
 		if err != nil {
 			failed = append(failed, err.Error())
@@ -471,7 +471,7 @@ func unloadAgents(path string, deadline time.Time) error {
 				return fmt.Errorf("read the label of %s: %w", f, err)
 			}
 			for _, domain := range []string{"gui/" + uid, "user/" + uid} {
-				if err := bootout(domain + "/" + label); err != nil {
+				if err := bootout(domain+"/"+label, deadline); err != nil {
 					return err
 				}
 			}
@@ -613,28 +613,45 @@ func unitFile(f string) bool {
 	return false
 }
 
-// bootout unloads a launchd service and waits until it is gone. An app that
-// a lease opened (a service "application.<bundle id>.<n>.<n>") can take some
-// seconds to quit after bootout, for example with an open document; one that
-// still runs after 10 s gets SIGKILL.
-func bootout(target string) error {
+// bootout unloads a launchd service and waits until it is gone, within the
+// audit's deadline. An app that a lease opened (a service
+// "application.<bundle id>.<n>.<n>") can take some seconds to quit after
+// bootout, for example with an open document. One that is still loaded after
+// 10 s gets SIGKILL and a second bootout (a KeepAlive agent would start
+// again).
+func bootout(target string, deadline time.Time) error {
+	if time.Now().After(deadline) {
+		return fmt.Errorf("too many units or agents to stop (stopped until %s)", target)
+	}
 	runQuiet("launchctl", "bootout", target)
-	err := waitAgentGone(target, 10*time.Second)
-	if err == nil {
-		return nil
+	err := waitAgentGone(target, earlier(time.Now().Add(10*time.Second), deadline))
+	if !errors.Is(err, errStillLoaded) {
+		return err
 	}
 	runQuiet("launchctl", "kill", "SIGKILL", target)
-	return waitAgentGone(target, 5*time.Second)
+	runQuiet("launchctl", "bootout", target)
+	return waitAgentGone(target, earlier(time.Now().Add(5*time.Second), deadline))
 }
 
-// waitAgentGone checks agentGone until it succeeds or the time is over.
-func waitAgentGone(target string, d time.Duration) error {
-	for deadline := time.Now().Add(d); ; time.Sleep(250 * time.Millisecond) {
+// waitAgentGone checks agentGone until the service is gone, another error
+// comes, or the time is over.
+func waitAgentGone(target string, until time.Time) error {
+	for {
 		err := agentGone(target)
-		if err == nil || time.Now().After(deadline) {
+		if !errors.Is(err, errStillLoaded) || time.Now().After(until) {
 			return err
 		}
+		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+var errStillLoaded = errors.New("still is loaded")
+
+func earlier(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 // agentGone checks that a launchd service is not loaded: print exits with 113
@@ -645,7 +662,7 @@ func agentGone(target string) error {
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
-		return fmt.Errorf("the agent %s still is loaded", target)
+		return fmt.Errorf("the agent %s %w", target, errStillLoaded)
 	case errors.As(err, &exit) && (exit.ExitCode() == 113 || exit.ExitCode() == 112):
 		return nil
 	}
@@ -665,7 +682,7 @@ func userManager() bool {
 // manager that did not exist then is stopped as a whole. On macOS, Apple's
 // services (macOS starts them at any time) and a domain that did not exist then
 // (a person signed in) are left.
-func stopNewServices(before []string) ([]string, error) {
+func stopNewServices(before []string, deadline time.Time) ([]string, error) {
 	had, present := map[string]bool{}, map[string]bool{}
 	for _, l := range before {
 		if p, ok := strings.CutPrefix(l, "#present "); ok {
@@ -702,7 +719,7 @@ func stopNewServices(before []string) ([]string, error) {
 			if !present[domain] || strings.HasPrefix(label, "com.apple.") {
 				continue
 			}
-			if err := bootout(n); err != nil {
+			if err := bootout(n, deadline); err != nil {
 				failed = append(failed, err.Error())
 				continue
 			}

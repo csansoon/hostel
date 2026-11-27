@@ -2237,9 +2237,11 @@ failed; the result lists each step.
    for a drop-in, its parent unit;
    `launchctl bootout` of the plist's label, by the name in the audited
    location also when the file is a link; a launchd service gets up to 10 s to
-   go after `bootout`, then SIGKILL (`launchctl kill`) and 5 s more: an app
-   that a lease opened (`application.<bundle id>.<n>.<n>`) can take seconds to
-   quit; the step fails when the unit or
+   go after `bootout`, then SIGKILL (`launchctl kill`), a second `bootout` (a
+   `KeepAlive` agent starts again), and 5 s more, all inside the deadline
+   below: an app that a lease opened (`application.<bundle id>.<n>.<n>`) can
+   take seconds to quit; only "still loaded" is waited for, another `launchctl`
+   error fails at once; the step fails when the unit or
    agent still runs afterwards, and all stops have one deadline of 2 minutes;
    a machine without a systemd user manager, whose private socket
    `/run/user/<uid>/systemd/private` does not exist, has no running unit; with
