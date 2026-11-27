@@ -431,10 +431,15 @@ func TestAzure(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	az.setHung(true)
 	c.stop()
-	e.waitFor("deallocated and still broken", 2*time.Minute, func() bool {
+	for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(50 * time.Millisecond) {
 		m = s.machine("cloud/box")
-		return m.State == protocol.MachineBroken && m.Reason == "deallocated: unreachable"
-	})
+		if m.State == protocol.MachineBroken && m.Reason == "deallocated: unreachable" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout after 2m0s: deallocated and still broken; machine %s (%s); events:\n%s", m.State, m.Reason, s.machineEvents("cloud/box"))
+		}
+	}
 	var brokenAt, stoppingAt time.Time
 	var d protocol.MachineDetails
 	if code := s.get("/v1/machines/cloud/box", s.token, &d); code != 200 {
