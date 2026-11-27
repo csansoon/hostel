@@ -25,7 +25,7 @@ Use these plain words. Only Hostel, Guest, and Room come from the hostel theme.
 | machine | A real computer or VM: a static host, or a cloud machine that an on-demand provider created. |
 | template | What an on-demand provider creates machines from, in the configuration (up to `max_machines` machines at a time). |
 | provider | A source of machines: `static` (your own hosts), `namespace` (on-demand cloud), `external` (your own command). |
-| tool | What a machine gives to a lease, and what a guest asks for. Software (`android-sdk`, `xcode`, `jdk`, `node`) is usable in every lease on the machine. A screen tool (`android-emulator`, `ios-simulator`, `macos-desktop`, `windows-desktop`) starts only for a lease that asks for it. |
+| tool | What a machine gives to a lease, and what a guest asks for. Software (`android-sdk`, `xcode`, `jdk`, `node`) is usable in every lease on the machine. A screen tool (`android-emulator`, `ios-simulator`, `macos-desktop`, `windows-desktop`) starts only for a lease that asks for it, and so does a lease tool (`apple-signing`). |
 | option | A version of a software tool (`node:22`) or a phone or tablet of a screen tool (`android-emulator:pixel-9`). |
 | room | A place for one lease on a machine. A machine has one room by default. |
 | lease | One guest's exclusive use of a room, for one task. It ends at release, or after 10 minutes without a `hostel` command or tunnel data. |

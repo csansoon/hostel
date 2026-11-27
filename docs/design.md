@@ -233,6 +233,10 @@ A **tool** is something that a machine gives to a lease:
   screen tool only for a lease that asks for it, takes screenshots of it, has its
   driver ready, and cleans it up at the end. A screen tool can take the whole
   machine (the desktops: there is one screen).
+- **Lease tools** (M14): a defined tool that is not a screen, but has a `start`
+  script, also starts only for a lease that has it, and its `stop` runs at
+  cleanup: `apple-signing` (the team's signing identity for one lease). It
+  can get secrets of the server (section 18, "Secrets").
 
 An **option** is a version of a software tool, or the phone or tablet of an
 emulator or a simulator: `node:22`, `xcode:26`, `android-emulator:pixel-9`. In a
@@ -822,6 +826,7 @@ hostel/
     baseline.git/            git directory for the baseline commits
     lease.json               lease ID, requested tools, started screen tools with their options
     tool.env                 KEY=VALUE lines that the start scripts write (for example SIMULATOR_UDID)
+    secrets/                 the secrets of the lease's tools (M14; directory 0700, files 0600)
     lease.env                KEY=VALUE lines that the guest sets (section 10)
     manifest.json            files of the last sync
     plans/<plan-id>.json     pending sync plans
@@ -880,6 +885,7 @@ success; else stdout has `{"error": "..."}`.
 | `mise-install` | server | `{"timeout_seconds"}` | `{"exit_code", "output_tail", "timed_out", "versions": {"<tool>": "<version>"}}`; installs the machine's mise tools of `hostel/mise/config.toml` and reports their versions (the inventory of the mise tools) |
 | `begin` | server | `{"lease_id", "tools", "started"}` | `{}`. Writes `rooms/<room>/lease.json`. Saves the current `authorized_keys` as `authorized_keys.base` when no other room of the machine has a lease: the previous cleanup restored it, so it holds the owner's latest keys (for example a new server key). With a lease in another room, it keeps the base, because `authorized_keys` can then have a key that that lease added. |
 | `run-script <tool> <step>` | server, guest (`screenshot`) | `{"args": [...], "env": {...}, "timeout_seconds"}` | `{"exit_code", "output_tail", "last_line", "missing", "timed_out"}`; `missing` when the tool has no script for this step and OS; `last_line` is the version that a `check` prints |
+| `secrets` | server | `{"files": {"<name>": "<base64>"}}` | `{}`. Writes `rooms/<room>/secrets/` again, before the `start` scripts (M14). |
 | `cleanup` | server | `{"lease_id", "started", "ports", "check"}` (from the database, so a repeated cleanup does not need `lease.json`; `started` are the screen tools of the lease with their options, stopped in reverse order; the server sets `check` at the time of the cleanup: the tools that the machine has installed) | `{"steps": [...]}` (section 17) |
 | `set-env` | guest | `{"env": {"K": "V"}}` | `{}`. Writes `lease.env`. |
 | `mise-current` | guest | — | `[{"name", "version"}]`: the tools that the mise files in the work directory select now (for the lease facts). |
@@ -901,7 +907,7 @@ The `ready` lease data contains the absolute helper path, so the guest can call 
 
 A defined tool is a directory (M10e; `m10e-implementation.md`). The binary
 embeds the default tools (`android-sdk`, `android-emulator`, `xcode`,
-`ios-simulator`, `macos-desktop`, `windows-desktop`, from `tools/` of the
+`ios-simulator`, `macos-desktop`, `windows-desktop`, `apple-signing`, from `tools/` of the
 repository); each default applies until an admin replaces it with their own
 files or removes it. The tools are in the server's database
 (`tool_revisions`). Admins add their own tools from a client:
@@ -937,6 +943,8 @@ tools/
     install.macos.sh   start.macos.sh   screenshot.macos.sh   stop.macos.sh   check.macos.sh
   macos-desktop/
     tool.toml   GUIDE.md   start.macos.sh   screenshot.macos.sh   stop.macos.sh
+  apple-signing/
+    tool.toml   GUIDE.md   start.macos.sh   stop.macos.sh
   windows-desktop/
     tool.toml   GUIDE.md   start.windows.ps1   screenshot.windows.ps1
 ```
@@ -951,6 +959,7 @@ options = ["pixel-9", "pixel-tablet"]      # screen tools: the phones and tablet
 max_options = 2                            # options in one lease (default 1)
 whole_machine = false                      # true: the lease takes all rooms of the machine
 machine_user = false                       # true: needs the machine user's account; no lease user (M11)
+secrets = []                               # server secrets for start and stop (M14; a tool with a start script)
 env = { ANDROID_HOME = "{cache}/android-sdk" }        # in every lease on a machine with this tool
 path = ["{cache}/android-sdk/platform-tools", "{cache}/android-sdk/emulator"]
 script_timeouts = { install = "30m", start = "5m" }   # defaults: install 20m, others 3m
@@ -977,14 +986,16 @@ no scripts at all (a tool that only sets `env` and `path`). Steps:
 |---|---|---|
 | `install` | once for each machine, and again when the tool's files, the machine's options of a screen tool, or the machine `env` change; before it, the `install` of each tool in `needs` | create one golden simulator for each option |
 | `check` | after `install`, after each cleanup, at repair, and before a warm machine takes a lease; the last line of the output is the tool's versions (a software tool: all that it has now, also what builds added to the cache) or its options (a screen tool), comma-separated; a non-zero exit code means that the tool does not work. A screen tool whose check reports none of the options that the machine lists fails too (no lease could start it) | Xcode works; the golden simulators exist; enough free disk |
-| `start` | screen tools only: for each lease that asked for the tool, before `ready`, after the `start` of the tools in `needs`; writes facts to `tool.env` | clone the golden simulator of each requested option; boot it |
+| `start` | screen tools and lease tools: for each lease that has the tool (asked for it, or a tool of the lease needs it), before `ready`, after the `start` of the tools in `needs`; writes facts to `tool.env` | clone the golden simulator of each requested option; boot it |
 | `screenshot` | screen tools only: `hostel screenshot`; `$1` is the output path, `$2` the option (default: the first of the lease) | `xcrun simctl io "$udid" screenshot "$1"` |
-| `stop` | screen tools only: cleanup of a lease that started the tool, in reverse order of `start` | stop the processes that use the room's clones (by UDID), then shut down and delete the clones |
+| `stop` | screen tools and lease tools: cleanup of a lease that started the tool, in reverse order of `start` | stop the processes that use the room's clones (by UDID), then shut down and delete the clones |
 
 Contract:
 
 - Each step is optional, except `start` for screen tools: a screen tool must
-  have `start.<os>` for each OS that it is available on.
+  have `start.<os>` for each OS that it is available on. A lease tool has
+  `start` (and maybe `stop`) for an OS; on another OS it is a software tool.
+  Only a screen tool has `screenshot`.
 - Each step must be idempotent. A restart can run it again.
 - `install` and `check` run in `hostel/`. `start`, `screenshot`, and `stop` run in
   `rooms/<room>/`. The server creates `rooms/<room>/` before `start`.
@@ -997,7 +1008,9 @@ Contract:
   (`1` when the lease holds the whole machine, for example a desktop lease, else
   empty; `start`, `screenshot`, `stop`), the `MISE_*` variables, the `env` and
   `path` of the machine's software tools, the provider, machine, and room `env`,
-  and `tool.env` (for `screenshot` and `stop`). Machine `env` is also the way to
+  `tool.env` (for `screenshot` and `stop`), and `HOSTEL_SECRETS_DIR` (`start`
+  and `stop` of a tool with `secrets`: the directory with one file for each
+  secret, section 18). Machine `env` is also the way to
   vary a script between machines with the same OS. Scripts get
   `HOSTEL_LEASE_ID`, not `HOSTEL_LEASE`: screen processes that `start` starts are
   therefore not stopped by cleanup step 1, and `stop` can shut them down cleanly.
@@ -1016,8 +1029,9 @@ Contract:
   running after the script ends.
 
 `hostel admin config check` (section 9) fails if a screen tool lacks `start` for
-an OS that it is available on, if a software tool has `start`, `screenshot`, or
-`stop` scripts, if a machine lists a tool that is neither a defined tool nor a
+an OS that it is available on, if a tool that is not a screen has `screenshot`,
+or `stop` without `start`, if a `secrets` entry is not a valid secret name or the
+tool has no `start`, if a machine lists a tool that is neither a defined tool nor a
 mise tool with its version, if a machine lists a defined software tool with an
 option, or a screen tool with an option that the tool does not have, if a machine lists a tool that is not available on
 its OS (for example `windows-desktop` on Linux), if a `needs` entry is not a
@@ -1060,6 +1074,18 @@ guide shows only the guides of the tools that the server has.
   `26.5`) selects the runtime; the default is the newest iOS runtime.
 - **`macos-desktop`** (screen; macOS; `whole_machine = true`): section 9, "The
   Mac desktop".
+- **`apple-signing`** (lease tool; `needs = ["xcode"]`; macOS; M14). Secrets
+  `apple-signing-p12` (an "Apple Development" certificate with its key),
+  `apple-signing-p12-password`, `asc-key` (an App Store Connect API key),
+  `asc-key-id`, and `asc-issuer-id`. `start` makes a keychain in the room with a
+  random password, imports Apple's intermediate certificate (WWDR G3) and the
+  `.p12` (`-x`, no `-T /usr/bin/security`: `security export` cannot give out
+  the key), deletes the `.p12` and its password, and adds the keychain to the
+  user's search list under a lock (`lockf`; the rooms of a Mac share the list).
+  It writes `HOSTEL_SIGNING_KEYCHAIN`, `HOSTEL_SIGNING_TEAM`, `ASC_KEY_ID`,
+  `ASC_ISSUER_ID`, and `ASC_KEY_PATH`. `stop` removes the keychain from the list
+  and deletes it. Builds use automatic signing with `-allowProvisioningUpdates`
+  and the key; Hostel never registers devices (owner decision, 2026-11-26).
 - **`windows-desktop`** (screen; Windows; `whole_machine = true`): section 9,
   "The Windows desktop". Its `start` fails when the desktop program does not
   run (no `hostel/desktop.json`). It has no `stop`: the desktop program ends
@@ -1578,8 +1604,8 @@ source overrides an earlier one):
 2. the provider, machine, and room `env`, and the `MISE_*` variables (section 9);
 3. the output of `mise env --json` in `work/` (tool paths and the repository's
    mise `[env]`);
-4. the `env` and `path` of the machine's software tools, and of the screen tools
-   that started for the lease (section 8);
+4. the `env` and `path` of the machine's software tools, and of the screen
+   tools and lease tools that started for the lease (section 8);
 5. `tool.env` (from the `start` scripts);
 6. `lease.env`: the repository `env` and the `env` of its `[tool.<name>]`
    sections for the lease's tools and their needs, after placeholder
@@ -1790,6 +1816,7 @@ have `X-Hostel-Version` (M10d); a guest older than the minimum gets HTTP 426.
 | `POST /v1/machines/invites` (admin), `POST /v1/machines/join` (the code, no token), `GET /v1/install.sh`, `GET /v1/download/hostel-<os>-<arch>[.exe]`, `RELEASE`, `SHA256SUMS`, `SHA256SUMS.sig` (no token) | A machine code with the commands to run; the join (adds the machine, returns a machine token and the server's SSH key); the install script and the binaries of `helper_dir` (M9) |
 | `POST /v1/logins/{cli}`, `GET /v1/logins/{cli}[?wait=1]` (admin; `cli` is `devbox` or `nsc`) | Starts a provider CLI login on the server and returns its address (or `already`); the state (`waiting`, `done`, `failed`) (M9) |
 | `POST /v1/invites` | `{"role", "name"}` (admin) or `{"self": true}` (a code for the caller's other computer); returns the code, the key fingerprint, and the expiry (24 hours). |
+| `GET /v1/secrets`, `PUT /v1/secrets/{name}`, `DELETE /v1/secrets/{name}` (admin; M14) | The secrets: `[{"name", "set", "size", "set_at", "tools"}]`, also the ones that a tool declares and that are not set; never a value. A value `{"value": "<base64>"}` of 1 byte to 64 KB. A removal: HTTP 409 while a tool declares the secret. |
 | `PUT /v1/providers/{name}/secret` (admin) | The client secret of an azure provider: `{"secret": "..."}`; the answer `{"error": "..."}` says whether Azure accepted it (M12). |
 | `POST /v1/machines/{id}/drain`, `/undrain`, `/repair`, `/destroy` (admin) | Machine control. `repair` takes `{"accept_host_key": bool}` and is for broken static and azure machines; `destroy` is for on-demand machines without a lease. |
 | `POST /v1/tokens`, `DELETE /v1/tokens/{id}` (admin) | Token control. Request: `{"name", "role", "template"}` (`template` = `<provider>/<machine>`, only for the role `machine`). A new token is returned once. |
@@ -2320,6 +2347,21 @@ Warm policy after cleanup:
 - **Lease keys.** The guest generates a key pair for each lease. The private key
   never leaves the guest.
 - **Provider credentials.** Only the server has them.
+- **Secrets** (M14). Admins store files for tools: `hostel config secrets set
+  <name> <file|->` writes `<data_dir>/secrets/<name>` (file `0600`, directory
+  `0700`), with the event "secret X set" (no value). A tool declares the secrets
+  that it needs (`secrets` in `tool.toml`); a repository cannot ask for one.
+  The server sends the secrets of the lease's tools to the room (helper
+  `secrets`) after `begin` and before `start`; only the `start` and `stop`
+  scripts of a tool with `secrets` get `HOSTEL_SECRETS_DIR`, and cleanup deletes
+  the directory with the room. A request for a tool whose secret is not set
+  fails at once (HTTP 422 `missing_secret`); a queued lease whose tool got a new
+  secret fails when its turn comes, and its machine stays as it is. Values are
+  never in a log, an event, an answer, `lease.json`, or the configuration
+  history. The files are not protected from the guest: commands of the lease
+  run as the same OS user (as a lease user, the room belongs to that user).
+  The owner accepts that each guest of a lease with the tool can read them
+  (2026-11-26): use material only for Hostel, so that it can be revoked alone.
 - **Transport.** With `tls = "self-signed"`, the API and the WebSocket gateway are
   HTTPS with the server's own certificate; clients check its key against the
   key that they pinned from the invite code (`internal/tlspin`), not the name or a

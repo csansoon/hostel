@@ -1,7 +1,7 @@
 # M14. Signing secrets (plan)
 
-Status: plan, waiting for the owner's approval. Owner decisions of 2026-11-26
-(section 2).
+Status: phases 1 to 5 done (section 10); the real check on a Mac (phase 6) and
+the E2E gate are next. Owner decisions of 2026-11-26 (section 2).
 
 ## 1. Why
 
@@ -46,14 +46,15 @@ section 4.5) can use it later.
   for the client secret of an azure provider. A name is 1 to 64 characters of
   `a-z`, `0-9`, and `-`. A value is at most 64 KB.
 - **API** (admin only):
-  - `GET /v1/secrets`: `[{"name", "size", "set_at", "set_by", "tools"}]`
-    (`tools`: the tools that declare it). Never a value.
+  - `GET /v1/secrets`: `[{"name", "set", "size", "set_at", "tools"}]`
+    (`tools`: the tools that declare it; also a secret that a tool declares
+    and that is not set). Never a value. Who set it is in the event log.
   - `PUT /v1/secrets/{name}`: the body is the value.
   - `DELETE /v1/secrets/{name}`: refused while a tool declares it
     (as `hostel config tools remove` is refused while a machine lists the tool).
 - **CLI.**
   ```
-  hostel config secrets                              # name, size, set at, set by, tools
+  hostel config secrets                              # name, size, set at, tools
   hostel config secrets set <name> <file>            # a file
   hostel config secrets set <name> -                 # stdin (a password: not in argv or shell history)
   hostel config secrets remove <name>
@@ -74,9 +75,11 @@ section 4.5) can use it later.
   screen tool. `screen = true` still means: a screen (options, `screenshot`,
   `whole_machine`). The other way, `apple-signing` as a screen tool without a
   screen, would show it as a screen in `hostel tools` and to agents.
-- **Delivery.** At `begin`, the server sends the secrets of the lease's tools in
-  the JSON input (base64). The helper writes them to `rooms/<room>/secrets/`
-  (directory `0700`, files `0600`) before the `start` scripts. The scripts get
+- **Delivery.** After `begin`, the server sends the secrets of the lease's
+  tools with the helper command `secrets` (JSON, base64; not in `begin`,
+  because `begin` writes its input to `lease.json`). The helper writes them to
+  `rooms/<room>/secrets/` (directory `0700`, files `0600`) before the `start`
+  scripts. Only the `start` and `stop` scripts of a tool with `secrets` get
   `HOSTEL_SECRETS_DIR`. Jobs and shells of the guest do not get the variable.
   This does not protect the files: they belong to the same user as the guest's
   commands. The owner accepts that each guest of a lease with the tool can read
@@ -87,7 +90,13 @@ section 4.5) can use it later.
   request (or one of its needs) declares a secret that is not set: "the tool
   apple-signing needs the secret asc-key, which is not set; an admin runs
   `hostel config secrets set asc-key <file>`". A tool push with an unset secret
-  is not an error, so the order of the admin's steps does not matter.
+  is not an error, so the order of the admin's steps does not matter. A queued
+  lease whose tool got a new secret fails with the same reason when its turn
+  comes (the scheduler checks it, and the preparing step again before it uses
+  the machine); the machine stays as it is.
+- **By OS.** A tool starts on a machine when it is a screen or has a `start`
+  script for the machine's OS. The machine gets only the secrets of the tools
+  that start on it.
 - **Lease users (M11).** With `lease_users`, the files belong to the lease user.
   A keychain of a lease user is not checked on a real Mac (section 8).
 
@@ -112,15 +121,15 @@ Secrets (names in the default `tool.toml`):
    random password, with no auto-lock, and unlock it.
 2. Import Apple's intermediate certificate "WWDR G3" (public; in the script,
    because a tool directory has only `tool.toml`, `GUIDE.md`, and scripts) and
-   the `.p12` (`-x`: no export with `security`), and set the partition list for
-   `codesign`.
+   the `.p12` with `-x` and `-T /usr/bin/codesign` only, set the partition list
+   for `codesign`, and delete the `.p12` and its password from the room.
 3. Add the keychain to the user's search list. Several rooms of one Mac change
    the same list, so the change is under a lock, and it keeps the other entries.
 4. Check that `security find-identity -v -p codesigning <keychain>` finds the
    identity. Else fail with the reason (for example an expired certificate).
 5. Write `tool.env`: `HOSTEL_SIGNING_KEYCHAIN`, `HOSTEL_SIGNING_TEAM` (the team
    ID, from the certificate), `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_KEY_PATH`
-   (the `.p8` in `secrets/`). These are the names of `machine-setup.md`,
+   (a copy of the `.p8` in `secrets/` as `AuthKey_<key ID>.p8`). These are the names of `machine-setup.md`,
    section 3.7.
 
 `stop`: remove the keychain from the search list (under the lock) and delete it.
@@ -179,7 +188,12 @@ lease tools with a test tool. The Apple scripts get a check on a Mac
    ask for the test tool gets no secrets, no `start`, and none of the tool's
    `env`.
 7. **Remove.** `secrets remove` is refused while the test tool declares the
-   secret; it works after the tool is removed.
+   secret; a secret that no tool declares can be removed.
+8. **Needs.** A lease for a tool that needs the test tool gets the secret.
+9. **A new secret while a lease waits.** The waiting lease fails with the
+   reason, and the machine stays `running`.
+10. **Screenshots.** A lease whose only started tool is not a screen has no
+    screen; with a screen tool too, `hostel screenshot` needs no `--tool`.
 
 ## 8. Risks
 
@@ -194,7 +208,10 @@ lease tools with a test tool. The Apple scripts get a check on a Mac
 - **Lease users.** A keychain for a new lease user with no login session is not
   checked. The Mac check uses the machine user (desktop leases need it anyway).
 - **Guests can copy the secrets.** Accepted (section 2). Use material only for
-  Hostel, so that it can be revoked alone.
+  Hostel, so that it can be revoked alone. The start script makes the window
+  small for the certificate (the `.p12` is on disk for a few seconds), but a
+  guest can sign with the identity during the lease, and the `.p8` stays in the
+  room for `xcodebuild`.
 - **Device registration by a guest.** Hostel never registers devices, but a
   guest with the API key can try. If the role Developer cannot register devices,
   this risk is gone; the check does not try it (it would use one of the 100
@@ -211,3 +228,26 @@ lease tools with a test tool. The Apple scripts get a check on a Mac
 | 5 | `machine-setup.md`, `design.md`, `requirements.md` |
 | 6 | Real check: the production server runs the branch build; the owner's secrets are set there; a static Mac lists `apple-signing`. A Mac Catalyst Debug build with automatic signing, the app starts with its entitlements, a screenshot. After `release`: no keychain, the search list as before, no secret files |
 | 7 | The E2E gate (`make test-e2e`, then `make test-e2e-10`), pull request when the owner asks |
+
+## 10. Implementation notes
+
+- **Phases 2 and 3** (commit `10e7b25`, review fixes in `3c50135`): the secret
+  store, lease tools, and delivery. `StartedTool.no_screen` marks a started tool
+  that is not a screen, so that `hostel screenshot` ignores it. A requested
+  version of a lease tool stays in `HOSTEL_TOOLS`.
+- **Phase 4** (`3c50135`): `tools/apple-signing`. Checked on a local Mac (macOS
+  27.2) with the real Hostel certificate (a `.p12` made again from its key, with
+  a known password; no Apple service was called): `start` makes the keychain
+  with one valid identity and the right team ID; `codesign` finds the identity
+  through the search list, over a shell with no terminal, without a prompt;
+  `stop` deletes the keychain, and the search list is the same as before; a
+  repeated `stop` does nothing.
+- **Found in phase 4:** with `-T /usr/bin/security` in the import (as in the
+  M10h guide), `security export` gives out the private key, also with `-x`.
+  Without it, an export has no key. The tool and the new machine guide do not
+  use it.
+- **Review** (a subagent, of `10e7b25`): a missing secret at the preparing step
+  made the machine `broken`; a requested version of a lease tool was lost; the
+  server and the helper decided "starts for the lease" differently for a tool
+  with a `start` script for one OS only; all start scripts got
+  `HOSTEL_SECRETS_DIR`. All are fixed, with E2E scenarios 8 to 10.

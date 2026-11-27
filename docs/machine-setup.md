@@ -18,7 +18,8 @@ Each part ends with a check. Do not continue before the check passes.
 | Installs the service that keeps the machine connected | Automatic login and no screen lock (desktop tools) |
 | Sends the helper, mise, and the tool scripts | Permissions (macOS privacy settings), Automation Mode |
 | Installs the tools of the machine (`install` scripts) and checks them | Apps that leases use but cannot install (for example Chrome) |
-| Cleans up after each lease | Signing material (optional, section 3.7 and 4.5) |
+| Cleans up after each lease | Apple signing: the Apple side and each Mac's registration (optional, 3.7); Windows signing (optional, 4.5) |
+| Gives the server's signing secrets to each lease that asks for `apple-signing` | |
 
 What each tool needs on the machine:
 
@@ -27,6 +28,7 @@ What each tool needs on the machine:
 | `xcode` | macOS | Xcode (3.3) |
 | `ios-simulator` | macOS | Xcode and the iOS runtime (3.3), a desktop session (3.4) |
 | `macos-desktop` | macOS | A desktop session (3.4), Screen Recording and Automation Mode (3.5); for app QA, 3.6 |
+| `apple-signing` | macOS | Nothing on the Mac; the Apple side once, and each Mac registered in the team (3.7) |
 | `android-sdk`, `android-emulator` | macOS, Linux | Nothing on macOS; KVM on Linux (5) |
 | `windows-desktop` | Windows | `hostel` as the desktop user, and the desktop task (4.4) |
 | mise tools (`jdk:21`, `node:22`, `dotnet:10`) | all | Nothing |
@@ -176,61 +178,65 @@ administrator:
 
 ### 3.7 Signing (optional)
 
-For signed builds (for example Mac Catalyst apps for Mac QA). The administrator
-who sets up the Mac does this. Every lease on this Mac can then sign with the
-certificate, also leases of other users. Use a certificate and an API key only
-for Hostel, so that you can revoke them alone.
+For signed builds, for example Mac Catalyst apps with push, keychain groups, or
+extensions: such an app needs a real signature to run with its entitlements.
+The server keeps one signing identity for all its guests, and the tool
+`apple-signing` gives it to each lease that asks for it (`docs/m14-implementation.md`).
+Nothing about signing is installed on the Mac. Use a certificate and an API key
+only for Hostel, so that you can revoke them alone: each guest of a lease with
+the tool can read them.
 
-1. **The device.** Register the Mac's provisioning UDID in the Apple team
-   (System Information > Hardware > Provisioning UDID).
-2. **The certificate.** Make an "Apple Development" certificate only for Hostel,
-   and export it with its private key as a `.p12`.
-3. **The keychain.** As `hostel` (for example `sudo -iu hostel`), make a separate
-   keychain, import the certificate without export rights (`-x`), and add the
-   keychain to the search list:
+1. **The certificate** (once). Make an "Apple Development" certificate only for
+   Hostel, with a key that never goes into your own keychain:
 
    ```sh
-   d=~/.config/hostel-signing; mkdir -p -m 700 $d
-   (umask 077; openssl rand -hex 16 > $d/password)
-   kc=~/Library/Keychains/hostel-signing.keychain-db
-   security create-keychain -p "$(cat $d/password)" $kc
-   security set-keychain-settings $kc
-   security unlock-keychain -p "$(cat $d/password)" $kc
-   security import AppleWWDRCAG3.cer -k $kc          # Apple's intermediate certificate
-   security import hostel-signing.p12 -k $kc -x -T /usr/bin/codesign -T /usr/bin/security
-   security set-key-partition-list -S apple-tool:,apple: -s -k "$(cat $d/password)" $kc
-   security list-keychains -d user -s ~/Library/Keychains/login.keychain-db $kc
+   openssl genrsa -out hostel-dev.key 2048
+   openssl req -new -key hostel-dev.key -out hostel-dev.csr -subj "/CN=Hostel Development"
+   # developer.apple.com > Certificates > + > Apple Development: upload the .csr, download the .cer
+   openssl x509 -inform DER -in development.cer -out hostel-dev.pem
+   openssl pkcs12 -export -legacy -inkey hostel-dev.key -in hostel-dev.pem -out hostel-signing.p12
    ```
 
-   Download `AppleWWDRCAG3.cer` from apple.com/certificateauthority. Without it,
-   `security find-identity` finds "0 valid identities". Delete the `.p12` and
-   its password from the Mac after the import.
-4. **The App Store Connect API key** (role Developer), so that `xcodebuild
-   -allowProvisioningUpdates` makes the profiles without an Apple account:
+   Use a random password for the `.p12`. The certificate is valid for one year.
+2. **The App Store Connect API key** (once; an Admin or the Account Holder makes
+   it). App Store Connect > Users and Access > Integrations > App Store Connect
+   API > **Team Keys** (not an individual key) > +, with the role Developer. Note
+   its key ID and the issuer ID (above the list), and download the `.p8` (Apple
+   lets you download it only once). If Xcode cannot make the profiles with the
+   role Developer, make a key with the role App Manager.
+3. **The secrets on the server** (once, as an admin of the server):
 
    ```sh
-   (umask 077; cp AuthKey_<KEY_ID>.p8 ~/.config/hostel-signing/)
+   hostel config secrets set apple-signing-p12 hostel-signing.p12
+   hostel config secrets set apple-signing-p12-password -     # type it, then Ctrl-D
+   hostel config secrets set asc-key AuthKey_<KEY_ID>.p8
+   echo <KEY_ID> | hostel config secrets set asc-key-id -
+   echo <ISSUER_ID> | hostel config secrets set asc-issuer-id -
    ```
 
-   Then add to the machine's `env` (`hostel config edit`):
-   `HOSTEL_SIGNING_KEYCHAIN = "/Users/hostel/Library/Keychains/hostel-signing.keychain-db"`,
-   `ASC_KEY_ID`, `ASC_ISSUER_ID`, and
-   `ASC_KEY_PATH = "/Users/hostel/.config/hostel-signing/AuthKey_<KEY_ID>.p8"`.
+   Then delete the local files, or keep them only in a password manager.
+4. **Each Mac** (once for each Mac). Register its Provisioning UDID in the Apple
+   team (developer.apple.com > Devices > +, macOS):
 
-Over SSH a keychain is locked. A lease unlocks it before a build:
+   ```sh
+   system_profiler SPHardwareDataType | grep "Provisioning UDID"
+   ```
 
-```sh
-security unlock-keychain -p "$(cat ~/.config/hostel-signing/password)" "$HOSTEL_SIGNING_KEYCHAIN"
-xcodebuild ... -allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" \
-  -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-```
+   Hostel never registers a Mac. A team can register 100 Macs in each membership
+   year, and a removed Mac does not give its place back. The UDID of a Mac
+   stays the same when macOS is installed again, but each new virtual machine
+   gets a new one: give `apple-signing` only to machines with a fixed UDID (for
+   example static Macs). Then add the tool to the machine's tools: `hostel
+   config edit`, or `hostel config machines set <machine>
+   tools=<its tools>,apple-signing`.
 
-Check: in a lease, `security find-identity -v -p codesigning` lists the
-certificate after the unlock. Tested on a real Mac (2026-11-12) with a
-self-signed test certificate: the unlock and `codesign` worked over SSH, and the
-private key could not be exported.
+Check: `hostel acquire xcode apple-signing --task "check signing"`, then
+`hostel run -- 'security find-identity -v -p codesigning "$HOSTEL_SIGNING_KEYCHAIN"'`
+lists one valid identity. `tools/apple-signing/GUIDE.md` shows the build.
 
-When the Mac leaves Hostel, revoke the certificate and the API key.
+Replace the certificate before it expires, and the key when it changes, with
+`hostel config secrets set`: the next lease gets the new one. When Hostel no
+longer uses them, revoke the certificate and the key.
 
 ## 4. Windows
 
