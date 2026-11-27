@@ -1,7 +1,6 @@
 # M14. Signing secrets (plan)
 
-Status: phases 1 to 5 done (section 10); the real check on a Mac (phase 6) and
-the E2E gate are next. Owner decisions of 2026-11-26 (section 2).
+Status: phases 1 to 6 done (section 10); the 10-run E2E gate is next. Owner decisions of 2026-11-26 (section 2).
 
 ## 1. Why
 
@@ -254,3 +253,24 @@ lease tools with a test tool. The Apple scripts get a check on a Mac
   server and the helper decided "starts for the lease" differently for a tool
   with a `start` script for one OS only; all start scripts got
   `HOSTEL_SECRETS_DIR`. All are fixed, with E2E scenarios 8 to 10.
+- **Phase 6** (2026-11-27, a production server with this build, a static Mac
+  with macOS 26.6 and Xcode 26.5 that an admin registered by hand): a lease
+  `xcode macos-desktop apple-signing` built a Mac Catalyst Debug app with
+  restricted entitlements (push, keychain access groups, app groups, a
+  credential provider extension) with automatic signing and the API key of the
+  role **Developer**: Xcode made the Mac Catalyst team profiles, and the Mac was
+  in them. `codesign --verify --deep --strict` passed, the app started, stayed
+  running, and showed its first screen (screenshot). The machine user's login
+  keychain had no other signing identity. After the release, `stop` ran and the
+  room was deleted; the Mac took the next lease.
+- **Found in phase 6:** the first build failed with `errSecInternalComponent`:
+  each SSH session has its own security session, so the keychain that `start`
+  unlocked was locked in the build job. `start` now writes
+  `HOSTEL_SIGNING_KEYCHAIN_PASSWORD`, and the guide unlocks the keychain in the
+  command of the build. Checked on the same Mac: the new `start`, then
+  `codesign` in another job, then the whole build.
+- **Not checked:** a keychain call of the app at run time (it needs an API for
+  the sign-in), and the user's keychain search list after the release (the next
+  lease took the Mac at once; on a local Mac, `stop` gave back the same list).
+- **E2E on a Mac with OrbStack:** the harness now passes `DOCKER_HOST`; without
+  `/var/run/docker.sock`, the fake provider could not reach Docker.

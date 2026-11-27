@@ -546,8 +546,8 @@ E2E scenarios: `m13-implementation.md`, section 6.
 
 ## M14. Signing secrets
 
-Status: implemented, except the real check on a Mac (`m14-implementation.md`,
-section 10). Owner decisions of 2026-11-26 (`requirements.md`, section 3).
+Status: implemented and checked on a real Mac (`m14-implementation.md`,
+section 10); the 10-run E2E gate is next. Owner decisions of 2026-11-26 (`requirements.md`, section 3).
 
 Goal: a lease builds and runs signed Mac apps (for example Mac Catalyst apps with
 restricted entitlements) on a registered static Mac, with no signing setup on
